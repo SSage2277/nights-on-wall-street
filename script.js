@@ -56,9 +56,22 @@ const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
 const CURRENCY_SYMBOL = "S$";
 const USERNAME_STORAGE_KEY = "nows_username_v1";
+const USERNAME_STORAGE_FALLBACK_KEYS = Object.freeze([
+  USERNAME_STORAGE_KEY,
+  "nows_username",
+  "username",
+  "playerUsername",
+  "player_username"
+]);
 const USERNAME_MIN_LEN = 3;
 const USERNAME_MAX_LEN = 16;
 const USERNAME_SETUP_DONE_STORAGE_KEY = "nows_username_setup_done_v1";
+const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
+  USERNAME_SETUP_DONE_STORAGE_KEY,
+  "nows_username_setup_done",
+  "username_setup_done"
+]);
+const LOANS_ENABLED = false;
 const BASE_NET_WORTH = 1000;
 const CASINO_UNLOCK_TRADING_TOTAL = 1500;
 const CASINO_EARLY_UNLOCK_STORAGE_KEY = "casino_early_unlock_v1";
@@ -67,6 +80,7 @@ let activeCasinoGameKey = "lobby";
 const CASINO_LIVE_FEED_LIMIT = 40;
 const casinoLiveFeedEntries = [];
 let casinoLiveFeedTimer = null;
+let casinoLiveFeedRequestInFlight = false;
 let playerUsername = "";
 let usernameGateActive = false;
 const VIP_COST = 5000;
@@ -106,32 +120,47 @@ function normalizeUsername(value) {
   return normalized;
 }
 
+function persistUsernameSetupDone() {
+  try {
+    USERNAME_SETUP_DONE_FALLBACK_KEYS.forEach((key) => {
+      localStorage.setItem(key, "1");
+    });
+  } catch {}
+}
+
 function loadSavedUsername() {
   try {
-    return normalizeUsername(localStorage.getItem(USERNAME_STORAGE_KEY));
+    for (const key of USERNAME_STORAGE_FALLBACK_KEYS) {
+      const candidate = normalizeUsername(localStorage.getItem(key));
+      if (!candidate) continue;
+      localStorage.setItem(USERNAME_STORAGE_KEY, candidate);
+      persistUsernameSetupDone();
+      return candidate;
+    }
   } catch {
     return "";
   }
+  return "";
 }
 
 function saveUsername(value) {
   const normalized = normalizeUsername(value);
   if (!normalized) return false;
   try {
-    localStorage.setItem(USERNAME_STORAGE_KEY, normalized);
-    localStorage.setItem(USERNAME_SETUP_DONE_STORAGE_KEY, "1");
+    USERNAME_STORAGE_FALLBACK_KEYS.forEach((key) => {
+      localStorage.setItem(key, normalized);
+    });
+    persistUsernameSetupDone();
   } catch {}
   playerUsername = normalized;
+  if (typeof savePhoneState === "function") savePhoneState();
   return true;
 }
 
 function hasCompletedUsernameSetup() {
-  if (normalizeUsername(playerUsername)) return true;
-  try {
-    return localStorage.getItem(USERNAME_SETUP_DONE_STORAGE_KEY) === "1" && Boolean(loadSavedUsername());
-  } catch {
-    return false;
-  }
+  const normalizedPlayer = normalizeUsername(playerUsername);
+  if (normalizedPlayer) return true;
+  return Boolean(loadSavedUsername());
 }
 
 function normalizeSageCurrencyText(text) {
@@ -217,6 +246,7 @@ function showFirstLaunchUsernameOverlay() {
   input.value = playerUsername || "";
   setFirstLaunchUsernameError("");
   setTimeout(() => input.focus(), 0);
+  if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
 }
 
 function hideFirstLaunchUsernameOverlay() {
@@ -225,14 +255,36 @@ function hideFirstLaunchUsernameOverlay() {
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
   usernameGateActive = false;
+  if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
 }
 
-function submitFirstLaunchUsername() {
+async function submitFirstLaunchUsername() {
   const input = document.getElementById("firstLaunchUsernameInput");
   if (!input) return false;
   const candidate = normalizeUsername(input.value);
   if (!candidate) {
     setFirstLaunchUsernameError(`Username must be ${USERNAME_MIN_LEN}-${USERNAME_MAX_LEN} characters.`);
+    input.focus();
+    return false;
+  }
+  try {
+    if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
+    await venmoApiRequest("/api/users/sync", {
+      method: "POST",
+      body: {
+        playerId: venmoClaimPlayerId,
+        username: candidate,
+        balance: roundCurrency(cash)
+      }
+    });
+    lastUserProfileSyncAt = Date.now();
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (message.toLowerCase().includes("taken")) {
+      setFirstLaunchUsernameError("That username is already taken.");
+    } else {
+      setFirstLaunchUsernameError("Could not verify username right now.");
+    }
     input.focus();
     return false;
   }
@@ -254,7 +306,9 @@ function initFirstLaunchUsernameSetup() {
   const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
   if (!overlay || !input || !confirmBtn) return;
 
-  confirmBtn.addEventListener("click", () => submitFirstLaunchUsername());
+  confirmBtn.addEventListener("click", () => {
+    submitFirstLaunchUsername();
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -265,9 +319,7 @@ function initFirstLaunchUsernameSetup() {
     const normalized = loadSavedUsername();
     if (normalized) {
       playerUsername = normalized;
-      try {
-        localStorage.setItem(USERNAME_SETUP_DONE_STORAGE_KEY, "1");
-      } catch {}
+      persistUsernameSetupDone();
       hideFirstLaunchUsernameOverlay();
       return;
     }
@@ -324,46 +376,85 @@ function renderCasinoLiveFeed() {
   listEl.appendChild(frag);
 }
 
+function normalizeCasinoLiveFeedEntry(entry) {
+  const amount = roundCurrency(Number(entry?.amount));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const multiplierRaw = Number(entry?.multiplier);
+  return {
+    name: String(entry?.username || entry?.name || "Player").trim() || "Player",
+    vip: Boolean(entry?.vip),
+    game: String(entry?.game || "Casino").trim() || "Casino",
+    amount,
+    multiplier: Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : null,
+    submittedAt: Number(entry?.submittedAt) || 0
+  };
+}
+
+function setCasinoLiveFeedEntries(entries) {
+  casinoLiveFeedEntries.length = 0;
+  entries.slice(0, CASINO_LIVE_FEED_LIMIT).forEach((entry) => casinoLiveFeedEntries.push(entry));
+  renderCasinoLiveFeed();
+}
+
+async function refreshCasinoLiveFeedFromServer() {
+  if (casinoLiveFeedRequestInFlight || IS_PHONE_EMBED_MODE) return false;
+  casinoLiveFeedRequestInFlight = true;
+  try {
+    const payload = await venmoApiRequest(`/api/live-wins?limit=${CASINO_LIVE_FEED_LIMIT}`);
+    const wins = Array.isArray(payload?.wins) ? payload.wins : [];
+    const entries = wins
+      .map(normalizeCasinoLiveFeedEntry)
+      .filter(Boolean)
+      .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+    setCasinoLiveFeedEntries(entries);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    casinoLiveFeedRequestInFlight = false;
+  }
+}
+
 function pushCasinoLiveWin(amount, multiplier = null, gameKey = activeCasinoGameKey) {
   const value = roundCurrency(Number(amount));
   if (!Number.isFinite(value) || value <= 0) return;
   const displayName = playerUsername || "Player";
-  const entry = {
+  const entry = normalizeCasinoLiveFeedEntry({
     name: displayName,
+    username: displayName,
     vip: Boolean(phoneState?.vip?.active),
     game: getGameLabelByKey(gameKey),
     amount: value,
-    multiplier: Number(multiplier)
-  };
+    multiplier: Number(multiplier),
+    submittedAt: Date.now()
+  });
+  if (!entry) return;
   casinoLiveFeedEntries.unshift(entry);
   if (casinoLiveFeedEntries.length > CASINO_LIVE_FEED_LIMIT) casinoLiveFeedEntries.length = CASINO_LIVE_FEED_LIMIT;
   renderCasinoLiveFeed();
-}
-
-function pushSimulatedCasinoFeedWin() {
-  const names = ["Nova", "Apex", "Shadow", "Rogue", "Orbit", "Blaze", "Nyx", "Ace", "Lucky", "Viper"];
-  const games = ["slots", "plinko", "crash", "dice", "roulette", "hilo", "slide", "mines", "keno", "poker"];
-  const game = games[Math.floor(Math.random() * games.length)];
-  const multiplier = Math.random() < 0.85 ? Number((1 + Math.random() * 7).toFixed(2)) : Number((8 + Math.random() * 36).toFixed(2));
-  const amount = roundCurrency((10 + Math.random() * 260) * multiplier);
-  const entry = {
-    name: names[Math.floor(Math.random() * names.length)],
-    vip: Math.random() < 0.2,
-    game: getGameLabelByKey(game),
-    amount: Math.max(5, amount),
-    multiplier
-  };
-  casinoLiveFeedEntries.unshift(entry);
-  if (casinoLiveFeedEntries.length > CASINO_LIVE_FEED_LIMIT) casinoLiveFeedEntries.length = CASINO_LIVE_FEED_LIMIT;
-  renderCasinoLiveFeed();
+  const playerId = venmoClaimPlayerId || getVenmoClaimPlayerId();
+  void venmoApiRequest("/api/live-wins", {
+    method: "POST",
+    body: {
+      playerId,
+      username: displayName,
+      vip: Boolean(phoneState?.vip?.active),
+      game: getGameLabelByKey(gameKey),
+      amount: value,
+      multiplier: Number.isFinite(Number(multiplier)) ? Number(multiplier) : null
+    }
+  })
+    .then(() => refreshCasinoLiveFeedFromServer())
+    .catch(() => {});
 }
 
 function startCasinoLiveFeedTicker() {
   if (casinoLiveFeedTimer || IS_PHONE_EMBED_MODE) return;
+  void refreshCasinoLiveFeedFromServer();
   casinoLiveFeedTimer = window.setInterval(() => {
     const casinoRoot = document.getElementById("casino-section");
     if (!casinoRoot || casinoRoot.style.display === "none") return;
-    if (Math.random() < 0.72) pushSimulatedCasinoFeedWin();
+    void refreshCasinoLiveFeedFromServer();
   }, 4200);
 }
 
@@ -384,6 +475,24 @@ function refreshPokerSessionMeta() {
   metaEl.classList.toggle("is-down", value < 0);
 }
 
+function syncCasinoLiveFeedVisibility() {
+  const liveFeed = document.getElementById("casinoLiveFeed");
+  if (!liveFeed) return;
+  const showInLobby = activeCasinoGameKey === "lobby";
+  liveFeed.style.display = showInLobby ? "" : "none";
+}
+
+function updateTradingUsernameBadge() {
+  const badge = document.getElementById("tradingUsernameBadge");
+  if (!badge) return;
+  const normalized = normalizeUsername(playerUsername);
+  const tradingRoot = document.getElementById("trading-section");
+  const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
+  const shouldShow = Boolean(normalized) && tradingVisible && !IS_PHONE_EMBED_MODE;
+  badge.style.display = shouldShow ? "inline-flex" : "none";
+  if (shouldShow) badge.textContent = normalized;
+}
+
 function addSageBrand(root, position = "bottom-left", extraClass = "") {
   if (!root || IS_PHONE_EMBED_MODE) return null;
   const badge = document.createElement("div");
@@ -395,6 +504,7 @@ function addSageBrand(root, position = "bottom-left", extraClass = "") {
 }
 
 function getTotalDebt() {
+  if (!LOANS_ENABLED) return 0;
   return Math.max(0, roundCurrency(loanPrincipal + loanInterest));
 }
 
@@ -1166,6 +1276,10 @@ const PHONE_STORAGE_KEY = "casino_phone_v1";
 const BANK_MISSION_STORAGE_KEY = "casino_bank_missions_v1";
 const phoneState = {
   cash: roundCurrency(cash),
+  shares: Math.max(0, Math.floor(Number(shares) || 0)),
+  avgCost: roundCurrency(avgCost),
+  savingsBalance: roundCurrency(savingsBalance),
+  username: playerUsername || "",
   unread: 0,
   notifications: [],
   bankHistory: [],
@@ -1317,7 +1431,30 @@ let phoneMiniCashBridgeBound = false;
 let phoneMiniCashReady = !IS_PHONE_EMBED_MODE;
 let phoneMiniCashRequestTimer = null;
 let cashPersistTimer = null;
-let lastPersistedCash = null;
+let lastPersistedProfileSig = "";
+
+function getPersistProfileSnapshot() {
+  return {
+    cash: roundCurrency(cash),
+    shares: Math.max(0, Math.floor(Number(shares) || 0)),
+    avgCost: roundCurrency(avgCost),
+    savingsBalance: roundCurrency(savingsBalance),
+    autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent)),
+    username: normalizeUsername(playerUsername) || ""
+  };
+}
+
+function getPersistProfileSignature(profile) {
+  const safe = profile || getPersistProfileSnapshot();
+  return [
+    safe.cash,
+    safe.shares,
+    safe.avgCost,
+    safe.savingsBalance,
+    safe.autoSavingsPercent,
+    safe.username
+  ].join("|");
+}
 const PHONE_MINI_GAME_APPS = [
   { app: "blackjack", label: "Blackjack", short: "BJ", game: "blackjack", gradient: "linear-gradient(155deg,#202a35,#121922 68%)" },
   { app: "slots", label: "Slots", short: "SL", game: "slots", gradient: "linear-gradient(155deg,#7a4dff,#3f8fff 68%)" },
@@ -1627,8 +1764,13 @@ function postPhoneMiniCashUpdate() {
 
 function savePhoneState() {
   try {
-    phoneState.cash = roundCurrency(cash);
-    phoneState.autoSavingsPercent = roundCurrency(clampPercent(autoSavingsPercent));
+    const profile = getPersistProfileSnapshot();
+    phoneState.cash = profile.cash;
+    phoneState.shares = profile.shares;
+    phoneState.avgCost = profile.avgCost;
+    phoneState.savingsBalance = profile.savingsBalance;
+    phoneState.autoSavingsPercent = profile.autoSavingsPercent;
+    phoneState.username = profile.username;
     phoneState.missionXp = Math.max(0, Math.floor(Number(phoneState.missionXp) || 0));
     phoneState.missionTokens = Math.max(0, Math.floor(Number(phoneState.missionTokens) || 0));
     if (!phoneState.missionLevelMilestonesClaimed || typeof phoneState.missionLevelMilestonesClaimed !== "object") {
@@ -1643,16 +1785,23 @@ function savePhoneState() {
 
 function persistCashStateSoon() {
   if (IS_PHONE_EMBED_MODE) return;
-  const normalizedCash = roundCurrency(cash);
-  if (lastPersistedCash !== null && normalizedCash === lastPersistedCash && !cashPersistTimer) return;
+  const profile = getPersistProfileSnapshot();
+  const signature = getPersistProfileSignature(profile);
+  if (lastPersistedProfileSig && signature === lastPersistedProfileSig && !cashPersistTimer) return;
   if (cashPersistTimer) return;
   cashPersistTimer = window.setTimeout(() => {
     cashPersistTimer = null;
-    const snapshotCash = roundCurrency(cash);
-    if (lastPersistedCash !== null && snapshotCash === lastPersistedCash) return;
-    phoneState.cash = snapshotCash;
+    const snapshot = getPersistProfileSnapshot();
+    const snapshotSig = getPersistProfileSignature(snapshot);
+    if (lastPersistedProfileSig && snapshotSig === lastPersistedProfileSig) return;
+    phoneState.cash = snapshot.cash;
+    phoneState.shares = snapshot.shares;
+    phoneState.avgCost = snapshot.avgCost;
+    phoneState.savingsBalance = snapshot.savingsBalance;
+    phoneState.autoSavingsPercent = snapshot.autoSavingsPercent;
+    phoneState.username = snapshot.username;
     savePhoneState();
-    lastPersistedCash = snapshotCash;
+    lastPersistedProfileSig = snapshotSig;
   }, 120);
 }
 
@@ -1687,10 +1836,32 @@ function loadPhoneState({ force = false } = {}) {
     ) {
       cash = roundCurrency(savedCash);
     }
+    const savedShares = Number(parsed.shares);
+    if (Number.isFinite(savedShares) && savedShares >= 0) {
+      shares = Math.max(0, Math.floor(savedShares));
+    }
+    const savedAvgCost = Number(parsed.avgCost);
+    if (Number.isFinite(savedAvgCost) && savedAvgCost >= 0) {
+      avgCost = roundCurrency(savedAvgCost);
+    }
+    const savedSavingsBalance = Number(parsed.savingsBalance);
+    if (Number.isFinite(savedSavingsBalance) && savedSavingsBalance >= 0) {
+      savingsBalance = roundCurrency(savedSavingsBalance);
+    }
     const savedAutoSavingsPercent = Number(parsed.autoSavingsPercent);
     if (Number.isFinite(savedAutoSavingsPercent)) {
       phoneState.autoSavingsPercent = roundCurrency(clampPercent(savedAutoSavingsPercent));
       autoSavingsPercent = phoneState.autoSavingsPercent;
+    }
+    const savedUsername = normalizeUsername(parsed.username);
+    if (savedUsername) {
+      playerUsername = savedUsername;
+      try {
+        USERNAME_STORAGE_FALLBACK_KEYS.forEach((key) => {
+          localStorage.setItem(key, savedUsername);
+        });
+        persistUsernameSetupDone();
+      } catch (error) {}
     }
     if (parsed.settings && typeof parsed.settings === "object") {
       phoneState.settings.animations = parsed.settings.animations !== false;
@@ -1720,7 +1891,7 @@ function loadPhoneState({ force = false } = {}) {
       };
     }
   } catch (error) {}
-  lastPersistedCash = roundCurrency(cash);
+  lastPersistedProfileSig = getPersistProfileSignature();
 }
 
 function runTotalProgressReset() {
@@ -2284,13 +2455,13 @@ function renderPhoneMessages() {
 }
 
 function refreshPhoneBankApp() {
-  if (!phoneUi.bankDebt) return;
-  phoneUi.bankDebt.textContent = formatCurrency(getTotalDebt());
-  phoneUi.bankInterest.textContent = formatCurrency(loanInterest);
+  if (!phoneUi.bankSavings) return;
+  if (phoneUi.bankDebt) phoneUi.bankDebt.textContent = formatCurrency(getTotalDebt());
+  if (phoneUi.bankInterest) phoneUi.bankInterest.textContent = formatCurrency(loanInterest);
   if (phoneUi.bankCredit) phoneUi.bankCredit.textContent = blackMark ? "Black Mark" : "Clean";
   if (phoneUi.bankLoanAge) phoneUi.bankLoanAge.textContent = `${loanAge} / ${DEFAULT_LIMIT}`;
   if (phoneUi.bankProgressBar) {
-    const pct = loanPrincipal > 0 ? clampMarket((loanAge / DEFAULT_LIMIT) * 100, 0, 100) : 0;
+    const pct = LOANS_ENABLED && loanPrincipal > 0 ? clampMarket((loanAge / DEFAULT_LIMIT) * 100, 0, 100) : 0;
     phoneUi.bankProgressBar.style.width = `${pct.toFixed(1)}%`;
   }
   phoneUi.bankSavings.textContent = formatCurrency(savingsBalance);
@@ -2301,8 +2472,8 @@ function refreshPhoneBankApp() {
   if (phoneUi.bankLoanInput && document.activeElement !== phoneUi.bankLoanInput) {
     phoneUi.bankLoanInput.value = "";
   }
-  if (phoneUi.bankTakeLoanBtn) phoneUi.bankTakeLoanBtn.disabled = blackMark;
-  if (phoneUi.bankRepayLoanBtn) phoneUi.bankRepayLoanBtn.disabled = getTotalDebt() <= 0 || cash <= 0;
+  if (phoneUi.bankTakeLoanBtn) phoneUi.bankTakeLoanBtn.disabled = !LOANS_ENABLED || blackMark;
+  if (phoneUi.bankRepayLoanBtn) phoneUi.bankRepayLoanBtn.disabled = !LOANS_ENABLED || getTotalDebt() <= 0 || cash <= 0;
   if (phoneUi.bankWithdrawBtn) phoneUi.bankWithdrawBtn.disabled = savingsBalance <= 0;
   renderPhoneBankHistory();
 }
@@ -3463,6 +3634,7 @@ function updateFullscreenCash() {
 function enterCasinoGameView(title) {
   const bankPanel = document.getElementById("loan-panel");
   if (bankPanel) bankPanel.classList.remove("open");
+  syncCasinoLiveFeedVisibility();
 
   if (IS_PHONE_EMBED_MODE) {
     document.body.classList.remove("game-fullscreen");
@@ -3519,6 +3691,7 @@ function exitCasinoGameView() {
     );
     container.innerHTML = "";
   }
+  syncCasinoLiveFeedVisibility();
   updateUI();
 }
 
@@ -3966,6 +4139,8 @@ function updateUI() {
 
   const casinoCash = document.getElementById("casinoCash");
   if (casinoCash) casinoCash.textContent = cash.toFixed(2);
+  syncCasinoLiveFeedVisibility();
+  updateTradingUsernameBadge();
   renderCasinoLiveFeed();
 
   try {
@@ -4001,6 +4176,7 @@ function updateUI() {
     postPhoneMiniCashUpdate();
     persistCashStateSoon();
     scheduleUserProfileSync();
+    syncHiddenAdminTriggerVisibility();
   } catch (error) {
     console.error("phone panel refresh failed", error);
   }
@@ -4160,6 +4336,8 @@ document.getElementById("casinoBtn").onclick = () => {
   }
   tradingSection.style.display = "none";
   casinoSection.style.display = "block";
+  syncHiddenAdminTriggerVisibility();
+  updateTradingUsernameBadge();
 };
 
 document.getElementById("tradingBtn").onclick =
@@ -4168,6 +4346,8 @@ document.getElementById("tradingBtn").onclick =
     exitCasinoGameView();
     casinoSection.style.display = "none";
     tradingSection.style.display = "block";
+    syncHiddenAdminTriggerVisibility();
+    updateTradingUsernameBadge();
   };
 
 // ------------------ LOAN SYSTEM ------------------
@@ -4185,6 +4365,9 @@ const loanAmountEl = document.getElementById("loanAmount");
 const loanInterestEl = document.getElementById("loanInterest");
 const loanProgressBar = document.getElementById("loan-progress-bar");
 const creditStatusEl = document.getElementById("creditStatus");
+const loanInputEl = document.getElementById("loanInput");
+const takeLoanBtnEl = document.getElementById("takeLoanBtn");
+const repayLoanBtnEl = document.getElementById("repayLoanBtn");
 const savingsAmountEl = document.getElementById("savingsAmount");
 const autoSavingsAmountEl = document.getElementById("autoSavingsAmount");
 const withdrawAllSavingsBtn = document.getElementById("withdrawAllSavingsBtn");
@@ -4214,6 +4397,7 @@ const vipStatusTextEl = document.getElementById("vipStatusText");
 const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
 const VENMO_LOCAL_CREDITED_STORAGE_KEY = "venmo_claim_credited_local_v1";
 const VENMO_CLAIM_POLL_MS = 10000;
+const HIDDEN_ADMIN_LIVE_POLL_MS = 1000;
 const USER_PROFILE_SYNC_INTERVAL_MS = 12000;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
@@ -4235,19 +4419,30 @@ const venmoLocallyCreditedClaimIds = new Set();
 let userProfileSyncTimer = null;
 let lastUserProfileSyncAt = 0;
 let hiddenAdminPanelOpen = false;
+let hiddenAdminLivePollTimer = null;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
-  loanAmountEl.textContent = loanPrincipal.toFixed(2);
-  loanInterestEl.textContent = loanInterest.toFixed(2);
+  if (!LOANS_ENABLED) {
+    loanPrincipal = 0;
+    loanInterest = 0;
+    loanAge = 0;
+    blackMark = false;
+  }
+  if (loanAmountEl) loanAmountEl.textContent = loanPrincipal.toFixed(2);
+  if (loanInterestEl) loanInterestEl.textContent = loanInterest.toFixed(2);
 
-  const total = loanPrincipal + loanInterest;
-  const percent = loanPrincipal > 0 ? clampMarket((loanAge / DEFAULT_LIMIT) * 100, 0, 100) : 0;
-  loanProgressBar.style.width = percent + "%";
-  loanProgressBar.textContent = percent.toFixed(0) + "%";
+  const total = LOANS_ENABLED ? loanPrincipal + loanInterest : 0;
+  const percent = LOANS_ENABLED && loanPrincipal > 0 ? clampMarket((loanAge / DEFAULT_LIMIT) * 100, 0, 100) : 0;
+  if (loanProgressBar) {
+    loanProgressBar.style.width = percent + "%";
+    loanProgressBar.textContent = percent.toFixed(0) + "%";
+  }
 
-  creditStatusEl.textContent = blackMark ? "Credit: Black Mark" : "Credit: Clean";
-  creditStatusEl.style.color = blackMark ? "#f00" : "#0f0";
+  if (creditStatusEl) {
+    creditStatusEl.textContent = blackMark ? "Credit: Black Mark" : "Credit: Clean";
+    creditStatusEl.style.color = blackMark ? "#f00" : "#0f0";
+  }
 
   if (savingsAmountEl) savingsAmountEl.textContent = savingsBalance.toFixed(2);
   if (autoSavingsAmountEl) autoSavingsAmountEl.textContent = `${autoSavingsPercent.toFixed(2)}%`;
@@ -4536,7 +4731,7 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false } = {}) {
     const payload = await venmoApiRequest(`/api/admin/claims?status=pending&adminCode=${encodeURIComponent(venmoAdminAuthCode)}`);
     venmoClaimState.adminClaims = Array.isArray(payload.claims) ? payload.claims.map(mapServerClaim) : [];
     renderVenmoAdminClaims();
-    setHiddenAdminStatus("Admin unlocked.");
+    setHiddenAdminStatus("Admin unlocked. Live balance updates active.");
     return true;
   } catch (error) {
     venmoClaimState.adminClaims = [];
@@ -4678,6 +4873,33 @@ function closeHiddenAdminPanel() {
   hiddenAdminOverlayEl.classList.add("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "true");
   hiddenAdminPanelOpen = false;
+  if (hiddenAdminLivePollTimer) {
+    clearInterval(hiddenAdminLivePollTimer);
+    hiddenAdminLivePollTimer = null;
+  }
+}
+
+function startHiddenAdminLivePolling() {
+  if (hiddenAdminLivePollTimer) return;
+  hiddenAdminLivePollTimer = setInterval(() => {
+    if (!hiddenAdminPanelOpen) {
+      clearInterval(hiddenAdminLivePollTimer);
+      hiddenAdminLivePollTimer = null;
+      return;
+    }
+    if (!venmoAdminUnlocked || !venmoAdminAuthCode) return;
+    refreshHiddenAdminUsersFromServer({ silent: true });
+  }, HIDDEN_ADMIN_LIVE_POLL_MS);
+}
+
+function syncHiddenAdminTriggerVisibility() {
+  if (!hiddenAdminTriggerEl) return;
+  const tradingRoot = document.getElementById("trading-section");
+  const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
+  const shouldShow = tradingVisible && !usernameGateActive && !IS_PHONE_EMBED_MODE;
+  hiddenAdminTriggerEl.style.display = shouldShow ? "block" : "none";
+  hiddenAdminTriggerEl.style.pointerEvents = shouldShow ? "auto" : "none";
+  if (!shouldShow && hiddenAdminPanelOpen) closeHiddenAdminPanel();
 }
 
 async function openHiddenAdminPanel() {
@@ -4691,7 +4913,9 @@ async function openHiddenAdminPanel() {
   if (venmoAdminUnlocked) {
     await refreshVenmoAdminClaimsFromServer({ silent: true });
     await refreshHiddenAdminUsersFromServer({ silent: true });
+    setHiddenAdminStatus("Admin unlocked. Live balance updates active.");
   }
+  startHiddenAdminLivePolling();
 }
 
 function initHiddenAdminTrigger() {
@@ -4714,6 +4938,7 @@ function initHiddenAdminTrigger() {
     if (event.key !== "Escape" || !hiddenAdminPanelOpen) return;
     closeHiddenAdminPanel();
   });
+  syncHiddenAdminTriggerVisibility();
 }
 
 async function submitVenmoClaim() {
@@ -4855,13 +5080,18 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   if (!ok) {
     venmoAdminUnlocked = false;
     venmoAdminAuthCode = "";
+    if (hiddenAdminLivePollTimer) {
+      clearInterval(hiddenAdminLivePollTimer);
+      hiddenAdminLivePollTimer = null;
+    }
     setBankMessage("Invalid admin code.");
     setHiddenAdminStatus("Invalid admin code.", true);
     renderHiddenAdminUsers();
     return false;
   }
   await refreshHiddenAdminUsersFromServer({ silent: true });
-  setHiddenAdminStatus("Admin unlocked.");
+  setHiddenAdminStatus("Admin unlocked. Live balance updates active.");
+  if (hiddenAdminPanelOpen) startHiddenAdminLivePolling();
   setBankMessage("Admin claim panel unlocked.");
   return true;
 }
@@ -4890,6 +5120,10 @@ function maybeAutoSaveFromCasinoWin(winAmountOrOptions) {
 }
 
 function processTakeLoan(rawAmount) {
+  if (!LOANS_ENABLED) {
+    setBankMessage("Loans are disabled.");
+    return false;
+  }
   const amount = Number(rawAmount);
   if (!Number.isFinite(amount) || amount <= 0) {
     setBankMessage("Enter a valid loan amount.");
@@ -4914,6 +5148,10 @@ function processTakeLoan(rawAmount) {
 }
 
 function processRepayLoan() {
+  if (!LOANS_ENABLED) {
+    setBankMessage("Loans are disabled.");
+    return 0;
+  }
   const previousInterest = loanInterest;
   let payment = Math.min(cash, loanPrincipal + loanInterest);
   const originalPayment = payment;
@@ -4948,14 +5186,18 @@ function processRepayLoan() {
   return originalPayment;
 }
 
-document.getElementById("takeLoanBtn").onclick = () => {
-  const amount = Number(document.getElementById("loanInput").value);
-  processTakeLoan(amount);
-};
+if (takeLoanBtnEl) {
+  takeLoanBtnEl.onclick = () => {
+    const amount = Number(loanInputEl?.value);
+    processTakeLoan(amount);
+  };
+}
 
-document.getElementById("repayLoanBtn").onclick = () => {
-  processRepayLoan();
-};
+if (repayLoanBtnEl) {
+  repayLoanBtnEl.onclick = () => {
+    processRepayLoan();
+  };
+}
 
 if (withdrawAllSavingsBtn) {
   withdrawAllSavingsBtn.onclick = () => {
@@ -5099,6 +5341,13 @@ initVenmoClaimWorkflow();
 
 
 function applyInterest() {
+  if (!LOANS_ENABLED) {
+    loanPrincipal = 0;
+    loanInterest = 0;
+    loanAge = 0;
+    blackMark = false;
+    return;
+  }
   if (loanPrincipal > 0) {
     loanInterest += loanPrincipal * (blackMark ? INTEREST_RATE * 2 : INTEREST_RATE);
     loanAge++;
@@ -5130,7 +5379,9 @@ document.querySelectorAll(".casino-game-btn").forEach((btn) => {
 });
 
 function loadCasinoGame(game) {
+  syncHiddenAdminTriggerVisibility();
   activeCasinoGameKey = String(game || "lobby").toLowerCase();
+  syncCasinoLiveFeedVisibility();
   const gate = getCasinoGateState();
   if (!gate.ok) {
     alert(gate.message);
@@ -7969,6 +8220,24 @@ async function startGame() {
   }
   if (!(await dealBlackjackCard("dealer"))) return abortBlackjackInitialDeal();
 
+  if (isBlackjack(dealerHand)) {
+    blackjackDealInProgress = false;
+    endGame();
+    const pushHands = hands.filter((hand) => isBlackjack(hand)).length;
+    if (pushHands <= 0) {
+      setBlackjackMessage("Dealer has Blackjack. Automatic loss.", "loss");
+    } else {
+      const lossHands = Math.max(0, hands.length - pushHands);
+      if (lossHands > 0) {
+        setBlackjackMessage(`Dealer has Blackjack. ${pushHands} push, ${lossHands} loss.`, "neutral");
+      } else {
+        setBlackjackMessage("Dealer has Blackjack. Push.", "push");
+      }
+    }
+    updateBlackjackControls();
+    return;
+  }
+
   const rigNaturalBlackjack = shouldRigHighBet(totalWager, 0.95);
   if (hands.length === 1 && isBlackjack(hands[0]) && !rigNaturalBlackjack) {
     const payout = bet * 2.5;
@@ -8880,6 +9149,7 @@ let p_seats = new Array(MAX_SEATS).fill(null);
 let p_actionsTaken = 0;
 let p_playerRaiseUsedThisRound = false;
 let p_aiTimeoutId = null;
+let p_handInProgress = false;
 let pk = {}; // Element Cache
 
 class PokerCard {
@@ -9139,6 +9409,7 @@ function loadCasinoPoker() {
   let seats = new Array(MAX_SEATS).fill(null);
   let aiTimeoutId = null;
   let pendingTieDecision = null;
+  let handInProgress = false;
   const seatUi = [];
   const listeners = [];
   const timers = new Set();
@@ -9156,6 +9427,11 @@ function loadCasinoPoker() {
     }, ms);
     timers.add(id);
     return id;
+  };
+
+  const setDealButtonLocked = (locked) => {
+    if (!el.btnDeal) return;
+    el.btnDeal.disabled = Boolean(locked);
   };
 
   function syncCash() {
@@ -9478,6 +9754,8 @@ function loadCasinoPoker() {
 
     renderUi();
     el.dealOverlay.classList.remove("hidden");
+    handInProgress = false;
+    setDealButtonLocked(false);
     if (earlyWin) addLog("Hand ended early.");
     dealerIndex = (dealerIndex + 1) % MAX_SEATS;
     schedule(handleTableRotation, 3000);
@@ -9503,6 +9781,10 @@ function loadCasinoPoker() {
   }
 
   function startHand() {
+    if (handInProgress || pendingTieDecision) return;
+    handInProgress = true;
+    setDealButtonLocked(true);
+
     const gate = getCasinoGateState();
     if (!gate.ok) {
       if (gate.reason === "trading_total") {
@@ -9511,11 +9793,17 @@ function loadCasinoPoker() {
       } else {
         el.msgOverlay.innerText = gate.message || "Casino is locked.";
       }
+      handInProgress = false;
+      setDealButtonLocked(false);
       return;
     }
 
     const hero = seats[0];
-    if (!hero) return;
+    if (!hero) {
+      handInProgress = false;
+      setDealButtonLocked(false);
+      return;
+    }
     hideTieDecisionPrompt();
     hero.bank = roundCurrency(cash || 0);
     heroStackAtHandStart = hero.bank;
@@ -9524,6 +9812,7 @@ function loadCasinoPoker() {
       el.msgOverlay.innerText = "You are bust! Go back and earn more cash.";
       el.btnDeal.classList.add("hidden");
       el.dealOverlay.classList.remove("hidden");
+      handInProgress = false;
       return;
     }
 
@@ -9567,6 +9856,8 @@ function loadCasinoPoker() {
       el.status.innerText = "Not enough players in hand.";
       el.dealOverlay.classList.remove("hidden");
       renderUi();
+      handInProgress = false;
+      setDealButtonLocked(false);
       return;
     }
 
@@ -9992,6 +10283,8 @@ function loadCasinoPoker() {
   }
 
   function initGame() {
+    handInProgress = false;
+    setDealButtonLocked(false);
     seats = new Array(MAX_SEATS).fill(null);
     seats[0] = {
       id: 0,
@@ -10208,6 +10501,8 @@ function positionPokerControlsNearUser() {
 }
 
 function initPokerGame() {
+  p_handInProgress = false;
+  if (pk?.btnDeal) pk.btnDeal.disabled = false;
   p_seats[0] = {
     id: 0,
     name: "You",
@@ -10258,6 +10553,10 @@ function generateBot(id) {
 }
 
 function startHand() {
+  if (p_handInProgress) return;
+  p_handInProgress = true;
+  if (pk?.btnDeal) pk.btnDeal.disabled = true;
+
   const gate = getCasinoGateState();
   if (!gate.ok) {
     if (gate.reason === "trading_total") {
@@ -10266,6 +10565,8 @@ function startHand() {
     } else if (pk?.msgOverlay) {
       pk.msgOverlay.innerText = gate.message || "Casino is locked.";
     }
+    p_handInProgress = false;
+    if (pk?.btnDeal) pk.btnDeal.disabled = false;
     return;
   }
 
@@ -10279,6 +10580,7 @@ function startHand() {
   if (p_seats[0].bank <= 0) {
     pk.msgOverlay.innerText = "You are bust! Go trade more.";
     pk.btnDeal.classList.add("poker-hidden");
+    p_handInProgress = false;
     return;
   }
 
@@ -10671,6 +10973,8 @@ function endRoundLogic(earlyWin, forceWinner = null) {
   if (!playerWonHand) {
     triggerCasinoKickoutCheckAfterRound();
   }
+  p_handInProgress = false;
+  if (pk?.btnDeal) pk.btnDeal.disabled = false;
   pk.dealOverlay.classList.remove("poker-hidden");
   pk.btnDeal.classList.remove("poker-hidden");
 
