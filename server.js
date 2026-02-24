@@ -1,8 +1,8 @@
 import dotenv from "dotenv";
 import express from "express";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Pool } from "pg";
 
 dotenv.config();
 
@@ -12,6 +12,16 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const baseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
 const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "Sage1557");
+const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
+
+if (!DATABASE_URL) {
+  throw new Error("Missing DATABASE_URL environment variable.");
+}
+
+const db = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+});
 
 const STORE_PACKAGES = Object.freeze({
   small: { usd: 2, funds: 1000, label: "Starter Funds Pack" },
@@ -28,33 +38,6 @@ const PACKAGE_ALIASES = Object.freeze({
   starter: "small",
   trader: "medium"
 });
-const claimsDbPath = path.join(__dirname, ".venmo-claims-db.json");
-
-function defaultClaimsDb() {
-  return {
-    nextId: 1,
-    claims: [],
-    users: []
-  };
-}
-
-function loadClaimsDb() {
-  try {
-    const raw = fs.readFileSync(claimsDbPath, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return defaultClaimsDb();
-    if (!Array.isArray(parsed.claims)) parsed.claims = [];
-    if (!Array.isArray(parsed.users)) parsed.users = [];
-    if (!Number.isFinite(parsed.nextId) || parsed.nextId < 1) parsed.nextId = 1;
-    return parsed;
-  } catch {
-    return defaultClaimsDb();
-  }
-}
-
-function saveClaimsDb(db) {
-  fs.writeFileSync(claimsDbPath, JSON.stringify(db, null, 2), "utf8");
-}
 
 function normalizeTxn(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
@@ -76,6 +59,10 @@ function sanitizeUsername(value) {
   return normalized;
 }
 
+function normalizeUsernameKey(value) {
+  return sanitizeUsername(value).toLowerCase();
+}
+
 function sanitizeClaimSource(value) {
   const normalized = String(value || "")
     .replace(/\s+/g, " ")
@@ -93,12 +80,66 @@ function normalizePackageId(value) {
   return mapped && STORE_PACKAGES[mapped] ? mapped : "";
 }
 
+function sanitizeGameLabel(value) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "Casino";
+  return normalized.slice(0, 24);
+}
+
 function claimWithPack(claim) {
-  const pack = STORE_PACKAGES[claim.packId] || null;
+  const pack = STORE_PACKAGES[claim.packId] || STORE_PACKAGES[claim.pack_id] || null;
   return {
     ...claim,
+    id: String(claim.id),
     funds: pack?.funds || 0,
     usd: pack?.usd || 0
+  };
+}
+
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function mapClaimRow(row) {
+  return claimWithPack({
+    id: String(row.id),
+    playerId: String(row.player_id || ""),
+    username: String(row.username || ""),
+    source: String(row.source || "venmo"),
+    packId: String(row.pack_id || ""),
+    txnId: String(row.txn_id || ""),
+    txnNorm: String(row.txn_norm || ""),
+    status: String(row.status || "pending"),
+    submittedAt: Number(row.submitted_at) || 0,
+    reviewedAt: Number(row.reviewed_at) || 0,
+    creditedAt: Number(row.credited_at) || 0
+  });
+}
+
+function mapWinRow(row) {
+  const multiplierValue = row.multiplier === null || row.multiplier === undefined ? null : Number(row.multiplier);
+  return {
+    id: String(row.id),
+    playerId: String(row.player_id || ""),
+    username: String(row.username || ""),
+    vip: row.vip === true,
+    game: String(row.game || "Casino"),
+    amount: Math.round(toNumber(row.amount) * 100) / 100,
+    multiplier: Number.isFinite(multiplierValue) ? Math.round(multiplierValue * 100) / 100 : null,
+    submittedAt: Number(row.submitted_at) || 0
+  };
+}
+
+function mapUserRow(row) {
+  return {
+    playerId: String(row.player_id || ""),
+    username: sanitizeUsername(row.username) || "Unknown",
+    usernameKey: String(row.username_key || ""),
+    balance: Math.round(toNumber(row.balance) * 100) / 100,
+    lastSeenAt: Number(row.last_seen_at) || 0
   };
 }
 
@@ -130,12 +171,75 @@ app.use((req, res, next) => {
 app.use(express.static(__dirname));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "claims" });
+  res.json({ ok: true, service: "claims", database: "postgres" });
 });
 
-app.post("/api/claims", (req, res) => {
+app.get("/api/live-wins", async (req, res) => {
   try {
-    const db = loadClaimsDb();
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(120, Math.floor(rawLimit))) : 40;
+    const result = await db.query(
+      `
+        SELECT id, player_id, username, vip, game, amount, multiplier, submitted_at
+        FROM live_wins
+        ORDER BY submitted_at DESC, id DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    const wins = result.rows.map(mapWinRow);
+    res.json({ ok: true, wins });
+  } catch (error) {
+    console.error("Failed to load live wins", error);
+    res.status(500).json({ ok: false, error: "Could not load live wins." });
+  }
+});
+
+app.post("/api/live-wins", async (req, res) => {
+  try {
+    const playerId = sanitizePlayerId(req.body?.playerId);
+    const username = sanitizeUsername(req.body?.username);
+    const game = sanitizeGameLabel(req.body?.game);
+    const amount = Math.round((Number(req.body?.amount) || 0) * 100) / 100;
+    const multiplierRaw = Number(req.body?.multiplier);
+    const vip = req.body?.vip === true;
+    if (!playerId || !username || !Number.isFinite(amount) || amount <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid live win payload." });
+      return;
+    }
+    const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0
+      ? Math.round(multiplierRaw * 100) / 100
+      : null;
+    const submittedAt = Date.now();
+    const insertResult = await db.query(
+      `
+        INSERT INTO live_wins (player_id, username, vip, game, amount, multiplier, submitted_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, player_id, username, vip, game, amount, multiplier, submitted_at
+      `,
+      [playerId, username, vip, game, amount, multiplier, submittedAt]
+    );
+    await db.query(
+      `
+        DELETE FROM live_wins
+        WHERE id IN (
+          SELECT id
+          FROM live_wins
+          ORDER BY submitted_at DESC, id DESC
+          OFFSET 300
+        )
+      `
+    );
+    const win = mapWinRow(insertResult.rows[0]);
+    res.json({ ok: true, win });
+  } catch (error) {
+    console.error("Failed to submit live win", error);
+    res.status(500).json({ ok: false, error: "Could not submit live win." });
+  }
+});
+
+app.post("/api/claims", async (req, res) => {
+  try {
     const playerId = sanitizePlayerId(req.body?.playerId);
     const username = sanitizeUsername(req.body?.username);
     const packageId = normalizePackageId(
@@ -160,46 +264,43 @@ app.post("/api/claims", (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid transaction id." });
       return;
     }
-    const dup = db.claims.find((claim) => claim.txnNorm === txnNorm);
-    if (dup) {
+    const submittedAt = Date.now();
+    const insertResult = await db.query(
+      `
+        INSERT INTO claims (player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, 0, 0)
+        RETURNING id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+      `,
+      [playerId, username || playerId, source, packageId, txnId, txnNorm, submittedAt]
+    );
+    res.json({ ok: true, claim: mapClaimRow(insertResult.rows[0]) });
+  } catch (error) {
+    if (error?.code === "23505") {
       res.status(409).json({ ok: false, error: "Transaction id already claimed." });
       return;
     }
-
-    const claim = {
-      id: String(db.nextId++),
-      playerId,
-      username: username || playerId,
-      source,
-      packId: packageId,
-      txnId,
-      txnNorm,
-      status: "pending",
-      submittedAt: Date.now(),
-      reviewedAt: 0,
-      creditedAt: 0
-    };
-    db.claims.push(claim);
-    saveClaimsDb(db);
-    res.json({ ok: true, claim: claimWithPack(claim) });
-  } catch (error) {
     console.error("Failed to submit claim", error);
     res.status(500).json({ ok: false, error: "Could not submit claim." });
   }
 });
 
-app.get("/api/claims", (req, res) => {
+app.get("/api/claims", async (req, res) => {
   try {
     const playerId = sanitizePlayerId(req.query?.playerId);
     if (!playerId) {
       res.status(400).json({ ok: false, error: "Missing or invalid playerId." });
       return;
     }
-    const db = loadClaimsDb();
-    const claims = db.claims
-      .filter((claim) => claim.playerId === playerId)
-      .sort((a, b) => b.submittedAt - a.submittedAt)
-      .map(claimWithPack);
+    const result = await db.query(
+      `
+        SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+        FROM claims
+        WHERE player_id = $1
+        ORDER BY submitted_at DESC, id DESC
+      `,
+      [playerId]
+    );
+    const claims = result.rows.map(mapClaimRow);
     res.json({
       ok: true,
       claims
@@ -210,17 +311,25 @@ app.get("/api/claims", (req, res) => {
   }
 });
 
-app.get("/api/claims/credits", (req, res) => {
+app.get("/api/claims/credits", async (req, res) => {
   try {
     const playerId = sanitizePlayerId(req.query?.playerId);
     if (!playerId) {
       res.status(400).json({ ok: false, error: "Missing or invalid playerId." });
       return;
     }
-    const db = loadClaimsDb();
-    const claims = db.claims
-      .filter((claim) => claim.playerId === playerId && claim.status === "approved" && !claim.creditedAt)
-      .map(claimWithPack);
+    const result = await db.query(
+      `
+        SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+        FROM claims
+        WHERE player_id = $1
+          AND status = 'approved'
+          AND credited_at = 0
+        ORDER BY submitted_at DESC, id DESC
+      `,
+      [playerId]
+    );
+    const claims = result.rows.map(mapClaimRow);
     res.json({ ok: true, claims });
   } catch (error) {
     console.error("Failed to list credits", error);
@@ -228,7 +337,7 @@ app.get("/api/claims/credits", (req, res) => {
   }
 });
 
-app.post("/api/claims/credits/:id/ack", (req, res) => {
+app.post("/api/claims/credits/:id/ack", async (req, res) => {
   try {
     const claimId = String(req.params?.id || "");
     const playerId = sanitizePlayerId(req.body?.playerId);
@@ -236,70 +345,116 @@ app.post("/api/claims/credits/:id/ack", (req, res) => {
       res.status(400).json({ ok: false, error: "Missing claim id or player id." });
       return;
     }
-    const db = loadClaimsDb();
-    const claim = db.claims.find((entry) => entry.id === claimId && entry.playerId === playerId);
-    if (!claim) {
+    const lookup = await db.query(
+      `
+        SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+        FROM claims
+        WHERE id = $1 AND player_id = $2
+        LIMIT 1
+      `,
+      [claimId, playerId]
+    );
+    if (!lookup.rowCount) {
       res.status(404).json({ ok: false, error: "Claim not found." });
       return;
     }
+    const claim = lookup.rows[0];
     if (claim.status !== "approved") {
       res.status(409).json({ ok: false, error: "Claim is not approved." });
       return;
     }
-    if (!claim.creditedAt) {
-      claim.creditedAt = Date.now();
-      saveClaimsDb(db);
+    if (!Number(claim.credited_at)) {
+      const updated = await db.query(
+        `
+          UPDATE claims
+          SET credited_at = $1
+          WHERE id = $2
+          RETURNING id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+        `,
+        [Date.now(), claimId]
+      );
+      res.json({ ok: true, claim: mapClaimRow(updated.rows[0]) });
+      return;
     }
-    res.json({ ok: true, claim: claimWithPack(claim) });
+    res.json({ ok: true, claim: mapClaimRow(claim) });
   } catch (error) {
     console.error("Failed to ack credit", error);
     res.status(500).json({ ok: false, error: "Could not acknowledge credit." });
   }
 });
 
-app.post("/api/users/sync", (req, res) => {
+app.post("/api/users/sync", async (req, res) => {
   try {
-    const db = loadClaimsDb();
     const playerId = sanitizePlayerId(req.body?.playerId);
     const username = sanitizeUsername(req.body?.username);
+    const usernameKey = normalizeUsernameKey(username);
     const balance = Number(req.body?.balance);
-    if (!playerId || !username || !Number.isFinite(balance) || balance < 0) {
+    if (!playerId || !username || !usernameKey || !Number.isFinite(balance) || balance < 0) {
       res.status(400).json({ ok: false, error: "Invalid user sync payload." });
       return;
     }
-
-    let user = db.users.find((entry) => entry.playerId === playerId);
-    if (!user) {
-      user = {
-        playerId,
-        username,
-        balance: Math.round(balance * 100) / 100,
-        lastSeenAt: Date.now()
-      };
-      db.users.push(user);
-    } else {
-      user.username = username;
-      user.balance = Math.round(balance * 100) / 100;
-      user.lastSeenAt = Date.now();
+    const conflict = await db.query(
+      `
+        SELECT player_id
+        FROM users
+        WHERE username_key = $1
+          AND player_id <> $2
+        LIMIT 1
+      `,
+      [usernameKey, playerId]
+    );
+    if (conflict.rowCount) {
+      res.status(409).json({ ok: false, error: "Username already taken." });
+      return;
     }
-
-    saveClaimsDb(db);
+    const upsert = await db.query(
+      `
+        INSERT INTO users (player_id, username, username_key, balance, last_seen_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (player_id)
+        DO UPDATE SET
+          username = EXCLUDED.username,
+          username_key = EXCLUDED.username_key,
+          balance = EXCLUDED.balance,
+          last_seen_at = EXCLUDED.last_seen_at
+        RETURNING player_id, username, username_key, balance, last_seen_at
+      `,
+      [playerId, username, usernameKey, Math.round(balance * 100) / 100, Date.now()]
+    );
+    const user = mapUserRow(upsert.rows[0]);
     res.json({ ok: true, user });
   } catch (error) {
+    if (error?.code === "23505") {
+      res.status(409).json({ ok: false, error: "Username already taken." });
+      return;
+    }
     console.error("Failed to sync user profile", error);
     res.status(500).json({ ok: false, error: "Could not sync user profile." });
   }
 });
 
-app.get("/api/admin/claims", (req, res) => {
+app.get("/api/admin/claims", async (req, res) => {
   try {
     if (!requireAdmin(req, res)) return;
     const statusFilter = String(req.query?.status || "").trim().toLowerCase();
-    const db = loadClaimsDb();
-    const claims = db.claims
-      .filter((claim) => !statusFilter || claim.status === statusFilter)
-      .sort((a, b) => b.submittedAt - a.submittedAt)
-      .map(claimWithPack);
+    const result = statusFilter
+      ? await db.query(
+          `
+            SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+            FROM claims
+            WHERE status = $1
+            ORDER BY submitted_at DESC, id DESC
+          `,
+          [statusFilter]
+        )
+      : await db.query(
+          `
+            SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+            FROM claims
+            ORDER BY submitted_at DESC, id DESC
+          `
+        );
+    const claims = result.rows.map(mapClaimRow);
     res.json({ ok: true, claims });
   } catch (error) {
     console.error("Failed to load admin claims", error);
@@ -307,19 +462,17 @@ app.get("/api/admin/claims", (req, res) => {
   }
 });
 
-app.get("/api/admin/users", (req, res) => {
+app.get("/api/admin/users", async (req, res) => {
   try {
     if (!requireAdmin(req, res)) return;
-    const db = loadClaimsDb();
-    const users = db.users
-      .slice()
-      .sort((a, b) => (Number(b.lastSeenAt) || 0) - (Number(a.lastSeenAt) || 0))
-      .map((user) => ({
-        playerId: String(user.playerId || ""),
-        username: sanitizeUsername(user.username) || "Unknown",
-        balance: Number.isFinite(Number(user.balance)) ? Math.round(Number(user.balance) * 100) / 100 : 0,
-        lastSeenAt: Number(user.lastSeenAt) || 0
-      }));
+    const result = await db.query(
+      `
+        SELECT player_id, username, username_key, balance, last_seen_at
+        FROM users
+        ORDER BY last_seen_at DESC, player_id DESC
+      `
+    );
+    const users = result.rows.map(mapUserRow);
     res.json({ ok: true, users });
   } catch (error) {
     console.error("Failed to load admin users", error);
@@ -327,7 +480,7 @@ app.get("/api/admin/users", (req, res) => {
   }
 });
 
-app.post("/api/admin/claims/:id/decision", (req, res) => {
+app.post("/api/admin/claims/:id/decision", async (req, res) => {
   try {
     if (!requireAdmin(req, res)) return;
     const claimId = String(req.params?.id || "");
@@ -336,26 +489,81 @@ app.post("/api/admin/claims/:id/decision", (req, res) => {
       res.status(400).json({ ok: false, error: "Decision must be approve or reject." });
       return;
     }
-    const db = loadClaimsDb();
-    const claim = db.claims.find((entry) => entry.id === claimId);
-    if (!claim) {
-      res.status(404).json({ ok: false, error: "Claim not found." });
-      return;
-    }
-    if (claim.status !== "pending") {
+    const updated = await db.query(
+      `
+        UPDATE claims
+        SET status = $1, reviewed_at = $2
+        WHERE id = $3
+          AND status = 'pending'
+        RETURNING id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+      `,
+      [decision === "approve" ? "approved" : "rejected", Date.now(), claimId]
+    );
+    if (!updated.rowCount) {
+      const exists = await db.query("SELECT id FROM claims WHERE id = $1 LIMIT 1", [claimId]);
+      if (!exists.rowCount) {
+        res.status(404).json({ ok: false, error: "Claim not found." });
+        return;
+      }
       res.status(409).json({ ok: false, error: "Claim is already reviewed." });
       return;
     }
-    claim.status = decision === "approve" ? "approved" : "rejected";
-    claim.reviewedAt = Date.now();
-    saveClaimsDb(db);
-    res.json({ ok: true, claim: claimWithPack(claim) });
+    res.json({ ok: true, claim: mapClaimRow(updated.rows[0]) });
   } catch (error) {
     console.error("Failed to update claim decision", error);
     res.status(500).json({ ok: false, error: "Could not update claim decision." });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Nights on Wall Street server running at ${baseUrl}`);
-});
+async function ensureSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      player_id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      username_key TEXT NOT NULL UNIQUE,
+      balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      last_seen_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS claims (
+      id BIGSERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'venmo',
+      pack_id TEXT NOT NULL,
+      txn_id TEXT NOT NULL,
+      txn_norm TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      submitted_at BIGINT NOT NULL DEFAULT 0,
+      reviewed_at BIGINT NOT NULL DEFAULT 0,
+      credited_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS live_wins (
+      id BIGSERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      vip BOOLEAN NOT NULL DEFAULT FALSE,
+      game TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      multiplier NUMERIC(10,2),
+      submitted_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+}
+
+async function startServer() {
+  try {
+    await ensureSchema();
+    app.listen(port, () => {
+      console.log(`Nights on Wall Street server running at ${baseUrl}`);
+    });
+  } catch (error) {
+    console.error("Failed to start server", error);
+    process.exit(1);
+  }
+}
+
+startServer();
