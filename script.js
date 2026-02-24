@@ -4482,6 +4482,7 @@ async function submitVenmoClaim() {
       method: "POST",
       body: {
         playerId: venmoClaimPlayerId,
+        packageId: packId,
         packId,
         txnId
       }

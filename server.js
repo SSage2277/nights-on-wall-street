@@ -19,6 +19,15 @@ const STORE_PACKAGES = Object.freeze({
   xlarge: { usd: 18, funds: 10000, label: "Pro Funds Pack" },
   large: { usd: 40, funds: 25000, label: "Whale Funds Pack" }
 });
+const PACKAGE_ALIASES = Object.freeze({
+  xl: "xlarge",
+  "x-large": "xlarge",
+  "extra-large": "xlarge",
+  pro: "xlarge",
+  whale: "large",
+  starter: "small",
+  trader: "medium"
+});
 const claimsDbPath = path.join(__dirname, ".venmo-claims-db.json");
 
 function defaultClaimsDb() {
@@ -54,6 +63,14 @@ function sanitizePlayerId(value) {
   if (!id) return "";
   if (!/^[a-zA-Z0-9_-]{6,120}$/.test(id)) return "";
   return id;
+}
+
+function normalizePackageId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (STORE_PACKAGES[raw]) return raw;
+  const mapped = PACKAGE_ALIASES[raw];
+  return mapped && STORE_PACKAGES[mapped] ? mapped : "";
 }
 
 function claimWithPack(claim) {
@@ -98,7 +115,12 @@ app.post("/api/claims", (req, res) => {
   try {
     const db = loadClaimsDb();
     const playerId = sanitizePlayerId(req.body?.playerId);
-    const packageId = String(req.body?.packageId || "");
+    const packageId = normalizePackageId(
+      req.body?.packageId ||
+      req.body?.packId ||
+      req.body?.pack ||
+      req.body?.package
+    );
     const txnId = String(req.body?.txnId || "").trim();
     const txnNorm = normalizeTxn(txnId);
     const pack = STORE_PACKAGES[packageId];
