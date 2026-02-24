@@ -790,6 +790,27 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS password_hash TEXT
   `);
   await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS username_key TEXT
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS balance NUMERIC(14,2) NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS last_seen_at BIGINT NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    UPDATE users
+    SET username_key = lower(username)
+    WHERE username_key IS NULL OR username_key = ''
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS users_username_key_idx
+    ON users (username_key)
+  `);
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx
     ON users (lower(email))
     WHERE email IS NOT NULL
