@@ -76,14 +76,6 @@
       <button id="venmoClaimSubmitBtn">Submit Claim</button>
     </div>
     <div id="venmoClaimStatus" class="bank-claim-status">No claims yet</div>
-    <details id="venmoAdminPanel" class="bank-admin-panel" open>
-      <summary>Admin Claim Approval</summary>
-      <div class="bank-admin-auth-row">
-        <input id="venmoAdminCodeInput" type="password" placeholder="Admin code">
-        <button id="venmoAdminUnlockBtn">Unlock</button>
-      </div>
-      <div id="venmoAdminClaims" class="bank-admin-claims"></div>
-    </details>
     <div class="bank-divider"></div>
     <span>VIP</span>
     <div class="bank-vip-row">
@@ -568,6 +560,40 @@
       </div>
       <button id="phoneHomeBtn" class="phone-home-bar" type="button" aria-label="Phone home"></button>
     </div>
+  </div>
+</div>
+
+<div id="firstLaunchOverlay" class="first-launch-overlay hidden" aria-hidden="true">
+  <div class="first-launch-card" role="dialog" aria-modal="true" aria-labelledby="firstLaunchTitle">
+    <h2 id="firstLaunchTitle">Choose Username</h2>
+    <p>Set your username to continue.</p>
+    <input id="firstLaunchUsernameInput" type="text" maxlength="16" placeholder="3–16 characters" autocomplete="off" spellcheck="false">
+    <div id="firstLaunchUsernameError" class="first-launch-error" aria-live="polite"></div>
+    <button id="firstLaunchUsernameConfirmBtn" type="button">Continue</button>
+  </div>
+</div>
+
+<button id="hiddenAdminTrigger" class="hidden-admin-trigger" type="button" aria-hidden="true" tabindex="-1"></button>
+
+<div id="hiddenAdminOverlay" class="hidden-admin-overlay hidden" aria-hidden="true">
+  <div class="hidden-admin-panel" role="dialog" aria-modal="true" aria-labelledby="hiddenAdminTitle">
+    <div class="hidden-admin-head">
+      <h3 id="hiddenAdminTitle">Control Panel</h3>
+      <button id="hiddenAdminCloseBtn" type="button">Close</button>
+    </div>
+    <div class="hidden-admin-auth-row">
+      <input id="venmoAdminCodeInput" type="password" placeholder="Admin code" autocomplete="off">
+      <button id="venmoAdminUnlockBtn" type="button">Unlock</button>
+    </div>
+    <div id="hiddenAdminStatus" class="hidden-admin-status"></div>
+    <section class="hidden-admin-section">
+      <h4>Pending Claims</h4>
+      <div id="venmoAdminClaims" class="hidden-admin-table-wrap"></div>
+    </section>
+    <section class="hidden-admin-section">
+      <h4>Users</h4>
+      <div id="hiddenAdminUsers" class="hidden-admin-table-wrap"></div>
+    </section>
   </div>
 </div>
 

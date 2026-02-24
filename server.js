@@ -33,7 +33,8 @@ const claimsDbPath = path.join(__dirname, ".venmo-claims-db.json");
 function defaultClaimsDb() {
   return {
     nextId: 1,
-    claims: []
+    claims: [],
+    users: []
   };
 }
 
@@ -43,6 +44,7 @@ function loadClaimsDb() {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return defaultClaimsDb();
     if (!Array.isArray(parsed.claims)) parsed.claims = [];
+    if (!Array.isArray(parsed.users)) parsed.users = [];
     if (!Number.isFinite(parsed.nextId) || parsed.nextId < 1) parsed.nextId = 1;
     return parsed;
   } catch {
@@ -63,6 +65,24 @@ function sanitizePlayerId(value) {
   if (!id) return "";
   if (!/^[a-zA-Z0-9_-]{6,120}$/.test(id)) return "";
   return id;
+}
+
+function sanitizeUsername(value) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "";
+  if (normalized.length < 3 || normalized.length > 16) return "";
+  return normalized;
+}
+
+function sanitizeClaimSource(value) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "venmo";
+  return normalized.slice(0, 24);
 }
 
 function normalizePackageId(value) {
@@ -117,12 +137,14 @@ app.post("/api/claims", (req, res) => {
   try {
     const db = loadClaimsDb();
     const playerId = sanitizePlayerId(req.body?.playerId);
+    const username = sanitizeUsername(req.body?.username);
     const packageId = normalizePackageId(
       req.body?.packageId ||
       req.body?.packId ||
       req.body?.pack ||
       req.body?.package
     );
+    const source = sanitizeClaimSource(req.body?.source);
     const txnId = String(req.body?.txnId || "").trim();
     const txnNorm = normalizeTxn(txnId);
     const pack = STORE_PACKAGES[packageId];
@@ -147,6 +169,8 @@ app.post("/api/claims", (req, res) => {
     const claim = {
       id: String(db.nextId++),
       playerId,
+      username: username || playerId,
+      source,
       packId: packageId,
       txnId,
       txnNorm,
@@ -233,6 +257,40 @@ app.post("/api/claims/credits/:id/ack", (req, res) => {
   }
 });
 
+app.post("/api/users/sync", (req, res) => {
+  try {
+    const db = loadClaimsDb();
+    const playerId = sanitizePlayerId(req.body?.playerId);
+    const username = sanitizeUsername(req.body?.username);
+    const balance = Number(req.body?.balance);
+    if (!playerId || !username || !Number.isFinite(balance) || balance < 0) {
+      res.status(400).json({ ok: false, error: "Invalid user sync payload." });
+      return;
+    }
+
+    let user = db.users.find((entry) => entry.playerId === playerId);
+    if (!user) {
+      user = {
+        playerId,
+        username,
+        balance: Math.round(balance * 100) / 100,
+        lastSeenAt: Date.now()
+      };
+      db.users.push(user);
+    } else {
+      user.username = username;
+      user.balance = Math.round(balance * 100) / 100;
+      user.lastSeenAt = Date.now();
+    }
+
+    saveClaimsDb(db);
+    res.json({ ok: true, user });
+  } catch (error) {
+    console.error("Failed to sync user profile", error);
+    res.status(500).json({ ok: false, error: "Could not sync user profile." });
+  }
+});
+
 app.get("/api/admin/claims", (req, res) => {
   try {
     if (!requireAdmin(req, res)) return;
@@ -246,6 +304,26 @@ app.get("/api/admin/claims", (req, res) => {
   } catch (error) {
     console.error("Failed to load admin claims", error);
     res.status(500).json({ ok: false, error: "Could not load admin claims." });
+  }
+});
+
+app.get("/api/admin/users", (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const db = loadClaimsDb();
+    const users = db.users
+      .slice()
+      .sort((a, b) => (Number(b.lastSeenAt) || 0) - (Number(a.lastSeenAt) || 0))
+      .map((user) => ({
+        playerId: String(user.playerId || ""),
+        username: sanitizeUsername(user.username) || "Unknown",
+        balance: Number.isFinite(Number(user.balance)) ? Math.round(Number(user.balance) * 100) / 100 : 0,
+        lastSeenAt: Number(user.lastSeenAt) || 0
+      }));
+    res.json({ ok: true, users });
+  } catch (error) {
+    console.error("Failed to load admin users", error);
+    res.status(500).json({ ok: false, error: "Could not load users." });
   }
 });
 

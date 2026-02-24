@@ -55,6 +55,10 @@ const HIGH_BET_RIG_THRESHOLD = 2000;
 const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
 const CURRENCY_SYMBOL = "S$";
+const USERNAME_STORAGE_KEY = "nows_username_v1";
+const USERNAME_MIN_LEN = 3;
+const USERNAME_MAX_LEN = 16;
+const USERNAME_SETUP_DONE_STORAGE_KEY = "nows_username_setup_done_v1";
 const BASE_NET_WORTH = 1000;
 const CASINO_UNLOCK_TRADING_TOTAL = 1500;
 const CASINO_EARLY_UNLOCK_STORAGE_KEY = "casino_early_unlock_v1";
@@ -63,6 +67,8 @@ let activeCasinoGameKey = "lobby";
 const CASINO_LIVE_FEED_LIMIT = 40;
 const casinoLiveFeedEntries = [];
 let casinoLiveFeedTimer = null;
+let playerUsername = "";
+let usernameGateActive = false;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -92,6 +98,40 @@ function clampPercent(value) {
 
 function formatCurrency(value) {
   return `${CURRENCY_SYMBOL}${roundCurrency(value).toFixed(2)}`;
+}
+
+function normalizeUsername(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length < USERNAME_MIN_LEN || normalized.length > USERNAME_MAX_LEN) return "";
+  return normalized;
+}
+
+function loadSavedUsername() {
+  try {
+    return normalizeUsername(localStorage.getItem(USERNAME_STORAGE_KEY));
+  } catch {
+    return "";
+  }
+}
+
+function saveUsername(value) {
+  const normalized = normalizeUsername(value);
+  if (!normalized) return false;
+  try {
+    localStorage.setItem(USERNAME_STORAGE_KEY, normalized);
+    localStorage.setItem(USERNAME_SETUP_DONE_STORAGE_KEY, "1");
+  } catch {}
+  playerUsername = normalized;
+  return true;
+}
+
+function hasCompletedUsernameSetup() {
+  if (normalizeUsername(playerUsername)) return true;
+  try {
+    return localStorage.getItem(USERNAME_SETUP_DONE_STORAGE_KEY) === "1" && Boolean(loadSavedUsername());
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSageCurrencyText(text) {
@@ -159,6 +199,82 @@ if (document.readyState === "loading") {
   installSageCurrencyDomNormalizer();
 }
 
+playerUsername = loadSavedUsername();
+
+function setFirstLaunchUsernameError(message = "") {
+  const errorEl = document.getElementById("firstLaunchUsernameError");
+  if (!errorEl) return;
+  errorEl.textContent = String(message || "");
+}
+
+function showFirstLaunchUsernameOverlay() {
+  const overlay = document.getElementById("firstLaunchOverlay");
+  const input = document.getElementById("firstLaunchUsernameInput");
+  if (!overlay || !input) return;
+  usernameGateActive = true;
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  input.value = playerUsername || "";
+  setFirstLaunchUsernameError("");
+  setTimeout(() => input.focus(), 0);
+}
+
+function hideFirstLaunchUsernameOverlay() {
+  const overlay = document.getElementById("firstLaunchOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+  usernameGateActive = false;
+}
+
+function submitFirstLaunchUsername() {
+  const input = document.getElementById("firstLaunchUsernameInput");
+  if (!input) return false;
+  const candidate = normalizeUsername(input.value);
+  if (!candidate) {
+    setFirstLaunchUsernameError(`Username must be ${USERNAME_MIN_LEN}-${USERNAME_MAX_LEN} characters.`);
+    input.focus();
+    return false;
+  }
+  if (!saveUsername(candidate)) {
+    setFirstLaunchUsernameError("Could not save username.");
+    input.focus();
+    return false;
+  }
+  hideFirstLaunchUsernameOverlay();
+  setFirstLaunchUsernameError("");
+  if (typeof updateUI === "function") updateUI();
+  if (typeof syncCurrentUserProfileToServer === "function") syncCurrentUserProfileToServer({ force: true });
+  return true;
+}
+
+function initFirstLaunchUsernameSetup() {
+  const overlay = document.getElementById("firstLaunchOverlay");
+  const input = document.getElementById("firstLaunchUsernameInput");
+  const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
+  if (!overlay || !input || !confirmBtn) return;
+
+  confirmBtn.addEventListener("click", () => submitFirstLaunchUsername());
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    submitFirstLaunchUsername();
+  });
+
+  if (hasCompletedUsernameSetup()) {
+    const normalized = loadSavedUsername();
+    if (normalized) {
+      playerUsername = normalized;
+      try {
+        localStorage.setItem(USERNAME_SETUP_DONE_STORAGE_KEY, "1");
+      } catch {}
+      hideFirstLaunchUsernameOverlay();
+      return;
+    }
+  }
+  showFirstLaunchUsernameOverlay();
+}
+
 function getGameLabelByKey(gameKey) {
   const key = String(gameKey || "").toLowerCase();
   const map = {
@@ -211,8 +327,9 @@ function renderCasinoLiveFeed() {
 function pushCasinoLiveWin(amount, multiplier = null, gameKey = activeCasinoGameKey) {
   const value = roundCurrency(Number(amount));
   if (!Number.isFinite(value) || value <= 0) return;
+  const displayName = playerUsername || "Player";
   const entry = {
-    name: phoneState?.vip?.active ? "VIP Player" : "Player",
+    name: displayName,
     vip: Boolean(phoneState?.vip?.active),
     game: getGameLabelByKey(gameKey),
     amount: value,
@@ -3883,6 +4000,7 @@ function updateUI() {
     refreshPhonePanels();
     postPhoneMiniCashUpdate();
     persistCashStateSoon();
+    scheduleUserProfileSync();
   } catch (error) {
     console.error("phone panel refresh failed", error);
   }
@@ -4083,15 +4201,20 @@ const venmoClaimPackEl = document.getElementById("venmoClaimPack");
 const venmoClaimTxnInputEl = document.getElementById("venmoClaimTxnInput");
 const venmoClaimSubmitBtn = document.getElementById("venmoClaimSubmitBtn");
 const venmoClaimStatusEl = document.getElementById("venmoClaimStatus");
+const hiddenAdminTriggerEl = document.getElementById("hiddenAdminTrigger");
+const hiddenAdminOverlayEl = document.getElementById("hiddenAdminOverlay");
+const hiddenAdminCloseBtnEl = document.getElementById("hiddenAdminCloseBtn");
+const hiddenAdminStatusEl = document.getElementById("hiddenAdminStatus");
+const hiddenAdminUsersEl = document.getElementById("hiddenAdminUsers");
 const venmoAdminCodeInputEl = document.getElementById("venmoAdminCodeInput");
 const venmoAdminUnlockBtn = document.getElementById("venmoAdminUnlockBtn");
 const venmoAdminClaimsEl = document.getElementById("venmoAdminClaims");
 const buyVipBtn = document.getElementById("buyVipBtn");
 const vipStatusTextEl = document.getElementById("vipStatusText");
-const VENMO_ADMIN_DEFAULT_CODE = "Sage1557";
 const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
 const VENMO_LOCAL_CREDITED_STORAGE_KEY = "venmo_claim_credited_local_v1";
 const VENMO_CLAIM_POLL_MS = 10000;
+const USER_PROFILE_SYNC_INTERVAL_MS = 12000;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
   small: { funds: 1000, usd: 2, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=2&note=S%241000" },
@@ -4101,13 +4224,17 @@ const REAL_MONEY_FUND_PACKS = Object.freeze({
 });
 const venmoClaimState = {
   claims: [],
-  adminClaims: []
+  adminClaims: [],
+  adminUsers: []
 };
 let venmoAdminUnlocked = false;
 let venmoAdminAuthCode = "";
 let venmoClaimPlayerId = "";
 let venmoClaimPollTimer = null;
 const venmoLocallyCreditedClaimIds = new Set();
+let userProfileSyncTimer = null;
+let lastUserProfileSyncAt = 0;
+let hiddenAdminPanelOpen = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -4307,6 +4434,37 @@ function saveVenmoLocalCreditedClaimIds() {
   } catch {}
 }
 
+async function syncCurrentUserProfileToServer({ force = false } = {}) {
+  if (!playerUsername || IS_PHONE_EMBED_MODE) return false;
+  if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
+  if (!venmoClaimPlayerId) return false;
+  const now = Date.now();
+  if (!force && now - lastUserProfileSyncAt < USER_PROFILE_SYNC_INTERVAL_MS) return false;
+  lastUserProfileSyncAt = now;
+  try {
+    await venmoApiRequest("/api/users/sync", {
+      method: "POST",
+      body: {
+        playerId: venmoClaimPlayerId,
+        username: playerUsername,
+        balance: roundCurrency(cash)
+      }
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scheduleUserProfileSync() {
+  if (IS_PHONE_EMBED_MODE || !playerUsername) return;
+  if (userProfileSyncTimer) return;
+  userProfileSyncTimer = setTimeout(() => {
+    userProfileSyncTimer = null;
+    syncCurrentUserProfileToServer();
+  }, 900);
+}
+
 function getVenmoPackLabel(packId) {
   const pack = REAL_MONEY_FUND_PACKS[packId];
   if (!pack) return "Unknown pack";
@@ -4348,6 +4506,8 @@ function mapServerClaim(claim) {
   return {
     id: String(claim?.id || ""),
     playerId: String(claim?.playerId || ""),
+    username: String(claim?.username || ""),
+    source: String(claim?.source || claim?.claimSource || "venmo"),
     packId: String(claim?.packId || ""),
     txnId: String(claim?.txnId || ""),
     txnNorm: normalizeVenmoTxnId(claim?.txnNorm || claim?.txnId || ""),
@@ -4373,18 +4533,18 @@ async function refreshVenmoClaimsFromServer({ silent = false } = {}) {
 async function refreshVenmoAdminClaimsFromServer({ silent = false } = {}) {
   if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
   try {
-    const payload = await venmoApiRequest(`/api/admin/claims?adminCode=${encodeURIComponent(venmoAdminAuthCode)}`);
+    const payload = await venmoApiRequest(`/api/admin/claims?status=pending&adminCode=${encodeURIComponent(venmoAdminAuthCode)}`);
     venmoClaimState.adminClaims = Array.isArray(payload.claims) ? payload.claims.map(mapServerClaim) : [];
     renderVenmoAdminClaims();
+    setHiddenAdminStatus("Admin unlocked.");
     return true;
   } catch (error) {
     venmoClaimState.adminClaims = [];
+    venmoClaimState.adminUsers = [];
     venmoAdminUnlocked = false;
-    if (venmoAdminClaimsEl) {
-      venmoAdminClaimsEl.innerHTML = "";
-      venmoAdminClaimsEl.textContent = "Unlock failed. Check admin code and try again.";
-      venmoAdminClaimsEl.style.cursor = "pointer";
-    }
+    renderVenmoAdminClaims();
+    renderHiddenAdminUsers();
+    setHiddenAdminStatus("Unlock failed. Check admin code.", true);
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
     return false;
   }
@@ -4409,47 +4569,151 @@ function setVenmoClaimInlineStatus(message, isError = false) {
   venmoClaimStatusEl.style.color = isError ? "#ff8ea0" : "#b9d1df";
 }
 
+function setHiddenAdminStatus(message, isError = false) {
+  if (!hiddenAdminStatusEl) return;
+  hiddenAdminStatusEl.textContent = String(message || "");
+  hiddenAdminStatusEl.style.color = isError ? "#ff8ea0" : "#a8c4db";
+}
+
+function getVenmoPackFunds(packId) {
+  const pack = REAL_MONEY_FUND_PACKS[String(packId || "")];
+  return Number(pack?.funds) || 0;
+}
+
 function renderVenmoAdminClaims() {
   if (!venmoAdminClaimsEl) return;
-  venmoAdminClaimsEl.innerHTML = "";
-
   if (!venmoAdminUnlocked) {
-    venmoAdminClaimsEl.textContent = "Locked. Click here to enter admin code.";
-    venmoAdminClaimsEl.style.cursor = "pointer";
+    venmoAdminClaimsEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
     return;
   }
-  venmoAdminClaimsEl.style.cursor = "";
-
-  if (venmoClaimState.adminClaims.length === 0) {
-    venmoAdminClaimsEl.textContent = "No claims to review.";
+  const claims = [...venmoClaimState.adminClaims].sort((a, b) => Number(b.submittedAt) - Number(a.submittedAt));
+  if (claims.length === 0) {
+    venmoAdminClaimsEl.innerHTML = `<div class="hidden-admin-empty">No pending claims.</div>`;
     return;
   }
+  const rows = claims
+    .map((claim) => {
+      const amount = formatCurrency(getVenmoPackFunds(claim.packId));
+      const source = claim.source || "venmo";
+      const submitted = new Date(Number(claim.submittedAt) || Date.now()).toLocaleString();
+      return `
+        <tr>
+          <td>${claim.username || "—"}</td>
+          <td>${amount}</td>
+          <td>${source}</td>
+          <td>${submitted}</td>
+          <td>
+            <button type="button" data-action="approve" data-claim-id="${claim.id}">Approve</button>
+            <button type="button" data-action="reject" data-claim-id="${claim.id}">Reject</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+  venmoAdminClaimsEl.innerHTML = `
+    <table class="hidden-admin-table">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Amount</th>
+          <th>Source</th>
+          <th>Submitted</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
 
-  const fragment = document.createDocumentFragment();
-  const newestFirst = [...venmoClaimState.adminClaims].sort((a, b) => Number(b.submittedAt) - Number(a.submittedAt));
-  newestFirst.forEach((claim) => {
-    const card = document.createElement("div");
-    card.className = "bank-admin-claim";
-    const timeText = new Date(Number(claim.submittedAt) || Date.now()).toLocaleString();
-    const statusText = claim.status.toUpperCase();
-    const isPending = claim.status === "pending";
-    card.innerHTML = `
-      <div class="bank-admin-claim-top">
-        <strong>${getVenmoPackLabel(claim.packId)}</strong>
-        <span>${statusText}</span>
-      </div>
-      <div>Player: ${claim.playerId || "—"}</div>
-      <div>Txn ID: ${claim.txnId || "—"}</div>
-      <div>Submitted: ${timeText}</div>
-      ${isPending ? `
-      <div class="bank-admin-claim-actions">
-        <button type="button" data-action="approve" data-claim-id="${claim.id}">Approve</button>
-        <button type="button" data-action="reject" data-claim-id="${claim.id}">Reject</button>
-      </div>` : ""}
-    `;
-    fragment.appendChild(card);
+function renderHiddenAdminUsers() {
+  if (!hiddenAdminUsersEl) return;
+  if (!venmoAdminUnlocked) {
+    hiddenAdminUsersEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  const users = [...venmoClaimState.adminUsers].sort((a, b) => Number(b.balance) - Number(a.balance));
+  if (users.length === 0) {
+    hiddenAdminUsersEl.innerHTML = `<div class="hidden-admin-empty">No users synced yet.</div>`;
+    return;
+  }
+  const rows = users
+    .map((user) => `
+      <tr>
+        <td>${user.username || "Unknown"}</td>
+        <td>${formatCurrency(Number(user.balance) || 0)}</td>
+      </tr>
+    `)
+    .join("");
+  hiddenAdminUsersEl.innerHTML = `
+    <table class="hidden-admin-table">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Current Balance</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refreshHiddenAdminUsersFromServer({ silent = false } = {}) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
+  try {
+    const payload = await venmoApiRequest(`/api/admin/users?adminCode=${encodeURIComponent(venmoAdminAuthCode)}`);
+    venmoClaimState.adminUsers = Array.isArray(payload.users) ? payload.users : [];
+    renderHiddenAdminUsers();
+    return true;
+  } catch (error) {
+    venmoClaimState.adminUsers = [];
+    renderHiddenAdminUsers();
+    if (!silent) setHiddenAdminStatus(`Could not load users: ${error.message}`, true);
+    return false;
+  }
+}
+
+function closeHiddenAdminPanel() {
+  if (!hiddenAdminOverlayEl) return;
+  hiddenAdminOverlayEl.classList.add("hidden");
+  hiddenAdminOverlayEl.setAttribute("aria-hidden", "true");
+  hiddenAdminPanelOpen = false;
+}
+
+async function openHiddenAdminPanel() {
+  if (!hiddenAdminOverlayEl) return;
+  hiddenAdminOverlayEl.classList.remove("hidden");
+  hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
+  hiddenAdminPanelOpen = true;
+  setHiddenAdminStatus(venmoAdminUnlocked ? "Admin unlocked." : "Enter admin code to unlock.");
+  renderVenmoAdminClaims();
+  renderHiddenAdminUsers();
+  if (venmoAdminUnlocked) {
+    await refreshVenmoAdminClaimsFromServer({ silent: true });
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+  }
+}
+
+function initHiddenAdminTrigger() {
+  if (!hiddenAdminTriggerEl || hiddenAdminTriggerEl.dataset.bound === "true") return;
+  hiddenAdminTriggerEl.dataset.bound = "true";
+  hiddenAdminTriggerEl.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openHiddenAdminPanel();
   });
-  venmoAdminClaimsEl.appendChild(fragment);
+  if (hiddenAdminCloseBtnEl) {
+    hiddenAdminCloseBtnEl.addEventListener("click", () => closeHiddenAdminPanel());
+  }
+  if (hiddenAdminOverlayEl) {
+    hiddenAdminOverlayEl.addEventListener("click", (event) => {
+      if (event.target === hiddenAdminOverlayEl) closeHiddenAdminPanel();
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !hiddenAdminPanelOpen) return;
+    closeHiddenAdminPanel();
+  });
 }
 
 async function submitVenmoClaim() {
@@ -4486,6 +4750,8 @@ async function submitVenmoClaim() {
       method: "POST",
       body: {
         playerId: venmoClaimPlayerId,
+        username: playerUsername || "Player",
+        source: "venmo",
         packageId: packId,
         packId,
         txnId
@@ -4517,6 +4783,7 @@ async function resolveVenmoClaim(claimId, decision) {
       }
     });
     await refreshVenmoAdminClaimsFromServer({ silent: true });
+    await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshVenmoClaimsFromServer({ silent: true });
     setBankMessage(decision === "approve" ? "Claim approved." : "Claim rejected.");
   } catch (error) {
@@ -4555,8 +4822,11 @@ async function claimApprovedVenmoCredits({ silent = true } = {}) {
 function initVenmoClaimWorkflow() {
   venmoClaimPlayerId = getVenmoClaimPlayerId();
   loadVenmoLocalCreditedClaimIds();
+  syncCurrentUserProfileToServer({ force: true });
   renderVenmoClaimStatus();
   renderVenmoAdminClaims();
+  renderHiddenAdminUsers();
+  setHiddenAdminStatus("");
   refreshVenmoClaimsFromServer({ silent: true });
   claimApprovedVenmoCredits({ silent: true });
   if (venmoClaimPollTimer) {
@@ -4566,19 +4836,17 @@ function initVenmoClaimWorkflow() {
   venmoClaimPollTimer = setInterval(() => {
     refreshVenmoClaimsFromServer({ silent: true });
     claimApprovedVenmoCredits({ silent: true });
-    if (venmoAdminUnlocked) refreshVenmoAdminClaimsFromServer({ silent: true });
+    if (venmoAdminUnlocked) {
+      refreshVenmoAdminClaimsFromServer({ silent: true });
+      refreshHiddenAdminUsersFromServer({ silent: true });
+    }
   }, VENMO_CLAIM_POLL_MS);
 }
 
 async function promptVenmoAdminUnlock(forcePrompt = false) {
   const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
-  let code = typedCode;
-  if (!code || forcePrompt) {
-    const prefill = String(typedCode || venmoAdminAuthCode || VENMO_ADMIN_DEFAULT_CODE);
-    const entered = window.prompt("Enter admin code", prefill);
-    if (entered == null) return false;
-    code = String(entered).trim();
-  }
+  let code = typedCode || venmoAdminAuthCode;
+  if (forcePrompt && !typedCode) code = "";
   if (!code) return false;
   venmoAdminAuthCode = code;
   if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = code;
@@ -4586,9 +4854,14 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   const ok = await refreshVenmoAdminClaimsFromServer({ silent: true });
   if (!ok) {
     venmoAdminUnlocked = false;
+    venmoAdminAuthCode = "";
     setBankMessage("Invalid admin code.");
+    setHiddenAdminStatus("Invalid admin code.", true);
+    renderHiddenAdminUsers();
     return false;
   }
+  await refreshHiddenAdminUsersFromServer({ silent: true });
+  setHiddenAdminStatus("Admin unlocked.");
   setBankMessage("Admin claim panel unlocked.");
   return true;
 }
@@ -4756,7 +5029,7 @@ if (venmoAdminCodeInputEl) {
 if (venmoAdminClaimsEl) {
   venmoAdminClaimsEl.addEventListener("click", (event) => {
     if (!venmoAdminUnlocked) {
-      promptVenmoAdminUnlock();
+      setHiddenAdminStatus("Enter admin code to unlock.", true);
       return;
     }
     const target = event.target instanceof Element ? event.target.closest("button[data-action][data-claim-id]") : null;
@@ -8141,6 +8414,8 @@ function renderBlackjack(options = {}) {
 loadPhoneState();
 bankMissionLastCashSnapshot = cash;
 refreshPokerSessionMeta();
+initFirstLaunchUsernameSetup();
+initHiddenAdminTrigger();
 initCasinoSecretUnlockButton();
 startCasinoLiveFeedTicker();
 if (!IS_PHONE_EMBED_MODE) {
