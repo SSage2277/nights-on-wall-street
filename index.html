@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>Nights on Wall Street</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="appVersionTag">v1.7.5</div>
+
+<h1 id="gameTitle" class="game-title-logo">Nights on Wall Street</h1>
+
+<!-- NAV -->
+<div id="nav">
+  <button id="tradingBtn">Trading Floor</button>
+  <button id="casinoBtn">Casino</button>
+  <button id="bankToggleBtn">🏦 Bank</button>
+  <button id="phoneBtn">📱 Phone <span id="phoneBadge" class="phone-badge hidden">0</span></button>
+</div>
+
+<!-- BANK PANEL -->
+<div id="loan-panel">
+  <div id="loan-header">
+    <span>🏦 Bank</span>
+    <button id="closeBankBtn">✖</button>
+  </div>
+
+  <div id="loan-section">
+    <span>Debt: S$<span id="loanAmount">0</span></span>
+    <span>Interest: S$<span id="loanInterest">0</span></span>
+    <span id="creditStatus">Credit: Clean</span>
+    <span>Savings: S$<span id="savingsAmount">0</span></span>
+    <span>Auto Save / Win: <span id="autoSavingsAmount">0.00%</span></span>
+
+    <div id="loan-progress">
+      <div id="loan-progress-bar"></div>
+    </div>
+
+    <div class="loan-action-row">
+      <input id="loanInput" type="number" min="100" step="100" placeholder="Loan">
+      <button id="takeLoanBtn">+</button>
+      <button id="repayLoanBtn">−</button>
+    </div>
+
+    <div class="bank-divider"></div>
+
+    <div class="auto-savings-row">
+      <input id="autoSavingsInput" type="number" min="0" max="100" step="0.1" placeholder="Auto save % of win">
+      <button id="setAutoSavingsBtn">Set Auto</button>
+      <button id="clearAutoSavingsBtn">Auto Off</button>
+    </div>
+    <div class="bank-transfer-row">
+      <input id="withdrawSavingsInput" type="number" min="0.01" step="0.01" placeholder="Withdraw from savings">
+      <button id="withdrawSavingsBtn">Withdraw</button>
+    </div>
+    <button id="withdrawAllSavingsBtn">Withdraw Savings</button>
+
+    <div class="bank-divider"></div>
+    <span>Buy Funds (Venmo)</span>
+    <div class="bank-buy-row">
+      <button id="buyFundsSmallBtn">Buy S$1,000 · USD 2</button>
+      <button id="buyFundsMediumBtn">Buy S$5,000 · USD 8</button>
+      <button id="buyFundsXLBtn">Buy S$10,000 · USD 18</button>
+      <button id="buyFundsLargeBtn">Buy S$25,000 · USD 40</button>
+    </div>
+    <div class="bank-claim-row">
+      <select id="venmoClaimPack">
+        <option value="small">Claim S$1,000</option>
+        <option value="medium">Claim S$5,000</option>
+        <option value="xlarge">Claim S$10,000</option>
+        <option value="large">Claim S$25,000</option>
+      </select>
+      <input id="venmoClaimTxnInput" type="text" placeholder="Venmo transaction ID">
+      <button id="venmoClaimSubmitBtn">Submit Claim</button>
+    </div>
+    <div id="venmoClaimStatus" class="bank-claim-status">No claims yet</div>
+    <details id="venmoAdminPanel" class="bank-admin-panel" open>
+      <summary>Admin Claim Approval</summary>
+      <div class="bank-admin-auth-row">
+        <input id="venmoAdminCodeInput" type="password" placeholder="Admin code">
+        <button id="venmoAdminUnlockBtn">Unlock</button>
+      </div>
+      <div id="venmoAdminClaims" class="bank-admin-claims"></div>
+    </details>
+    <div class="bank-divider"></div>
+    <span>VIP</span>
+    <div class="bank-vip-row">
+      <button id="buyVipBtn">Buy VIP (S$5,000)</button>
+      <span id="vipStatusText">Status: Standard</span>
+    </div>
+  </div>
+</div>
+
+<!-- TRADING -->
+<div id="trading-section">
+  <div class="chart-layout">
+    <div class="chart-side-column chart-left-column">
+      <div id="side-xp-container">
+        <div class="label">LEVEL</div>
+        <div id="tradingMissionLevel" class="xp-level-value">1</div>
+        <div class="xp-row">
+          <span>XP</span>
+          <strong id="tradingMissionXp">0</strong>
+        </div>
+        <div class="xp-row">
+          <span>Next</span>
+          <strong id="tradingMissionXpToNext">80 XP</strong>
+        </div>
+        <div class="xp-track"><div id="tradingMissionLevelFill"></div></div>
+        <div id="tradingMissionPerk" class="xp-perk-note">Perk: None</div>
+      </div>
+    </div>
+
+    <div class="chart-canvas-wrap">
+      <canvas id="chart" width="900" height="450"></canvas>
+    </div>
+
+    <div class="chart-side-column">
+      <div id="side-price-container">
+        <div class="label">LIVE</div>
+        <div id="side-price">S$0</div>
+        <hr>
+        <div class="label">AVG</div>
+        <div id="avg-buy-price">S$0</div>
+      </div>
+      <div id="news"></div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button id="buy">Buy 1</button>
+    <button id="buyAll">Buy All</button>
+    <button id="sell">Sell 1</button>
+    <button id="sellAll">Sell All</button>
+    <button id="next">Next Step</button>
+    <button id="pause">Play</button>
+  </div>
+
+<div id="speed-controls">
+  <button class="speed-btn" data-speed="500">1x</button>
+  <button class="speed-btn" data-speed="300">2x</button>
+  <button class="speed-btn" data-speed="150">5x</button>
+  <button class="speed-btn" data-speed="75">10x</button>
+</div>
+
+
+  <div id="stats">
+    <span>Cash: S$<span id="cash">0</span></span>
+    <span>Shares: <span id="shares">0</span></span>
+    <span>Net: S$<span id="net">0</span></span>
+    <span>P&L: S$<span id="pl">0</span></span>
+  </div>
+
+  <section id="achievements-panel">
+    <h3>Achievements</h3>
+    <ul id="achievements-list"></ul>
+  </section>
+</div>
+
+<!-- CASINO -->
+<div id="casino-section" style="display:none;">
+  <div class="casino-corner-brand corner-tl" aria-hidden="true">SAGE</div>
+  <div class="casino-corner-brand corner-tr" aria-hidden="true">SAGE</div>
+  <div class="casino-corner-brand corner-bl" aria-hidden="true">SAGE</div>
+  <div class="casino-corner-brand corner-br" aria-hidden="true">SAGE</div>
+  <h2>Casino</h2>
+  <p id="casinoWarning"></p>
+  <p>Cash: S$<span id="casinoCash">0</span></p>
+  <section id="casinoLiveFeed" class="casino-live-feed">
+    <div class="feed-header">
+      <strong>Live Wins</strong>
+      <span id="casinoLiveFeedCount">0</span>
+    </div>
+    <ul id="casinoLiveFeedList"></ul>
+  </section>
+
+  <div id="casino-games">
+    <button class="casino-game-btn" data-game="blackjack" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <rect x="16" y="22" width="38" height="52" rx="8" class="fill"/>
+          <rect x="46" y="30" width="38" height="52" rx="8" class="fill"/>
+          <path d="M35 48c-7-8-16 1-7 10 7 7 7 7 14 0 9-9 0-18-7-10z" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Blackjack</span>
+    </button>
+    <button class="casino-game-btn" data-game="slots" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <rect x="18" y="18" width="64" height="64" rx="10" class="stroke"/>
+          <line x1="38" y1="18" x2="38" y2="82" class="stroke"/>
+          <line x1="62" y1="18" x2="62" y2="82" class="stroke"/>
+          <circle cx="27" cy="50" r="5" class="fill"/>
+          <circle cx="50" cy="50" r="5" class="fill"/>
+          <circle cx="73" cy="50" r="5" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Slots</span>
+    </button>
+    <button class="casino-game-btn" data-game="poker" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <rect x="18" y="24" width="34" height="48" rx="6" class="stroke"/>
+          <rect x="48" y="30" width="34" height="48" rx="6" class="stroke"/>
+          <path d="M33 47c-6-8-14 0-7 8 6 6 6 6 12 0 8-8 0-16-5-8z" class="fill"/>
+          <path d="M65 56l5-9 5 9z" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Poker</span>
+    </button>
+    <button class="casino-game-btn" data-game="plinko" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M50 22l26 34H24z" class="stroke"/>
+          <circle cx="50" cy="28" r="2.8" class="fill"/>
+          <circle cx="42" cy="38" r="2.6" class="fill"/>
+          <circle cx="58" cy="38" r="2.6" class="fill"/>
+          <circle cx="34" cy="49" r="2.5" class="fill"/>
+          <circle cx="50" cy="49" r="2.5" class="fill"/>
+          <circle cx="66" cy="49" r="2.5" class="fill"/>
+          <path d="M26 66h48" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Plinko</span>
+    </button>
+    <button class="casino-game-btn" data-game="dragontower" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M28 76V40l22-16 22 16v36z" class="stroke"/>
+          <path d="M34 40h32M34 52h32M34 64h32" class="stroke"/>
+          <circle cx="50" cy="20" r="7" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Dragon Tower</span>
+    </button>
+    <button class="casino-game-btn" data-game="keno" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <rect x="18" y="18" width="64" height="64" rx="10" class="stroke"/>
+          <path d="M34 34h12M54 34h12M34 50h12M54 50h12M34 66h12M54 66h12" class="stroke"/>
+          <circle cx="28" cy="34" r="3.5" class="fill"/>
+          <circle cx="72" cy="66" r="3.5" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Keno</span>
+    </button>
+    <button class="casino-game-btn" data-game="dice" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <rect x="22" y="22" width="56" height="56" rx="12" class="stroke"/>
+          <circle cx="36" cy="36" r="4" class="fill"/>
+          <circle cx="64" cy="36" r="4" class="fill"/>
+          <circle cx="50" cy="50" r="4" class="fill"/>
+          <circle cx="36" cy="64" r="4" class="fill"/>
+          <circle cx="64" cy="64" r="4" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Dice</span>
+    </button>
+    <button class="casino-game-btn" data-game="slide" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M20 72h60M28 28h18v18l26 26" class="stroke"/>
+          <circle cx="72" cy="72" r="7" class="fill"/>
+        </svg>
+      </span>
+      <span class="game-title">Slide</span>
+    </button>
+    <button class="casino-game-btn" data-game="crash" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M18 74h64M20 70l20-16 12 8 22-26" class="stroke"/>
+          <path d="M70 34h10v10" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Crash</span>
+    </button>
+    <button class="casino-game-btn" data-game="mines" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="52" r="18" class="stroke"/>
+          <circle cx="50" cy="52" r="5" class="fill"/>
+          <path d="M50 22v-8M50 90v-8M20 52h-8M88 52h-8M30 32l-6-6M76 78l-6-6M70 32l6-6M24 78l6-6" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Mines</span>
+    </button>
+    <button class="casino-game-btn" data-game="crossyroad" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <ellipse cx="50" cy="56" rx="18" ry="14" class="fill"/>
+          <circle cx="62" cy="42" r="9" class="fill"/>
+          <path d="M69 42l10 4-10 4" class="stroke"/>
+          <path d="M42 69v8M56 69v8" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Crossy Road</span>
+    </button>
+    <button class="casino-game-btn" data-game="roulette" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="30" class="stroke"/>
+          <circle cx="50" cy="50" r="10" class="stroke"/>
+          <path d="M50 20v60M20 50h60M29 29l42 42M71 29L29 71" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Roulette</span>
+    </button>
+    <button class="casino-game-btn" data-game="diamonds" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M50 18l24 18-24 46-24-46z" class="stroke"/>
+          <path d="M26 36h48M38 36l12 46 12-46" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Diamond Match</span>
+    </button>
+    <button class="casino-game-btn" data-game="hilo" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M34 70V30M34 30l-8 8M34 30l8 8" class="stroke"/>
+          <path d="M66 30v40M66 70l-8-8M66 70l8-8" class="stroke"/>
+          <rect x="42" y="40" width="16" height="20" rx="3" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Hi-Lo</span>
+    </button>
+    <button class="casino-game-btn" data-game="horseracing" type="button">
+      <span class="game-icon" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <path d="M18 68h64" class="stroke"/>
+          <path d="M28 58l12-10h18l9-9 8 4-5 9h-8l-7 6H41l-7 8" class="stroke"/>
+          <circle cx="70" cy="39" r="5" class="fill"/>
+          <path d="M45 58l5 10M57 58l5 10" class="stroke"/>
+        </svg>
+      </span>
+      <span class="game-title">Horse Racing</span>
+    </button>
+  </div>
+
+  <div id="casino-container"></div>
+  <button id="backToTrading">Back to Trading</button>
+</div>
+
+<div id="phoneOverlay" class="phone-overlay hidden" aria-hidden="true">
+  <div class="phone-scene-brand side-left" aria-hidden="true">SAGE</div>
+  <div class="phone-scene-brand side-right" aria-hidden="true">SAGE</div>
+  <div class="phone-device">
+    <span class="phone-side-btn one" aria-hidden="true"></span>
+    <span class="phone-side-btn two" aria-hidden="true"></span>
+    <span class="phone-side-btn three" aria-hidden="true"></span>
+    <div class="phone-shell">
+      <div class="phone-statusbar">
+        <span id="phoneStatusTime" class="phone-status-time">00:00</span>
+        <div class="phone-dynamic-island" aria-hidden="true"></div>
+        <div class="phone-status-actions">
+          <span class="phone-status-icons">✈︎ ᯤ 79%</span>
+          <button id="phoneCloseBtn" type="button" aria-label="Close phone">✕</button>
+        </div>
+      </div>
+
+      <div class="phone-body">
+        <section id="phoneAppHome" class="phone-app active">
+          <div class="phone-home-screen">
+            <svg class="phone-icon-defs" aria-hidden="true" focusable="false">
+              <symbol id="picon-messages" viewBox="0 0 64 64">
+                <path d="M12 14h40a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30L16 58V46h-4a6 6 0 0 1-6-6V20a6 6 0 0 1 6-6z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+              </symbol>
+              <symbol id="picon-bank" viewBox="0 0 64 64">
+                <path d="M8 24 32 10l24 14H8z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                <path d="M14 24v24M26 24v24M38 24v24M50 24v24M10 50h44" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+              </symbol>
+              <symbol id="picon-portfolio" viewBox="0 0 64 64">
+                <path d="M10 52h44" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                <rect x="14" y="34" width="8" height="18" rx="2" fill="currentColor"/>
+                <rect x="28" y="24" width="8" height="28" rx="2" fill="currentColor"/>
+                <rect x="42" y="16" width="8" height="36" rx="2" fill="currentColor"/>
+              </symbol>
+              <symbol id="picon-casino" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="22" fill="none" stroke="currentColor" stroke-width="4"/>
+                <circle cx="32" cy="32" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <path d="M32 12v6M32 46v6M12 32h6M46 32h6M18 18l4 4M42 42l4 4M46 18l-4 4M18 46l4-4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+              </symbol>
+              <symbol id="picon-missions" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="22" fill="none" stroke="currentColor" stroke-width="4"/>
+                <path d="m20 33 8 8 16-18" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+              </symbol>
+              <symbol id="picon-settings" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <path d="M32 12v8M32 44v8M12 32h8M44 32h8M18 18l6 6M40 40l6 6M46 18l-6 6M24 40l-6 6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+              </symbol>
+            </svg>
+
+            <div class="phone-app-grid">
+              <button class="phone-home-app" data-target-app="messages" type="button">
+                <span class="phone-home-icon icon-messages"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-messages"></use></svg></span>
+                <span class="phone-home-app-name">Messages</span>
+              </button>
+              <button class="phone-home-app" data-target-app="bank" type="button">
+                <span class="phone-home-icon icon-bank"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-bank"></use></svg></span>
+                <span class="phone-home-app-name">Bank</span>
+              </button>
+              <button class="phone-home-app" data-target-app="portfolio" type="button">
+                <span class="phone-home-icon icon-portfolio"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-portfolio"></use></svg></span>
+                <span class="phone-home-app-name">Portfolio</span>
+              </button>
+              <button class="phone-home-app" data-target-app="casino" type="button">
+                <span class="phone-home-icon icon-casino"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-casino"></use></svg></span>
+                <span class="phone-home-app-name">Casino</span>
+              </button>
+              <button class="phone-home-app" data-target-app="missions" type="button">
+                <span class="phone-home-icon icon-missions"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-missions"></use></svg></span>
+                <span class="phone-home-app-name">Missions</span>
+              </button>
+              <button class="phone-home-app" data-target-app="settings" type="button">
+                <span class="phone-home-icon icon-settings"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-settings"></use></svg></span>
+                <span class="phone-home-app-name">Settings</span>
+              </button>
+            </div>
+
+            <div class="phone-home-search-pill">
+              <span aria-hidden="true">⌕</span>
+              <span>Search</span>
+            </div>
+
+            <div class="phone-home-dock">
+              <button class="phone-home-app dock-app" data-target-app="messages" type="button">
+                <span class="phone-home-icon icon-messages"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-messages"></use></svg></span>
+              </button>
+              <button class="phone-home-app dock-app" data-target-app="bank" type="button">
+                <span class="phone-home-icon icon-bank"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-bank"></use></svg></span>
+              </button>
+              <button class="phone-home-app dock-app" data-target-app="portfolio" type="button">
+                <span class="phone-home-icon icon-portfolio"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-portfolio"></use></svg></span>
+              </button>
+              <button class="phone-home-app dock-app" data-target-app="casino" type="button">
+                <span class="phone-home-icon icon-casino"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-casino"></use></svg></span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section id="phoneAppMessages" class="phone-app">
+          <div class="phone-subheader">
+            <span>Alerts</span>
+            <button id="phoneClearMessagesBtn" type="button">Clear</button>
+          </div>
+          <div id="phoneMessageList" class="phone-list"></div>
+        </section>
+
+        <section id="phoneAppBank" class="phone-app">
+          <div class="phone-stat-grid">
+            <div><span>Debt</span><strong id="phoneBankDebt">$0.00</strong></div>
+            <div><span>Interest</span><strong id="phoneBankInterest">$0.00</strong></div>
+            <div><span>Credit</span><strong id="phoneBankCredit">Clean</strong></div>
+            <div><span>Loan Age</span><strong id="phoneBankLoanAge">0 / 60</strong></div>
+            <div><span>Savings</span><strong id="phoneBankSavings">$0.00</strong></div>
+            <div><span>Auto Save</span><strong id="phoneBankAutoSave">0.00%</strong></div>
+          </div>
+
+          <div class="phone-bank-progress">
+            <div id="phoneBankProgressBar"></div>
+          </div>
+
+          <div class="phone-inline-controls">
+            <input id="phoneBankLoanInput" type="number" min="100" step="100" placeholder="Loan amount">
+            <button id="phoneBankTakeLoanBtn" type="button">Take</button>
+            <button id="phoneBankRepayLoanBtn" type="button">Repay</button>
+          </div>
+
+          <div class="phone-inline-controls">
+            <input id="phoneBankAutoPercentInput" type="number" min="0" max="100" step="0.1" placeholder="Auto save %">
+            <button id="phoneBankSetAutoBtn" type="button">Set %</button>
+            <button id="phoneBankAutoOffBtn" type="button">Off</button>
+          </div>
+          <button id="phoneBankWithdrawBtn" type="button">Withdraw Savings</button>
+
+          <div class="phone-subheader"><span>Recent Bank Activity</span></div>
+          <div id="phoneBankHistory" class="phone-list compact"></div>
+        </section>
+
+        <section id="phoneAppPortfolio" class="phone-app">
+          <div class="phone-stat-grid">
+            <div><span>Cash</span><strong id="phonePortfolioCash">$0.00</strong></div>
+            <div><span>Shares</span><strong id="phonePortfolioShares">0</strong></div>
+            <div><span>Avg Price</span><strong id="phonePortfolioAvg">$0.00</strong></div>
+            <div><span>Net Worth</span><strong id="phonePortfolioNet">$0.00</strong></div>
+            <div><span>P&amp;L</span><strong id="phonePortfolioPL">$0.00</strong></div>
+            <div><span>Price</span><strong id="phonePortfolioPrice">$0.00</strong></div>
+          </div>
+          <canvas id="phonePortfolioChart" width="320" height="120"></canvas>
+        </section>
+
+        <section id="phoneAppCasino" class="phone-app">
+          <div class="phone-stat-grid">
+            <div><span>Casino Wins</span><strong id="phoneCasinoWins">0</strong></div>
+            <div><span>Casino Profit</span><strong id="phoneCasinoProfit">$0.00</strong></div>
+          </div>
+          <div id="phoneCasinoQuickLaunch" class="phone-quick-grid"></div>
+        </section>
+
+        <section id="phoneAppMissions" class="phone-app">
+          <div class="phone-mission-tabs" role="tablist" aria-label="Mission groups">
+            <button class="phone-mission-tab active" data-mission-tab="daily" type="button">Daily</button>
+            <button class="phone-mission-tab" data-mission-tab="weekly" type="button">Weekly</button>
+            <button class="phone-mission-tab" data-mission-tab="bank" type="button">Bank</button>
+            <button class="phone-mission-tab" data-mission-tab="perks" type="button">Perks</button>
+          </div>
+
+          <div class="phone-mission-panel active" data-mission-panel="daily">
+            <div class="phone-subheader"><span>Daily</span></div>
+            <div id="phoneDailyMissions" class="phone-list"></div>
+          </div>
+
+          <div class="phone-mission-panel" data-mission-panel="weekly">
+            <div class="phone-subheader"><span>Weekly</span></div>
+            <div id="phoneWeeklyMissions" class="phone-list"></div>
+          </div>
+
+          <div class="phone-mission-panel" data-mission-panel="bank">
+            <div class="phone-subheader mission-bank-head">
+              <span>Bank</span>
+              <strong id="phoneBankClaimedSummary">0 / 40 Claimed</strong>
+            </div>
+            <div class="phone-mission-bank-meta">
+              <span>XP <strong id="phoneMissionXp">0</strong></span>
+              <span>Tokens <strong id="phoneMissionTokens">0</strong></span>
+              <span>Level <strong id="phoneMissionLevel">1</strong></span>
+              <span>Next <strong id="phoneMissionXpToNext">80 XP</strong></span>
+              <div class="phone-mission-level-track"><div id="phoneMissionLevelFill"></div></div>
+              <div id="phoneMissionPerk" class="phone-mission-level-note">Perk: None</div>
+              <button id="phoneBankClaimAllBtn" type="button">Claim All</button>
+            </div>
+            <div id="phoneBankMissions" class="phone-list"></div>
+          </div>
+
+          <div class="phone-mission-panel" data-mission-panel="perks">
+            <div class="phone-subheader"><span>Level Perks</span></div>
+            <div id="phoneMissionPerks" class="phone-list"></div>
+          </div>
+        </section>
+
+        <section id="phoneAppSettings" class="phone-app">
+          <label class="phone-setting-row">
+            <span>Animations</span>
+            <input id="phoneSettingAnimations" type="checkbox" checked>
+          </label>
+          <label class="phone-setting-row">
+            <span>Win popup seconds</span>
+            <input id="phoneSettingPopupSeconds" type="number" min="1" max="8" step="0.1" value="2.2">
+          </label>
+          <label class="phone-setting-row">
+            <span>Auto round limit (0 = off)</span>
+            <input id="phoneSettingAutoLimit" type="number" min="0" max="500" step="1" value="0">
+          </label>
+          <label class="phone-setting-row">
+            <span>UI scale <strong id="phoneUiScaleLabel">100%</strong></span>
+            <input id="phoneSettingUiScale" type="range" min="85" max="115" step="1" value="100">
+          </label>
+          <div class="phone-setting-row phone-setting-danger">
+            <span>Total reset (clears all progress)</span>
+            <button id="phoneTotalResetBtn" class="phone-danger-btn" type="button">Reset All</button>
+          </div>
+        </section>
+      </div>
+      <button id="phoneHomeBtn" class="phone-home-bar" type="button" aria-label="Phone home"></button>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
