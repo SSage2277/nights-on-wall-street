@@ -10661,7 +10661,7 @@ function loadCasinoPlinkoNeon() {
       hard: [420, 18, 7, 3, 1, 0.5, 0.3, 0.2, 0.3, 0.5, 1, 3, 7, 18, 420]
     },
     16: {
-      easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 1, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8],
+      easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 0.5, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8],
       medium: [110, 41, 10, 5, 3, 1.5, 1, 0.5, 0.2, 0.5, 1, 1.5, 3, 5, 10, 41, 110],
       hard: [1000, 130, 26, 9, 4, 2, 0.5, 0.3, 0.2, 0.3, 0.5, 2, 4, 9, 26, 130, 1000]
     }
@@ -10784,16 +10784,22 @@ function loadCasinoPlinkoNeon() {
     }
 
     const bins = Math.max(1, MULTIPLIERS.length);
-    const leftBoundary = leftPegX - dx / 2;
-    multipliersEl.style.left = `${leftBoundary}px`;
-    multipliersEl.style.width = `${dx * bins}px`;
+    const leftBoundary = leftPegX;
+    const canvasRect = canvas.getBoundingClientRect();
+    const displayScale = canvasRect.width > 0 ? canvasRect.width / WIDTH : 1;
+    const wrapperWidth = multipliersEl.parentElement?.clientWidth || canvasRect.width || WIDTH;
+    const canvasOffsetX = Math.max(0, (wrapperWidth - (canvasRect.width || WIDTH)) / 2);
+    const scaledDx = dx * displayScale;
+    const scaledLeftBoundary = leftBoundary * displayScale;
+    multipliersEl.style.left = `${canvasOffsetX + scaledLeftBoundary}px`;
+    multipliersEl.style.width = `${scaledDx * bins}px`;
 
-    const multiplierWidth = Math.max(20, dx - 2);
-    const multiplierHeight = rows <= 10 ? 34 : rows <= 14 ? 32 : 30;
-    const multiplierFontSize =
-      rows <= 10 ? "0.72rem" :
-      rows <= 14 ? "0.62rem" :
-      "0.5rem";
+    const multiplierWidth = Math.max(20, scaledDx - 2);
+    const baseHeight = rows <= 10 ? 34 : rows <= 14 ? 32 : 30;
+    const multiplierHeight = baseHeight * Math.max(1, Math.min(1.45, displayScale));
+    const baseFontPx = rows <= 10 ? 11 : rows <= 14 ? 10 : 8;
+    const multiplierFontPx = Math.max(8, baseFontPx * Math.max(1, Math.min(1.45, displayScale)));
+    multipliersEl.style.height = `${Math.round(multiplierHeight)}px`;
 
     MULTIPLIERS.forEach((multiplier, index) => {
       const div = document.createElement("div");
@@ -10803,7 +10809,7 @@ function loadCasinoPlinkoNeon() {
       div.style.margin = "0";
       div.style.width = `${multiplierWidth}px`;
       div.style.height = `${multiplierHeight}px`;
-      div.style.fontSize = multiplierFontSize;
+      div.style.fontSize = `${multiplierFontPx}px`;
 
       const p = weights[index] || 0;
       const pct = ((p / totalWeight) * 100).toFixed(4);
@@ -11217,7 +11223,7 @@ function loadPlinkoPhoneApp() {
     10: { easy: [8.9, 3, 1.5, 1.2, 1, 0.5, 1, 1.2, 1.5, 3, 8.9], medium: [22, 5, 2, 1.4, 0.6, 0.4, 0.6, 1.4, 2, 5, 22], hard: [76, 9, 3, 1, 0.4, 0.2, 0.4, 1, 3, 9, 76] },
     12: { easy: [10, 3.5, 1.6, 1.3, 1.1, 0.8, 0.5, 0.8, 1.1, 1.3, 1.6, 3.5, 10], medium: [33, 11, 4, 2, 1.1, 0.6, 0.3, 0.6, 1.1, 2, 4, 11, 33], hard: [170, 12, 5, 2, 0.5, 0.3, 0.2, 0.3, 0.5, 2, 5, 12, 170] },
     14: { easy: [7.1, 2.8, 1.4, 1.1, 0.9, 0.7, 0.6, 0.5, 0.6, 0.7, 0.9, 1.1, 1.4, 2.8, 7.1], medium: [58, 15, 7, 4, 1.9, 1, 0.5, 0.2, 0.5, 1, 1.9, 4, 7, 15, 58], hard: [420, 18, 7, 3, 1, 0.5, 0.3, 0.2, 0.3, 0.5, 1, 3, 7, 18, 420] },
-    16: { easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 1, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8], medium: [110, 41, 10, 5, 3, 1.5, 1, 0.5, 0.2, 0.5, 1, 1.5, 3, 5, 10, 41, 110], hard: [1000, 130, 26, 9, 4, 2, 0.5, 0.3, 0.2, 0.3, 0.5, 2, 4, 9, 26, 130, 1000] }
+    16: { easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 0.5, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8], medium: [110, 41, 10, 5, 3, 1.5, 1, 0.5, 0.2, 0.5, 1, 1.5, 3, 5, 10, 41, 110], hard: [1000, 130, 26, 9, 4, 2, 0.5, 0.3, 0.2, 0.3, 0.5, 2, 4, 9, 26, 130, 1000] }
   };
 
   const state = {
@@ -11824,7 +11830,7 @@ const MULTIPLIER_DATA = {
     hard: [420, 18, 7, 3, 1, 0.5, 0.3, 0.2, 0.3, 0.5, 1, 3, 7, 18, 420]
   },
   16: {
-    easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 1, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8],
+    easy: [8, 4, 2, 1.6, 1.4, 1.25, 1.1, 1, 0.5, 1, 1.1, 1.25, 1.4, 1.6, 2, 4, 8],
     medium: [110, 41, 10, 5, 3, 1.5, 1, 0.5, 0.2, 0.5, 1, 1.5, 3, 5, 10, 41, 110],
     hard: [1000, 130, 26, 9, 4, 2, 0.5, 0.3, 0.2, 0.3, 0.5, 2, 4, 9, 26, 130, 1000]
   }
