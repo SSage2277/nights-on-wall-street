@@ -803,6 +803,30 @@ body {
   pointer-events: none;
 }
 
+#tradingUsernameBadge {
+  position: fixed;
+  top: 8px;
+  right: 10px;
+  z-index: 11990;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  max-width: min(40vw, 260px);
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(94, 146, 188, 0.62);
+  background: rgba(8, 20, 32, 0.82);
+  color: #dcefff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 .first-launch-overlay {
   position: fixed;
   inset: 0;
@@ -869,12 +893,12 @@ body {
 
 .hidden-admin-trigger {
   position: fixed;
-  top: 0;
-  right: 0;
-  width: 76px;
-  height: 76px;
+  top: 6px;
+  left: 8px;
+  width: 92px;
+  height: 28px;
   border: 0;
-  border-radius: 0;
+  border-radius: 8px;
   padding: 0;
   background: transparent;
   opacity: 0;
@@ -9311,22 +9335,7 @@ body:not(.phone-embedded-mini-mode) #casino-container.casino-roulette-classic-fu
 }
 
 body:not(.phone-embedded-mini-mode) #casino-container.keno-fullbleed .keno-root .tile.match::after {
-  content: "◆";
-  position: absolute;
-  right: 6px;
-  top: 6px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 900;
-  color: #d8ffe8;
-  background: radial-gradient(circle at 30% 28%, #8fffc0, #22c76f 72%);
-  box-shadow: 0 0 0 1px rgba(9, 48, 27, 0.75), 0 0 10px rgba(57, 240, 143, 0.55);
-  pointer-events: none;
-  z-index: 7;
+  content: none;
 }
 
 body:not(.phone-embedded-mini-mode) #casino-container .hilo-root {
@@ -12425,12 +12434,12 @@ body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-horse .phon
 }
 
 .keno-root .tile.match {
-  border: 6px solid #7645e2;
+  border: 2px solid #18c160;
   border-radius: 6px;
-  background: #281e52;
-  color: #b8beb8;
+  background: linear-gradient(180deg, #1ddf70 0%, #13b958 100%);
+  color: #f4fff7;
   font-weight: 900;
-  box-shadow: inset 0 1px 0 rgba(176, 144, 255, 0.32), inset 0 0 0 1px #533598, 0 0 0 1px rgba(20, 12, 44, 0.95);
+  box-shadow: inset 0 1px 0 rgba(213, 255, 230, 0.42), 0 0 0 1px rgba(10, 63, 31, 0.75);
 }
 
 .keno-root .profit-overlay {

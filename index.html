@@ -28,21 +28,8 @@
   </div>
 
   <div id="loan-section">
-    <span>Debt: S$<span id="loanAmount">0</span></span>
-    <span>Interest: S$<span id="loanInterest">0</span></span>
-    <span id="creditStatus">Credit: Clean</span>
     <span>Savings: S$<span id="savingsAmount">0</span></span>
     <span>Auto Save / Win: <span id="autoSavingsAmount">0.00%</span></span>
-
-    <div id="loan-progress">
-      <div id="loan-progress-bar"></div>
-    </div>
-
-    <div class="loan-action-row">
-      <input id="loanInput" type="number" min="100" step="100" placeholder="Loan">
-      <button id="takeLoanBtn">+</button>
-      <button id="repayLoanBtn">−</button>
-    </div>
 
     <div class="bank-divider"></div>
 
@@ -87,6 +74,7 @@
 
 <!-- TRADING -->
 <div id="trading-section">
+  <div id="tradingUsernameBadge" aria-live="polite"></div>
   <div class="chart-layout">
     <div class="chart-side-column chart-left-column">
       <div id="side-xp-container">
@@ -445,22 +433,8 @@
 
         <section id="phoneAppBank" class="phone-app">
           <div class="phone-stat-grid">
-            <div><span>Debt</span><strong id="phoneBankDebt">$0.00</strong></div>
-            <div><span>Interest</span><strong id="phoneBankInterest">$0.00</strong></div>
-            <div><span>Credit</span><strong id="phoneBankCredit">Clean</strong></div>
-            <div><span>Loan Age</span><strong id="phoneBankLoanAge">0 / 60</strong></div>
             <div><span>Savings</span><strong id="phoneBankSavings">$0.00</strong></div>
             <div><span>Auto Save</span><strong id="phoneBankAutoSave">0.00%</strong></div>
-          </div>
-
-          <div class="phone-bank-progress">
-            <div id="phoneBankProgressBar"></div>
-          </div>
-
-          <div class="phone-inline-controls">
-            <input id="phoneBankLoanInput" type="number" min="100" step="100" placeholder="Loan amount">
-            <button id="phoneBankTakeLoanBtn" type="button">Take</button>
-            <button id="phoneBankRepayLoanBtn" type="button">Repay</button>
           </div>
 
           <div class="phone-inline-controls">
