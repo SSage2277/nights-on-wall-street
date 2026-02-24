@@ -10764,16 +10764,37 @@ function loadCasinoPlinkoNeon() {
   function renderMultipliers() {
     if (!multipliersEl || !oddsTooltip) return;
     multipliersEl.innerHTML = "";
+    multipliersEl.style.display = "block";
+    multipliersEl.style.left = "0px";
+    multipliersEl.style.width = `${WIDTH}px`;
 
     const weights = getWeightsForRows(rows);
     const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+    const bottomPegCount = Math.max(2, rows + 2);
+    const fallbackLeftPegX = (WIDTH - (rows + 1) * slotWidth) / 2;
+    const fallbackDx = slotWidth;
+    let leftPegX = fallbackLeftPegX;
+    let dx = fallbackDx;
+
+    if (pegs.length >= bottomPegCount) {
+      const bottomRow = pegs.slice(-bottomPegCount);
+      leftPegX = bottomRow[0].x;
+      const rightPegX = bottomRow[bottomRow.length - 1].x;
+      const span = rightPegX - leftPegX;
+      dx = bottomRow.length > 1 ? span / (bottomRow.length - 1) : slotWidth;
+    }
+
+    const multiplierWidth = Math.max(16, dx - 4);
 
     MULTIPLIERS.forEach((multiplier, index) => {
       const div = document.createElement("div");
       div.className = "multiplier";
       div.textContent = `${multiplier}x`;
       div.style.background = getColor(multiplier);
-      div.style.width = `${slotWidth - 4}px`;
+      div.style.position = "absolute";
+      div.style.margin = "0";
+      div.style.width = `${multiplierWidth}px`;
+      div.style.left = `${leftPegX + (index + 0.5) * dx - multiplierWidth / 2}px`;
       div.style.fontSize = rows > 12 ? "0.5rem" : "0.7rem";
 
       const p = weights[index] || 0;
