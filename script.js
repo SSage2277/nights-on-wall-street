@@ -4380,7 +4380,11 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false } = {}) {
   } catch (error) {
     venmoClaimState.adminClaims = [];
     venmoAdminUnlocked = false;
-    renderVenmoAdminClaims();
+    if (venmoAdminClaimsEl) {
+      venmoAdminClaimsEl.innerHTML = "";
+      venmoAdminClaimsEl.textContent = "Unlock failed. Check admin code and try again.";
+      venmoAdminClaimsEl.style.cursor = "pointer";
+    }
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
     return false;
   }
@@ -4566,11 +4570,15 @@ function initVenmoClaimWorkflow() {
   }, VENMO_CLAIM_POLL_MS);
 }
 
-async function promptVenmoAdminUnlock() {
-  const prefill = String(venmoAdminCodeInputEl?.value || venmoAdminAuthCode || VENMO_ADMIN_DEFAULT_CODE);
-  const entered = window.prompt("Enter admin code", prefill);
-  if (entered == null) return false;
-  const code = String(entered).trim();
+async function promptVenmoAdminUnlock(forcePrompt = false) {
+  const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
+  let code = typedCode;
+  if (!code || forcePrompt) {
+    const prefill = String(typedCode || venmoAdminAuthCode || VENMO_ADMIN_DEFAULT_CODE);
+    const entered = window.prompt("Enter admin code", prefill);
+    if (entered == null) return false;
+    code = String(entered).trim();
+  }
   if (!code) return false;
   venmoAdminAuthCode = code;
   if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = code;

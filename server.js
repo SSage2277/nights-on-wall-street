@@ -87,7 +87,9 @@ function getAdminCode(req) {
 }
 
 function requireAdmin(req, res) {
-  if (getAdminCode(req) !== ADMIN_CODE) {
+  const entered = getAdminCode(req).trim().toLowerCase();
+  const expected = ADMIN_CODE.trim().toLowerCase();
+  if (!entered || entered !== expected) {
     res.status(401).json({ ok: false, error: "Invalid admin code." });
     return false;
   }
