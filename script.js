@@ -4092,6 +4092,7 @@ const VENMO_ADMIN_DEFAULT_CODE = "Sage1557";
 const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
 const VENMO_LOCAL_CREDITED_STORAGE_KEY = "venmo_claim_credited_local_v1";
 const VENMO_CLAIM_POLL_MS = 10000;
+const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
   small: { funds: 1000, usd: 2, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=2&note=S%241000" },
   medium: { funds: 5000, usd: 8, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=8&note=S%245000" },
@@ -4321,12 +4322,26 @@ async function venmoApiRequest(path, options = {}) {
       ...(config.headers || {})
     };
   }
-  const response = await fetch(path, config);
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.error || `Request failed (${response.status})`);
+  const urlsToTry = [path];
+  if (typeof path === "string" && !/^https?:\/\//i.test(path)) {
+    urlsToTry.push(`${VENMO_API_FALLBACK_BASE}${path}`);
   }
-  return payload;
+  let lastError = new Error("Request failed");
+
+  for (const url of urlsToTry) {
+    try {
+      const response = await fetch(url, config);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok === false) {
+        lastError = new Error(payload?.error || `Request failed (${response.status})`);
+        continue;
+      }
+      return payload;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError;
 }
 
 function mapServerClaim(claim) {
@@ -4384,6 +4399,12 @@ function renderVenmoClaimStatus() {
   venmoClaimStatusEl.textContent = `Claims: ${total} • Pending: ${pending} • Approved: ${approved} • Rejected: ${rejected}`;
 }
 
+function setVenmoClaimInlineStatus(message, isError = false) {
+  if (!venmoClaimStatusEl) return;
+  venmoClaimStatusEl.textContent = String(message || "");
+  venmoClaimStatusEl.style.color = isError ? "#ff8ea0" : "#b9d1df";
+}
+
 function renderVenmoAdminClaims() {
   if (!venmoAdminClaimsEl) return;
   venmoAdminClaimsEl.innerHTML = "";
@@ -4431,24 +4452,32 @@ async function submitVenmoClaim() {
   const packId = String(venmoClaimPackEl?.value || "");
   const pack = REAL_MONEY_FUND_PACKS[packId];
   if (!pack) {
-    setBankMessage("Select a valid funds pack.");
+    const message = "Select a valid funds pack.";
+    setBankMessage(message);
+    setVenmoClaimInlineStatus(message, true);
     return;
   }
 
   const txnId = String(venmoClaimTxnInputEl?.value || "").trim();
   const txnNorm = normalizeVenmoTxnId(txnId);
   if (txnNorm.length < 4) {
-    setBankMessage("Enter a valid Venmo transaction ID.");
+    const message = "Enter a valid Venmo transaction ID.";
+    setBankMessage(message);
+    setVenmoClaimInlineStatus(message, true);
     return;
   }
 
   const duplicate = venmoClaimState.claims.some((claim) => claim.txnNorm === txnNorm && claim.status !== "rejected");
   if (duplicate) {
-    setBankMessage("That Venmo transaction ID already has a claim.");
+    const message = "That Venmo transaction ID already has a claim.";
+    setBankMessage(message);
+    setVenmoClaimInlineStatus(message, true);
     return;
   }
 
   try {
+    if (venmoClaimSubmitBtn) venmoClaimSubmitBtn.disabled = true;
+    setVenmoClaimInlineStatus("Submitting claim...");
     await venmoApiRequest("/api/claims", {
       method: "POST",
       body: {
@@ -4460,9 +4489,15 @@ async function submitVenmoClaim() {
     if (venmoClaimTxnInputEl) venmoClaimTxnInputEl.value = "";
     await refreshVenmoClaimsFromServer({ silent: true });
     if (venmoAdminUnlocked) await refreshVenmoAdminClaimsFromServer({ silent: true });
-    setBankMessage("Claim submitted. Waiting for admin approval.");
+    const message = "Claim submitted. Waiting for admin approval.";
+    setBankMessage(message);
+    setVenmoClaimInlineStatus(message);
   } catch (error) {
-    setBankMessage(`Claim submit failed: ${error.message}`);
+    const message = `Claim submit failed: ${error.message}`;
+    setBankMessage(message);
+    setVenmoClaimInlineStatus(message, true);
+  } finally {
+    if (venmoClaimSubmitBtn) venmoClaimSubmitBtn.disabled = false;
   }
 }
 
