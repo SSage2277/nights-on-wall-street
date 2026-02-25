@@ -931,6 +931,17 @@ body {
   color: #ff8a9f;
 }
 
+.first-launch-warning {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid #7c6135;
+  background: rgba(87, 61, 14, 0.2);
+  color: #f4ddb2;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
 .hidden-admin-trigger {
   position: fixed;
   top: 6px;
@@ -1022,6 +1033,9 @@ body {
 
 .hidden-admin-actions-row {
   margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .hidden-admin-actions-row button {
@@ -1031,6 +1045,12 @@ body {
   border-radius: 8px;
   padding: 7px 10px;
   cursor: pointer;
+}
+
+.hidden-admin-actions-row .hidden-admin-danger-btn {
+  border-color: #7f2f3c;
+  background: #3c1119;
+  color: #ffd8df;
 }
 
 .hidden-admin-status {
@@ -1079,6 +1099,17 @@ body {
 
 .hidden-admin-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.hidden-admin-table button {
+  border: 1px solid #3f617a;
+  background: #112536;
+  color: #d7e8f8;
+  border-radius: 6px;
+  padding: 4px 7px;
+  margin-right: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
 }
 
 .hidden-admin-empty {
