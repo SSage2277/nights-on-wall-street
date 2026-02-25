@@ -556,6 +556,7 @@
     </div>
     <div id="firstLaunchUsernameError" class="first-launch-error" aria-live="polite"></div>
     <button id="firstLaunchUsernameConfirmBtn" type="button">Create Account</button>
+    <button id="firstLaunchResetAccountBtn" class="first-launch-secondary-btn" type="button">Use Different Account On This Device</button>
   </div>
 </div>
 
@@ -571,7 +572,14 @@
       <input id="venmoAdminCodeInput" type="password" placeholder="Admin code" autocomplete="off">
       <button id="venmoAdminUnlockBtn" type="button">Unlock</button>
     </div>
+    <div class="hidden-admin-actions-row">
+      <button id="venmoAdminTrustDeviceBtn" type="button">Trust This Device</button>
+    </div>
     <div id="hiddenAdminStatus" class="hidden-admin-status"></div>
+    <section class="hidden-admin-section">
+      <h4>Overview</h4>
+      <div id="hiddenAdminStats" class="hidden-admin-table-wrap"></div>
+    </section>
     <section class="hidden-admin-section">
       <h4>Pending Claims</h4>
       <div id="venmoAdminClaims" class="hidden-admin-table-wrap"></div>
@@ -579,6 +587,10 @@
     <section class="hidden-admin-section">
       <h4>Users</h4>
       <div id="hiddenAdminUsers" class="hidden-admin-table-wrap"></div>
+    </section>
+    <section class="hidden-admin-section">
+      <h4>Trusted Devices</h4>
+      <div id="hiddenAdminDevices" class="hidden-admin-table-wrap"></div>
     </section>
   </div>
 </div>

@@ -530,6 +530,53 @@ async function submitFirstLaunchUsername() {
   }
 }
 
+async function clearLocalAccountOnDevice() {
+  setFirstLaunchAuthBusy(true);
+  try {
+    try {
+      await venmoApiRequest("/api/auth/logout", { method: "POST" });
+    } catch {}
+    try {
+      USERNAME_STORAGE_FALLBACK_KEYS.forEach((key) => localStorage.removeItem(key));
+      USERNAME_SETUP_DONE_FALLBACK_KEYS.forEach((key) => localStorage.removeItem(key));
+      localStorage.removeItem(AUTH_EMAIL_STORAGE_KEY);
+      localStorage.removeItem(VENMO_PLAYER_ID_STORAGE_KEY);
+      localStorage.removeItem(VENMO_LOCAL_CREDITED_STORAGE_KEY);
+    } catch {}
+    playerUsername = "";
+    venmoClaimPlayerId = "";
+    venmoLocallyCreditedClaimIds.clear();
+    venmoClaimState.claims = [];
+    venmoClaimState.adminClaims = [];
+    venmoClaimState.adminUsers = [];
+    venmoClaimState.adminStats = null;
+    venmoClaimState.adminDevices = [];
+    venmoAdminUnlocked = false;
+    venmoAdminAuthCode = "";
+    setFirstLaunchAuthMode("register");
+    const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
+    const registerEmailInput = document.getElementById("firstLaunchEmailInput");
+    const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
+    const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
+    const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
+    if (registerUsernameInput) registerUsernameInput.value = "";
+    if (registerEmailInput) registerEmailInput.value = "";
+    if (registerPasswordInput) registerPasswordInput.value = "";
+    if (loginEmailInput) loginEmailInput.value = "";
+    if (loginPasswordInput) loginPasswordInput.value = "";
+    renderVenmoClaimStatus();
+    renderVenmoAdminClaims();
+    renderHiddenAdminStats();
+    renderHiddenAdminUsers();
+    renderHiddenAdminDevices();
+    setHiddenAdminStatus("");
+    setFirstLaunchUsernameError("Cleared. Create a new account or login with a different one.");
+    if (registerUsernameInput) registerUsernameInput.focus();
+  } finally {
+    setFirstLaunchAuthBusy(false);
+  }
+}
+
 async function initFirstLaunchUsernameSetup() {
   const overlay = document.getElementById("firstLaunchOverlay");
   const input = document.getElementById("firstLaunchUsernameInput");
@@ -538,15 +585,19 @@ async function initFirstLaunchUsernameSetup() {
   const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
   const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
   const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
+  const resetBtn = document.getElementById("firstLaunchResetAccountBtn");
   const registerModeBtn = document.getElementById("firstLaunchModeRegisterBtn");
   const loginModeBtn = document.getElementById("firstLaunchModeLoginBtn");
-  if (!overlay || !input || !confirmBtn || !registerModeBtn || !loginModeBtn) return;
+  if (!overlay || !input || !confirmBtn || !registerModeBtn || !loginModeBtn || !resetBtn) return;
 
   registerModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("register"));
   loginModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("login"));
 
   confirmBtn.addEventListener("click", () => {
     submitFirstLaunchUsername();
+  });
+  resetBtn.addEventListener("click", () => {
+    clearLocalAccountOnDevice();
   });
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;

@@ -918,6 +918,12 @@ body {
   cursor: pointer;
 }
 
+.first-launch-secondary-btn {
+  border-color: #35546c !important;
+  background: #0c1e2c !important;
+  color: #cfe6f7 !important;
+}
+
 .first-launch-error {
   min-height: 18px;
   margin-top: 7px;
@@ -1014,6 +1020,19 @@ body {
   cursor: pointer;
 }
 
+.hidden-admin-actions-row {
+  margin-top: 8px;
+}
+
+.hidden-admin-actions-row button {
+  border: 1px solid #3f617a;
+  background: #0f2637;
+  color: #dceeff;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
 .hidden-admin-status {
   min-height: 18px;
   margin-top: 7px;
@@ -1035,7 +1054,7 @@ body {
   border: 1px solid #284159;
   border-radius: 10px;
   background: rgba(4, 11, 18, 0.76);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .hidden-admin-table {
@@ -1066,6 +1085,39 @@ body {
   padding: 10px;
   color: #8faeca;
   font-size: 0.82rem;
+}
+
+.hidden-admin-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.hidden-admin-stat-card {
+  border: 1px solid #25435a;
+  border-radius: 10px;
+  background: rgba(8, 24, 38, 0.72);
+  padding: 8px 10px;
+}
+
+.hidden-admin-stat-label {
+  color: #9ab8d1;
+  font-size: 0.74rem;
+  margin-bottom: 5px;
+}
+
+.hidden-admin-stat-value {
+  color: #e3f3ff;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.hidden-admin-footnote {
+  padding: 8px 10px;
+  font-size: 0.74rem;
+  color: #8ea9bf;
+  border-top: 1px solid #22364a;
 }
 
 h1 {
