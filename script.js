@@ -2403,12 +2403,44 @@ function clearTotalProgressStorage() {
   } catch (error) {}
 }
 
-function runTotalProgressReset() {
+function applyProgressResetState() {
+  cash = roundCurrency(BASE_NET_WORTH);
+  shares = 0;
+  avgCost = 0;
+  savingsBalance = 0;
+  autoSavingsPercent = 0;
+
+  phoneState.cash = cash;
+  phoneState.shares = shares;
+  phoneState.avgCost = avgCost;
+  phoneState.savingsBalance = savingsBalance;
+  phoneState.autoSavingsPercent = autoSavingsPercent;
+}
+
+async function syncResetBalanceToServer() {
+  if (userProfileSyncTimer) {
+    clearTimeout(userProfileSyncTimer);
+    userProfileSyncTimer = null;
+  }
+  lastUserProfileSyncAt = 0;
+  persistCashStateNow();
+  if (!playerUsername || !venmoClaimPlayerId || IS_PHONE_EMBED_MODE) return false;
+  try {
+    return await syncCurrentUserProfileToServer({ force: true });
+  } catch {
+    return false;
+  }
+}
+
+async function runTotalProgressReset() {
   const confirmed = window.confirm(
     "Reset everything?\n\nThis will erase your cash, achievements, missions, bank history, and settings."
   );
   if (!confirmed) return;
 
+  applyProgressResetState();
+  updateUI();
+  await syncResetBalanceToServer();
   clearTotalProgressStorage();
 
   window.location.reload();
@@ -5830,6 +5862,9 @@ async function runFullAdminReset() {
     const claimsDeleted = Number(payload?.reset?.claimsDeleted) || 0;
     setHiddenAdminStatus(`Full reset complete. Users removed: ${usersDeleted}, claims removed: ${claimsDeleted}. Reloading...`);
     setBankMessage("Full game reset completed. Reloading...");
+    applyProgressResetState();
+    updateUI();
+    await syncResetBalanceToServer();
     clearTotalProgressStorage();
     setTimeout(() => {
       window.location.reload();
