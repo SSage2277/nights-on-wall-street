@@ -831,6 +831,59 @@ async function ensureSchema() {
     )
   `);
   await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS source TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS pack_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS txn_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS txn_norm TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS status TEXT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS submitted_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS reviewed_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE claims
+    ADD COLUMN IF NOT EXISTS credited_at BIGINT
+  `);
+  await db.query(`
+    UPDATE claims
+    SET source = COALESCE(NULLIF(source, ''), 'venmo'),
+        status = COALESCE(NULLIF(status, ''), 'pending'),
+        submitted_at = COALESCE(submitted_at, 0),
+        reviewed_at = COALESCE(reviewed_at, 0),
+        credited_at = COALESCE(credited_at, 0)
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS claims_txn_norm_unique_idx
+    ON claims (txn_norm)
+    WHERE txn_norm IS NOT NULL AND txn_norm <> ''
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS live_wins (
       id BIGSERIAL PRIMARY KEY,
       player_id TEXT NOT NULL,
@@ -841,6 +894,41 @@ async function ensureSchema() {
       multiplier NUMERIC(10,2),
       submitted_at BIGINT NOT NULL DEFAULT 0
     )
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS vip BOOLEAN
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS game TEXT
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS amount NUMERIC(14,2)
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS multiplier NUMERIC(10,2)
+  `);
+  await db.query(`
+    ALTER TABLE live_wins
+    ADD COLUMN IF NOT EXISTS submitted_at BIGINT
+  `);
+  await db.query(`
+    UPDATE live_wins
+    SET vip = COALESCE(vip, FALSE),
+        game = COALESCE(NULLIF(game, ''), 'Casino'),
+        amount = COALESCE(amount, 0),
+        submitted_at = COALESCE(submitted_at, 0)
   `);
 }
 
