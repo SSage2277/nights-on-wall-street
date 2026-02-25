@@ -1546,13 +1546,6 @@ app.post("/api/admin/users/:playerId/ban", async (req, res) => {
       res.status(409).json({ ok: false, error: "User is already banned." });
       return;
     }
-    await db.query(
-      `
-        DELETE FROM user_sessions
-        WHERE sess::text LIKE $1
-      `,
-      [`%\"playerId\":\"${playerId}\"%`]
-    );
     res.json({ ok: true, playerId, bannedAt: now, bannedReason: reason });
   } catch (error) {
     console.error("Failed to ban user", error);

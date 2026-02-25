@@ -89,6 +89,10 @@ let usernameGateActive = false;
 let firstLaunchAuthMode = "register";
 let firstLaunchAuthBusy = false;
 let tradingLogoutBusy = false;
+let authSessionLikelyAuthenticated = false;
+let authSessionWatchdogTimer = null;
+let authSessionWatchdogBusy = false;
+let bannedOverlayActive = false;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -375,6 +379,74 @@ function setFirstLaunchAuthMode(mode) {
   setFirstLaunchUsernameError("");
 }
 
+function isBannedAccountErrorMessage(value) {
+  const message = String(value || "").toLowerCase();
+  return message.includes("account is banned") || message.includes("you are banned");
+}
+
+function showBannedOverlay(message = "You are banned.") {
+  const overlay = document.getElementById("bannedOverlay");
+  const messageEl = document.getElementById("bannedOverlayMessage");
+  if (!overlay) return;
+  bannedOverlayActive = true;
+  authSessionLikelyAuthenticated = false;
+  stopAuthSessionWatchdog();
+  autoPlay = false;
+  if (typeof hideFirstLaunchUsernameOverlay === "function") hideFirstLaunchUsernameOverlay();
+  if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
+  const loanPanel = document.getElementById("loan-panel");
+  if (loanPanel) loanPanel.classList.remove("open");
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  if (messageEl) messageEl.textContent = String(message || "You are banned.");
+}
+
+function hideBannedOverlay() {
+  const overlay = document.getElementById("bannedOverlay");
+  if (!overlay) return;
+  bannedOverlayActive = false;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+async function pollAuthSessionWatchdog() {
+  if (authSessionWatchdogBusy || !authSessionLikelyAuthenticated || bannedOverlayActive) return;
+  authSessionWatchdogBusy = true;
+  try {
+    const response = await fetch("/api/auth/session", { credentials: "include" });
+    const payload = await response.json().catch(() => ({}));
+    const errorMessage = String(payload?.error || "");
+    if (response.status === 403 && isBannedAccountErrorMessage(errorMessage)) {
+      showBannedOverlay("You are banned.");
+      return;
+    }
+    if (response.ok && payload?.authenticated === true) {
+      authSessionLikelyAuthenticated = true;
+      return;
+    }
+    if (response.ok && payload?.authenticated === false) {
+      authSessionLikelyAuthenticated = false;
+    }
+  } catch {}
+  finally {
+    authSessionWatchdogBusy = false;
+  }
+}
+
+function startAuthSessionWatchdog() {
+  if (IS_PHONE_EMBED_MODE || authSessionWatchdogTimer) return;
+  authSessionWatchdogTimer = window.setInterval(() => {
+    void pollAuthSessionWatchdog();
+  }, 1800);
+  void pollAuthSessionWatchdog();
+}
+
+function stopAuthSessionWatchdog() {
+  if (!authSessionWatchdogTimer) return;
+  clearInterval(authSessionWatchdogTimer);
+  authSessionWatchdogTimer = null;
+}
+
 function getPersistedBalanceForUser({ username = "", playerId = "" } = {}) {
   const savedCash = Number(phoneState?.cash);
   if (!Number.isFinite(savedCash) || savedCash < 0) return null;
@@ -414,6 +486,9 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
   if (Number.isFinite(resolvedBalance) && resolvedBalance >= 0) {
     cash = roundCurrency(resolvedBalance);
   }
+  authSessionLikelyAuthenticated = true;
+  hideBannedOverlay();
+  startAuthSessionWatchdog();
   hideFirstLaunchUsernameOverlay();
   setFirstLaunchUsernameError("");
   if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
@@ -427,9 +502,15 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
 async function hydrateAuthSessionIfPresent() {
   try {
     const payload = await venmoApiRequest("/api/auth/session");
-    if (!payload?.authenticated || !payload?.user) return false;
+    if (!payload?.authenticated || !payload?.user) {
+      authSessionLikelyAuthenticated = false;
+      stopAuthSessionWatchdog();
+      return false;
+    }
     return applyAuthenticatedProfile(payload.user, { useServerBalance: true, preferLocalBalance: true });
   } catch {
+    authSessionLikelyAuthenticated = false;
+    stopAuthSessionWatchdog();
     return false;
   }
 }
@@ -639,6 +720,9 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminDevices = [];
     venmoAdminUnlocked = false;
     venmoAdminAuthCode = "";
+    authSessionLikelyAuthenticated = false;
+    stopAuthSessionWatchdog();
+    hideBannedOverlay();
     setFirstLaunchAuthMode("register");
     const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
     const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
@@ -899,6 +983,9 @@ async function logoutFromTradingBadge() {
     } catch {}
     venmoAdminUnlocked = false;
     venmoAdminAuthCode = "";
+    authSessionLikelyAuthenticated = false;
+    stopAuthSessionWatchdog();
+    hideBannedOverlay();
     if (hiddenAdminPanelOpen) closeHiddenAdminPanel();
     setFirstLaunchAuthMode("login");
     showFirstLaunchUsernameOverlay();
@@ -5238,6 +5325,9 @@ async function venmoApiRequest(path, options = {}) {
         const requestError = new Error(payload?.error || `Request failed (${response.status})`);
         requestError.details = payload;
         requestError.status = response.status;
+        if (isBannedAccountErrorMessage(requestError.message)) {
+          showBannedOverlay("You are banned.");
+        }
         lastError = requestError;
         continue;
       }
