@@ -375,7 +375,22 @@ function setFirstLaunchAuthMode(mode) {
   setFirstLaunchUsernameError("");
 }
 
-function applyAuthenticatedProfile(user, { useServerBalance = true } = {}) {
+function getPersistedBalanceForUser({ username = "", playerId = "" } = {}) {
+  const savedCash = Number(phoneState?.cash);
+  if (!Number.isFinite(savedCash) || savedCash < 0) return null;
+
+  const expectedPlayerId = String(playerId || "").trim();
+  const savedPlayerId = String(phoneState?.playerId || "").trim();
+  if (expectedPlayerId && savedPlayerId && expectedPlayerId !== savedPlayerId) return null;
+
+  const expectedUsername = normalizeUsername(username);
+  const savedUsername = normalizeUsername(phoneState?.username || "");
+  if (expectedUsername && savedUsername && expectedUsername !== savedUsername) return null;
+
+  return roundCurrency(savedCash);
+}
+
+function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalBalance = false } = {}) {
   const username = normalizeUsername(user?.username);
   const playerId = String(user?.playerId || "").trim();
   const serverBalance = Number(user?.balance);
@@ -386,8 +401,18 @@ function applyAuthenticatedProfile(user, { useServerBalance = true } = {}) {
   try {
     localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
   } catch {}
+  let resolvedBalance = null;
   if (useServerBalance && Number.isFinite(serverBalance) && serverBalance >= 0) {
-    cash = roundCurrency(serverBalance);
+    resolvedBalance = roundCurrency(serverBalance);
+  }
+  if (preferLocalBalance) {
+    const localBalance = getPersistedBalanceForUser({ username, playerId });
+    if (Number.isFinite(localBalance) && localBalance >= 0) {
+      resolvedBalance = roundCurrency(localBalance);
+    }
+  }
+  if (Number.isFinite(resolvedBalance) && resolvedBalance >= 0) {
+    cash = roundCurrency(resolvedBalance);
   }
   hideFirstLaunchUsernameOverlay();
   setFirstLaunchUsernameError("");
@@ -403,7 +428,7 @@ async function hydrateAuthSessionIfPresent() {
   try {
     const payload = await venmoApiRequest("/api/auth/session");
     if (!payload?.authenticated || !payload?.user) return false;
-    return applyAuthenticatedProfile(payload.user, { useServerBalance: true });
+    return applyAuthenticatedProfile(payload.user, { useServerBalance: true, preferLocalBalance: true });
   } catch {
     return false;
   }
@@ -1681,6 +1706,7 @@ const phoneState = {
   shares: Math.max(0, Math.floor(Number(shares) || 0)),
   avgCost: roundCurrency(avgCost),
   savingsBalance: roundCurrency(savingsBalance),
+  playerId: "",
   username: playerUsername || "",
   unread: 0,
   notifications: [],
@@ -1834,6 +1860,7 @@ let phoneMiniCashReady = !IS_PHONE_EMBED_MODE;
 let phoneMiniCashRequestTimer = null;
 let cashPersistTimer = null;
 let lastPersistedProfileSig = "";
+let persistenceFlushHandlersBound = false;
 
 function getPersistProfileSnapshot() {
   return {
@@ -1842,6 +1869,7 @@ function getPersistProfileSnapshot() {
     avgCost: roundCurrency(avgCost),
     savingsBalance: roundCurrency(savingsBalance),
     autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent)),
+    playerId: String(venmoClaimPlayerId || "").trim(),
     username: normalizeUsername(playerUsername) || ""
   };
 }
@@ -1854,6 +1882,7 @@ function getPersistProfileSignature(profile) {
     safe.avgCost,
     safe.savingsBalance,
     safe.autoSavingsPercent,
+    safe.playerId || "",
     safe.username
   ].join("|");
 }
@@ -2172,6 +2201,7 @@ function savePhoneState() {
     phoneState.avgCost = profile.avgCost;
     phoneState.savingsBalance = profile.savingsBalance;
     phoneState.autoSavingsPercent = profile.autoSavingsPercent;
+    phoneState.playerId = profile.playerId;
     phoneState.username = profile.username;
     phoneState.missionXp = Math.max(0, Math.floor(Number(phoneState.missionXp) || 0));
     phoneState.missionTokens = Math.max(0, Math.floor(Number(phoneState.missionTokens) || 0));
@@ -2201,10 +2231,64 @@ function persistCashStateSoon() {
     phoneState.avgCost = snapshot.avgCost;
     phoneState.savingsBalance = snapshot.savingsBalance;
     phoneState.autoSavingsPercent = snapshot.autoSavingsPercent;
+    phoneState.playerId = snapshot.playerId;
     phoneState.username = snapshot.username;
     savePhoneState();
     lastPersistedProfileSig = snapshotSig;
   }, 120);
+}
+
+function persistCashStateNow() {
+  if (IS_PHONE_EMBED_MODE) return;
+  if (cashPersistTimer) {
+    clearTimeout(cashPersistTimer);
+    cashPersistTimer = null;
+  }
+  savePhoneState();
+  lastPersistedProfileSig = getPersistProfileSignature();
+}
+
+function syncCurrentUserProfileOnExit() {
+  if (!playerUsername || !venmoClaimPlayerId || IS_PHONE_EMBED_MODE) return;
+  const payload = JSON.stringify({
+    playerId: venmoClaimPlayerId,
+    username: playerUsername,
+    balance: roundCurrency(cash)
+  });
+  let sentWithBeacon = false;
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      const body = new Blob([payload], { type: "application/json" });
+      sentWithBeacon = navigator.sendBeacon("/api/users/sync", body);
+    }
+  } catch (error) {}
+  if (sentWithBeacon) return;
+  try {
+    fetch("/api/users/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      keepalive: true,
+      body: payload
+    }).catch(() => {});
+  } catch (error) {}
+}
+
+function flushPersistenceBeforeExit() {
+  persistCashStateNow();
+  syncCurrentUserProfileOnExit();
+}
+
+function bindPersistenceFlushHandlers() {
+  if (IS_PHONE_EMBED_MODE || persistenceFlushHandlersBound) return;
+  persistenceFlushHandlersBound = true;
+  window.addEventListener("pagehide", flushPersistenceBeforeExit);
+  window.addEventListener("beforeunload", flushPersistenceBeforeExit);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushPersistenceBeforeExit();
+    }
+  });
 }
 
 function loadPhoneState({ force = false } = {}) {
@@ -2254,6 +2338,14 @@ function loadPhoneState({ force = false } = {}) {
     if (Number.isFinite(savedAutoSavingsPercent)) {
       phoneState.autoSavingsPercent = roundCurrency(clampPercent(savedAutoSavingsPercent));
       autoSavingsPercent = phoneState.autoSavingsPercent;
+    }
+    const savedPlayerId = String(parsed.playerId || "").trim();
+    if (savedPlayerId) {
+      phoneState.playerId = savedPlayerId;
+      venmoClaimPlayerId = savedPlayerId;
+      try {
+        localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, savedPlayerId);
+      } catch (error) {}
     }
     const savedUsername = normalizeUsername(parsed.username);
     if (savedUsername) {
@@ -9629,6 +9721,7 @@ loadPhoneState();
 bankMissionLastCashSnapshot = cash;
 refreshPokerSessionMeta();
 initTradingUsernameBadge();
+bindPersistenceFlushHandlers();
 initFirstLaunchUsernameSetup();
 initHiddenAdminTrigger();
 initCasinoSecretUnlockButton();
