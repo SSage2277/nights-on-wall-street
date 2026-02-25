@@ -2388,12 +2388,7 @@ function loadPhoneState({ force = false } = {}) {
   lastPersistedProfileSig = getPersistProfileSignature();
 }
 
-function runTotalProgressReset() {
-  const confirmed = window.confirm(
-    "Reset everything?\n\nThis will erase your cash, achievements, missions, bank history, and settings."
-  );
-  if (!confirmed) return;
-
+function clearTotalProgressStorage() {
   try {
     TOTAL_RESET_STORAGE_KEYS.forEach((key) => {
       localStorage.removeItem(key);
@@ -2406,6 +2401,15 @@ function runTotalProgressReset() {
       }
     }
   } catch (error) {}
+}
+
+function runTotalProgressReset() {
+  const confirmed = window.confirm(
+    "Reset everything?\n\nThis will erase your cash, achievements, missions, bank history, and settings."
+  );
+  if (!confirmed) return;
+
+  clearTotalProgressStorage();
 
   window.location.reload();
 }
@@ -5824,8 +5828,12 @@ async function runFullAdminReset() {
     await refreshHiddenAdminDevicesFromServer({ silent: true });
     const usersDeleted = Number(payload?.reset?.usersDeleted) || 0;
     const claimsDeleted = Number(payload?.reset?.claimsDeleted) || 0;
-    setHiddenAdminStatus(`Full reset complete. Users removed: ${usersDeleted}, claims removed: ${claimsDeleted}.`);
-    setBankMessage("Full game reset completed.");
+    setHiddenAdminStatus(`Full reset complete. Users removed: ${usersDeleted}, claims removed: ${claimsDeleted}. Reloading...`);
+    setBankMessage("Full game reset completed. Reloading...");
+    clearTotalProgressStorage();
+    setTimeout(() => {
+      window.location.reload();
+    }, 150);
     return true;
   } catch (error) {
     setHiddenAdminStatus(`Could not complete full reset: ${error.message}`, true);
