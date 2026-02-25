@@ -263,7 +263,20 @@ function normalizeUserForClient(row) {
 }
 
 function getAdminCode(req) {
-  return String(req.query?.adminCode || req.body?.adminCode || "");
+  return String(
+    req.query?.adminCode ||
+      req.body?.adminCode ||
+      req.headers?.["x-admin-code"] ||
+      req.headers?.["x-admincode"] ||
+      ""
+  );
+}
+
+function normalizeAdminCode(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .toLowerCase();
 }
 
 async function issueEmailVerificationForUser({
@@ -472,8 +485,8 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
       }
     }
 
-    const entered = getAdminCode(req).trim().toLowerCase();
-    const expected = ADMIN_CODE.trim().toLowerCase();
+    const entered = normalizeAdminCode(getAdminCode(req));
+    const expected = normalizeAdminCode(ADMIN_CODE);
     if (!entered || entered !== expected) {
       res.status(401).json({ ok: false, error: "Invalid admin code." });
       return null;
@@ -1365,8 +1378,8 @@ app.post("/api/admin/claims/:id/decision", async (req, res) => {
 
 app.post("/api/admin/device/trust", async (req, res) => {
   try {
-    const adminCode = getAdminCode(req).trim().toLowerCase();
-    const expected = ADMIN_CODE.trim().toLowerCase();
+    const adminCode = normalizeAdminCode(getAdminCode(req));
+    const expected = normalizeAdminCode(ADMIN_CODE);
     if (!adminCode || adminCode !== expected) {
       res.status(401).json({ ok: false, error: "Invalid admin code." });
       return;
