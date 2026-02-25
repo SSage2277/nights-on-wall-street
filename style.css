@@ -7418,7 +7418,12 @@ body.phone-embedded-mini-mode #nav,
 body.phone-embedded-mini-mode #loan-panel,
 body.phone-embedded-mini-mode #trading-section,
 body.phone-embedded-mini-mode #phoneBtn,
-body.phone-embedded-mini-mode #phoneOverlay {
+body.phone-embedded-mini-mode #phoneOverlay,
+body.phone-embedded-mini-mode #siteLegalLinks {
+  display: none !important;
+}
+
+#phoneOverlay:not(.hidden) ~ #siteLegalLinks {
   display: none !important;
 }
 
