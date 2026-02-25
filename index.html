@@ -539,11 +539,23 @@
 
 <div id="firstLaunchOverlay" class="first-launch-overlay hidden" aria-hidden="true">
   <div class="first-launch-card" role="dialog" aria-modal="true" aria-labelledby="firstLaunchTitle">
-    <h2 id="firstLaunchTitle">Choose Username</h2>
-    <p>Set your username to continue.</p>
-    <input id="firstLaunchUsernameInput" type="text" maxlength="16" placeholder="3–16 characters" autocomplete="off" spellcheck="false">
+    <h2 id="firstLaunchTitle">Account Setup</h2>
+    <p id="firstLaunchSubtitle">Create an account to continue.</p>
+    <div class="first-launch-mode-row">
+      <button id="firstLaunchModeRegisterBtn" class="active" type="button">Create Account</button>
+      <button id="firstLaunchModeLoginBtn" type="button">Login</button>
+    </div>
+    <div id="firstLaunchRegisterFields" class="first-launch-fields">
+      <input id="firstLaunchUsernameInput" type="text" maxlength="16" placeholder="Username (3–16 characters)" autocomplete="off" spellcheck="false">
+      <input id="firstLaunchEmailInput" type="email" maxlength="120" placeholder="Email address" autocomplete="email" spellcheck="false">
+      <input id="firstLaunchPasswordInput" type="password" maxlength="72" placeholder="Password (8+ characters)" autocomplete="new-password">
+    </div>
+    <div id="firstLaunchLoginFields" class="first-launch-fields hidden">
+      <input id="firstLaunchLoginEmailInput" type="email" maxlength="120" placeholder="Email address" autocomplete="email" spellcheck="false">
+      <input id="firstLaunchLoginPasswordInput" type="password" maxlength="72" placeholder="Password" autocomplete="current-password">
+    </div>
     <div id="firstLaunchUsernameError" class="first-launch-error" aria-live="polite"></div>
-    <button id="firstLaunchUsernameConfirmBtn" type="button">Continue</button>
+    <button id="firstLaunchUsernameConfirmBtn" type="button">Create Account</button>
   </div>
 </div>
 

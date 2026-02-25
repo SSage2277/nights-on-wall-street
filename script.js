@@ -71,6 +71,7 @@ const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
   "nows_username_setup_done",
   "username_setup_done"
 ]);
+const AUTH_EMAIL_STORAGE_KEY = "nows_auth_email_v1";
 const LOANS_ENABLED = false;
 const BASE_NET_WORTH = 1000;
 const CASINO_UNLOCK_TRADING_TOTAL = 1500;
@@ -83,6 +84,8 @@ let casinoLiveFeedTimer = null;
 let casinoLiveFeedRequestInFlight = false;
 let playerUsername = "";
 let usernameGateActive = false;
+let firstLaunchAuthMode = "register";
+let firstLaunchAuthBusy = false;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -120,6 +123,13 @@ function normalizeUsername(value) {
   return normalized;
 }
 
+function normalizeAuthEmail(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return "";
+  return normalized;
+}
+
 function persistUsernameSetupDone() {
   try {
     USERNAME_SETUP_DONE_FALLBACK_KEYS.forEach((key) => {
@@ -154,6 +164,23 @@ function saveUsername(value) {
   } catch {}
   playerUsername = normalized;
   if (typeof savePhoneState === "function") savePhoneState();
+  return true;
+}
+
+function loadSavedAuthEmail() {
+  try {
+    return normalizeAuthEmail(localStorage.getItem(AUTH_EMAIL_STORAGE_KEY));
+  } catch {
+    return "";
+  }
+}
+
+function saveAuthEmail(value) {
+  const normalized = normalizeAuthEmail(value);
+  if (!normalized) return false;
+  try {
+    localStorage.setItem(AUTH_EMAIL_STORAGE_KEY, normalized);
+  } catch {}
   return true;
 }
 
@@ -236,16 +263,99 @@ function setFirstLaunchUsernameError(message = "") {
   errorEl.textContent = String(message || "");
 }
 
+function setFirstLaunchAuthBusy(isBusy) {
+  firstLaunchAuthBusy = Boolean(isBusy);
+  const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
+  const registerBtn = document.getElementById("firstLaunchModeRegisterBtn");
+  const loginBtn = document.getElementById("firstLaunchModeLoginBtn");
+  if (confirmBtn) {
+    const label = firstLaunchAuthMode === "login" ? "Login" : "Create Account";
+    confirmBtn.disabled = firstLaunchAuthBusy;
+    confirmBtn.textContent = firstLaunchAuthBusy ? "Please wait..." : label;
+  }
+  if (registerBtn) registerBtn.disabled = firstLaunchAuthBusy;
+  if (loginBtn) loginBtn.disabled = firstLaunchAuthBusy;
+}
+
+function setFirstLaunchAuthMode(mode) {
+  const normalizedMode = String(mode || "").toLowerCase() === "login" ? "login" : "register";
+  firstLaunchAuthMode = normalizedMode;
+  const registerBtn = document.getElementById("firstLaunchModeRegisterBtn");
+  const loginBtn = document.getElementById("firstLaunchModeLoginBtn");
+  const registerFields = document.getElementById("firstLaunchRegisterFields");
+  const loginFields = document.getElementById("firstLaunchLoginFields");
+  const subtitle = document.getElementById("firstLaunchSubtitle");
+  if (registerBtn) registerBtn.classList.toggle("active", normalizedMode === "register");
+  if (loginBtn) loginBtn.classList.toggle("active", normalizedMode === "login");
+  if (registerFields) registerFields.classList.toggle("hidden", normalizedMode !== "register");
+  if (loginFields) loginFields.classList.toggle("hidden", normalizedMode !== "login");
+  if (subtitle) {
+    subtitle.textContent = normalizedMode === "login"
+      ? "Login to continue."
+      : "Create an account to continue.";
+  }
+  setFirstLaunchAuthBusy(firstLaunchAuthBusy);
+  setFirstLaunchUsernameError("");
+}
+
+function applyAuthenticatedProfile(user, { useServerBalance = true } = {}) {
+  const username = normalizeUsername(user?.username);
+  const playerId = String(user?.playerId || "").trim();
+  const email = normalizeAuthEmail(user?.email);
+  const serverBalance = Number(user?.balance);
+  if (!username || !playerId) return false;
+  if (!saveUsername(username)) return false;
+  if (email) saveAuthEmail(email);
+  venmoClaimPlayerId = playerId;
+  try {
+    localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
+  } catch {}
+  if (useServerBalance && Number.isFinite(serverBalance) && serverBalance >= 0) {
+    cash = roundCurrency(serverBalance);
+  }
+  hideFirstLaunchUsernameOverlay();
+  setFirstLaunchUsernameError("");
+  if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
+  if (typeof updateUI === "function") updateUI();
+  if (typeof syncCurrentUserProfileToServer === "function") {
+    syncCurrentUserProfileToServer({ force: true });
+  }
+  return true;
+}
+
+async function hydrateAuthSessionIfPresent() {
+  try {
+    const payload = await venmoApiRequest("/api/auth/session");
+    if (!payload?.authenticated || !payload?.user) return false;
+    return applyAuthenticatedProfile(payload.user, { useServerBalance: true });
+  } catch {
+    return false;
+  }
+}
+
 function showFirstLaunchUsernameOverlay() {
   const overlay = document.getElementById("firstLaunchOverlay");
-  const input = document.getElementById("firstLaunchUsernameInput");
-  if (!overlay || !input) return;
+  const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
+  const registerEmailInput = document.getElementById("firstLaunchEmailInput");
+  const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
+  if (!overlay || !registerUsernameInput) return;
   usernameGateActive = true;
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
-  input.value = playerUsername || "";
+  registerUsernameInput.value = playerUsername || "";
+  const savedEmail = loadSavedAuthEmail();
+  if (registerEmailInput && savedEmail) registerEmailInput.value = savedEmail;
+  if (loginEmailInput && savedEmail) loginEmailInput.value = savedEmail;
   setFirstLaunchUsernameError("");
-  setTimeout(() => input.focus(), 0);
+  setFirstLaunchAuthMode(firstLaunchAuthMode || "register");
+  setTimeout(() => {
+    const loginEmail = document.getElementById("firstLaunchLoginEmailInput");
+    if (firstLaunchAuthMode === "login" && loginEmail) {
+      loginEmail.focus();
+      return;
+    }
+    registerUsernameInput.focus();
+  }, 0);
   if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
 }
 
@@ -259,52 +369,120 @@ function hideFirstLaunchUsernameOverlay() {
 }
 
 async function submitFirstLaunchUsername() {
-  const input = document.getElementById("firstLaunchUsernameInput");
-  if (!input) return false;
-  const candidate = normalizeUsername(input.value);
+  if (firstLaunchAuthBusy) return false;
+  const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
+  const registerEmailInput = document.getElementById("firstLaunchEmailInput");
+  const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
+  const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
+  const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
+  if (!registerUsernameInput) return false;
+
+  if (firstLaunchAuthMode === "login") {
+    const email = normalizeAuthEmail(loginEmailInput?.value);
+    const password = String(loginPasswordInput?.value || "");
+    if (!email) {
+      setFirstLaunchUsernameError("Enter a valid email address.");
+      if (loginEmailInput) loginEmailInput.focus();
+      return false;
+    }
+    if (password.length < 8) {
+      setFirstLaunchUsernameError("Password must be at least 8 characters.");
+      if (loginPasswordInput) loginPasswordInput.focus();
+      return false;
+    }
+    setFirstLaunchAuthBusy(true);
+    try {
+      const payload = await venmoApiRequest("/api/auth/login", {
+        method: "POST",
+        body: { email, password }
+      });
+      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true });
+      if (!ok) {
+        setFirstLaunchUsernameError("Login succeeded but profile data was invalid.");
+        return false;
+      }
+      saveAuthEmail(email);
+      if (loginPasswordInput) loginPasswordInput.value = "";
+      return true;
+    } catch (error) {
+      setFirstLaunchUsernameError(String(error?.message || "Could not login right now."));
+      if (loginPasswordInput) loginPasswordInput.focus();
+      return false;
+    } finally {
+      setFirstLaunchAuthBusy(false);
+    }
+  }
+
+  const candidate = normalizeUsername(registerUsernameInput.value);
+  const email = normalizeAuthEmail(registerEmailInput?.value);
+  const password = String(registerPasswordInput?.value || "");
   if (!candidate) {
     setFirstLaunchUsernameError(`Username must be ${USERNAME_MIN_LEN}-${USERNAME_MAX_LEN} characters.`);
-    input.focus();
+    registerUsernameInput.focus();
     return false;
   }
+  if (!email) {
+    setFirstLaunchUsernameError("Enter a valid email address.");
+    if (registerEmailInput) registerEmailInput.focus();
+    return false;
+  }
+  if (password.length < 8) {
+    setFirstLaunchUsernameError("Password must be at least 8 characters.");
+    if (registerPasswordInput) registerPasswordInput.focus();
+    return false;
+  }
+  setFirstLaunchAuthBusy(true);
   try {
     if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
-    await venmoApiRequest("/api/users/sync", {
+    const payload = await venmoApiRequest("/api/auth/register", {
       method: "POST",
       body: {
         playerId: venmoClaimPlayerId,
         username: candidate,
+        email,
+        password,
         balance: roundCurrency(cash)
       }
     });
+    const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: false });
+    if (!ok) {
+      setFirstLaunchUsernameError("Account created but profile data was invalid.");
+      return false;
+    }
+    saveAuthEmail(email);
+    if (registerPasswordInput) registerPasswordInput.value = "";
     lastUserProfileSyncAt = Date.now();
+    return true;
   } catch (error) {
     const message = String(error?.message || "");
     if (message.toLowerCase().includes("taken")) {
       setFirstLaunchUsernameError("That username is already taken.");
+    } else if (message.toLowerCase().includes("email")) {
+      setFirstLaunchUsernameError("That email is already in use.");
     } else {
-      setFirstLaunchUsernameError("Could not verify username right now.");
+      setFirstLaunchUsernameError(message || "Could not create account right now.");
     }
-    input.focus();
+    if (registerUsernameInput) registerUsernameInput.focus();
     return false;
+  } finally {
+    setFirstLaunchAuthBusy(false);
   }
-  if (!saveUsername(candidate)) {
-    setFirstLaunchUsernameError("Could not save username.");
-    input.focus();
-    return false;
-  }
-  hideFirstLaunchUsernameOverlay();
-  setFirstLaunchUsernameError("");
-  if (typeof updateUI === "function") updateUI();
-  if (typeof syncCurrentUserProfileToServer === "function") syncCurrentUserProfileToServer({ force: true });
-  return true;
 }
 
-function initFirstLaunchUsernameSetup() {
+async function initFirstLaunchUsernameSetup() {
   const overlay = document.getElementById("firstLaunchOverlay");
   const input = document.getElementById("firstLaunchUsernameInput");
+  const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
+  const registerEmailInput = document.getElementById("firstLaunchEmailInput");
+  const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
+  const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
   const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
-  if (!overlay || !input || !confirmBtn) return;
+  const registerModeBtn = document.getElementById("firstLaunchModeRegisterBtn");
+  const loginModeBtn = document.getElementById("firstLaunchModeLoginBtn");
+  if (!overlay || !input || !confirmBtn || !registerModeBtn || !loginModeBtn) return;
+
+  registerModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("register"));
+  loginModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("login"));
 
   confirmBtn.addEventListener("click", () => {
     submitFirstLaunchUsername();
@@ -314,16 +492,30 @@ function initFirstLaunchUsernameSetup() {
     event.preventDefault();
     submitFirstLaunchUsername();
   });
+  [registerEmailInput, registerPasswordInput, loginEmailInput, loginPasswordInput].forEach((field) => {
+    if (!field) return;
+    field.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      submitFirstLaunchUsername();
+    });
+  });
 
-  if (hasCompletedUsernameSetup()) {
-    const normalized = loadSavedUsername();
-    if (normalized) {
-      playerUsername = normalized;
-      persistUsernameSetupDone();
-      hideFirstLaunchUsernameOverlay();
-      return;
-    }
+  const savedUsername = loadSavedUsername();
+  if (savedUsername) {
+    playerUsername = savedUsername;
+    input.value = savedUsername;
   }
+  const savedEmail = loadSavedAuthEmail();
+  if (savedEmail) {
+    if (registerEmailInput) registerEmailInput.value = savedEmail;
+    if (loginEmailInput) loginEmailInput.value = savedEmail;
+  }
+  setFirstLaunchAuthMode(savedEmail ? "login" : "register");
+  setFirstLaunchAuthBusy(true);
+  const hasSession = await hydrateAuthSessionIfPresent();
+  setFirstLaunchAuthBusy(false);
+  if (hasSession) return;
   showFirstLaunchUsernameOverlay();
 }
 
@@ -4668,6 +4860,7 @@ function getVenmoPackLabel(packId) {
 
 async function venmoApiRequest(path, options = {}) {
   const config = { ...options };
+  if (!config.credentials) config.credentials = "include";
   if (config.body && typeof config.body !== "string") {
     config.body = JSON.stringify(config.body);
     config.headers = {
