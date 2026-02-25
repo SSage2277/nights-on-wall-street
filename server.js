@@ -131,6 +131,7 @@ function mapClaimRow(row) {
     id: String(row.id),
     playerId: String(row.player_id || ""),
     username: String(row.username || ""),
+    email: sanitizeEmail(row.email) || "",
     source: String(row.source || "venmo"),
     packId: String(row.pack_id || ""),
     txnId: String(row.txn_id || ""),
@@ -167,6 +168,19 @@ function mapUserRow(row) {
   };
 }
 
+function mapAdminUserRow(row) {
+  const base = mapUserRow(row);
+  return {
+    ...base,
+    hasPassword: row.has_password === true,
+    totalClaims: Number(row.total_claims) || 0,
+    pendingClaims: Number(row.pending_claims) || 0,
+    approvedClaims: Number(row.approved_claims) || 0,
+    totalWins: Number(row.total_wins) || 0,
+    lastWinAt: Number(row.last_win_at) || 0
+  };
+}
+
 function normalizeUserForClient(row) {
   const mapped = mapUserRow(row);
   return {
@@ -182,14 +196,137 @@ function getAdminCode(req) {
   return String(req.query?.adminCode || req.body?.adminCode || "");
 }
 
-function requireAdmin(req, res) {
+function sanitizeAdminDeviceToken(value) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  if (token.length < 24 || token.length > 256) return "";
+  if (!/^[a-zA-Z0-9._-]+$/.test(token)) return "";
+  return token;
+}
+
+function sanitizeAdminDeviceLabel(value) {
+  const label = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!label) return "Trusted device";
+  return label.slice(0, 80);
+}
+
+function hashAdminDeviceToken(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function getAdminDeviceToken(req) {
+  const rawHeader = req.headers["x-admin-device-token"];
+  const headerToken = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  return sanitizeAdminDeviceToken(
+    headerToken ||
+    req.query?.adminDeviceToken ||
+    req.body?.adminDeviceToken
+  );
+}
+
+function getRequestIp(req) {
+  const forwardedRaw = req.headers["x-forwarded-for"];
+  const forwarded = Array.isArray(forwardedRaw) ? forwardedRaw[0] : String(forwardedRaw || "");
+  const firstForwardedIp = forwarded.split(",")[0]?.trim();
+  const fallbackIp = String(req.ip || req.socket?.remoteAddress || "").trim();
+  return String(firstForwardedIp || fallbackIp || "").slice(0, 128);
+}
+
+function getRequestUserAgent(req) {
+  return String(req.headers["user-agent"] || "").slice(0, 255);
+}
+
+async function getTrustedAdminDeviceCount() {
+  const result = await db.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM admin_trusted_devices
+      WHERE revoked_at = 0
+        AND token_hash IS NOT NULL
+        AND token_hash <> ''
+    `
+  );
+  return Number(result.rows?.[0]?.count) || 0;
+}
+
+function mapAdminDeviceRow(row) {
+  return {
+    id: String(row.id || ""),
+    label: sanitizeAdminDeviceLabel(row.label),
+    trustedAt: Number(row.created_at) || 0,
+    lastSeenAt: Number(row.last_seen_at) || 0,
+    lastIp: String(row.last_ip || ""),
+    lastUserAgent: String(row.last_user_agent || "")
+  };
+}
+
+async function touchTrustedAdminDeviceByHash(tokenHash, req) {
+  await db.query(
+    `
+      UPDATE admin_trusted_devices
+      SET last_seen_at = $1,
+          last_ip = $2,
+          last_user_agent = $3
+      WHERE token_hash = $4
+    `,
+    [Date.now(), getRequestIp(req), getRequestUserAgent(req), tokenHash]
+  );
+}
+
+async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
   const entered = getAdminCode(req).trim().toLowerCase();
   const expected = ADMIN_CODE.trim().toLowerCase();
   if (!entered || entered !== expected) {
     res.status(401).json({ ok: false, error: "Invalid admin code." });
-    return false;
+    return null;
   }
-  return true;
+  try {
+    const trustedCount = await getTrustedAdminDeviceCount();
+    const deviceToken = getAdminDeviceToken(req);
+    if (trustedCount <= 0 && allowBootstrap) {
+      return {
+        ok: true,
+        bootstrap: true,
+        trustedCount: 0,
+        token: deviceToken,
+        tokenHash: deviceToken ? hashAdminDeviceToken(deviceToken) : ""
+      };
+    }
+    if (!deviceToken) {
+      res.status(401).json({ ok: false, error: "Trusted admin device required." });
+      return null;
+    }
+    const tokenHash = hashAdminDeviceToken(deviceToken);
+    const lookup = await db.query(
+      `
+        SELECT id, label, created_at, last_seen_at, last_ip, last_user_agent
+        FROM admin_trusted_devices
+        WHERE token_hash = $1
+          AND revoked_at = 0
+        LIMIT 1
+      `,
+      [tokenHash]
+    );
+    if (!lookup.rowCount) {
+      res.status(401).json({ ok: false, error: "This device is not trusted for admin access." });
+      return null;
+    }
+    await touchTrustedAdminDeviceByHash(tokenHash, req);
+    return {
+      ok: true,
+      bootstrap: false,
+      trustedCount,
+      token: deviceToken,
+      tokenHash,
+      device: mapAdminDeviceRow(lookup.rows[0])
+    };
+  } catch (error) {
+    console.error("Failed admin access validation", error);
+    res.status(500).json({ ok: false, error: "Could not validate admin access." });
+    return null;
+  }
 }
 
 app.use(express.json());
@@ -202,7 +339,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Admin-Device-Token");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -297,7 +434,7 @@ app.post("/api/auth/register", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const existingByPlayerId = await db.query(
       `
-        SELECT player_id, email, password_hash
+        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -308,7 +445,31 @@ app.post("/api/auth/register", async (req, res) => {
       const existing = existingByPlayerId.rows[0];
       const hasCredentials = Boolean(sanitizeEmail(existing.email) && String(existing.password_hash || "").trim());
       if (hasCredentials) {
-        res.status(409).json({ ok: false, error: "Account already exists for this player. Please login." });
+        const existingEmail = sanitizeEmail(existing.email);
+        if (existingEmail !== email) {
+          res.status(409).json({ ok: false, error: "Account already exists for this player. Please login." });
+          return;
+        }
+        const passwordMatch = await bcrypt.compare(password, String(existing.password_hash || ""));
+        if (!passwordMatch) {
+          res.status(401).json({ ok: false, error: "Invalid email or password." });
+          return;
+        }
+        const now = Date.now();
+        const refreshed = await db.query(
+          `
+            UPDATE users
+            SET last_seen_at = $1
+            WHERE player_id = $2
+            RETURNING player_id, username, username_key, email, balance, last_seen_at
+          `,
+          [now, playerId]
+        );
+        req.session.playerId = playerId;
+        res.json({
+          ok: true,
+          user: normalizeUserForClient(refreshed.rows[0] || existing)
+        });
         return;
       }
     }
@@ -689,27 +850,30 @@ app.post("/api/users/sync", async (req, res) => {
 
 app.get("/api/admin/claims", async (req, res) => {
   try {
-    if (!requireAdmin(req, res)) return;
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
     const statusFilter = String(req.query?.status || "").trim().toLowerCase();
     const result = statusFilter
       ? await db.query(
           `
-            SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
-            FROM claims
+            SELECT c.id, c.player_id, c.username, c.source, c.pack_id, c.txn_id, c.txn_norm, c.status, c.submitted_at, c.reviewed_at, c.credited_at, u.email
+            FROM claims c
+            LEFT JOIN users u ON u.player_id = c.player_id
             WHERE status = $1
-            ORDER BY submitted_at DESC, id DESC
+            ORDER BY c.submitted_at DESC, c.id DESC
           `,
           [statusFilter]
         )
       : await db.query(
           `
-            SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
-            FROM claims
-            ORDER BY submitted_at DESC, id DESC
+            SELECT c.id, c.player_id, c.username, c.source, c.pack_id, c.txn_id, c.txn_norm, c.status, c.submitted_at, c.reviewed_at, c.credited_at, u.email
+            FROM claims c
+            LEFT JOIN users u ON u.player_id = c.player_id
+            ORDER BY c.submitted_at DESC, c.id DESC
           `
         );
     const claims = result.rows.map(mapClaimRow);
-    res.json({ ok: true, claims });
+    res.json({ ok: true, claims, trustedDevice: adminAccess.device || null });
   } catch (error) {
     console.error("Failed to load admin claims", error);
     res.status(500).json({ ok: false, error: "Could not load admin claims." });
@@ -718,16 +882,46 @@ app.get("/api/admin/claims", async (req, res) => {
 
 app.get("/api/admin/users", async (req, res) => {
   try {
-    if (!requireAdmin(req, res)) return;
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
     const result = await db.query(
       `
-        SELECT player_id, username, username_key, balance, last_seen_at
-        FROM users
-        ORDER BY last_seen_at DESC, player_id DESC
+        SELECT
+          u.player_id,
+          u.username,
+          u.username_key,
+          u.email,
+          u.balance,
+          u.last_seen_at,
+          (u.password_hash IS NOT NULL AND u.password_hash <> '') AS has_password,
+          COALESCE(claims.total_claims, 0) AS total_claims,
+          COALESCE(claims.pending_claims, 0) AS pending_claims,
+          COALESCE(claims.approved_claims, 0) AS approved_claims,
+          COALESCE(wins.total_wins, 0) AS total_wins,
+          COALESCE(wins.last_win_at, 0) AS last_win_at
+        FROM users u
+        LEFT JOIN (
+          SELECT
+            player_id,
+            COUNT(*)::int AS total_claims,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_claims,
+            COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_claims
+          FROM claims
+          GROUP BY player_id
+        ) claims ON claims.player_id = u.player_id
+        LEFT JOIN (
+          SELECT
+            player_id,
+            COUNT(*)::int AS total_wins,
+            MAX(submitted_at)::bigint AS last_win_at
+          FROM live_wins
+          GROUP BY player_id
+        ) wins ON wins.player_id = u.player_id
+        ORDER BY u.last_seen_at DESC, u.player_id DESC
       `
     );
-    const users = result.rows.map(mapUserRow);
-    res.json({ ok: true, users });
+    const users = result.rows.map(mapAdminUserRow);
+    res.json({ ok: true, users, trustedDevice: adminAccess.device || null });
   } catch (error) {
     console.error("Failed to load admin users", error);
     res.status(500).json({ ok: false, error: "Could not load users." });
@@ -736,7 +930,8 @@ app.get("/api/admin/users", async (req, res) => {
 
 app.post("/api/admin/claims/:id/decision", async (req, res) => {
   try {
-    if (!requireAdmin(req, res)) return;
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
     const claimId = String(req.params?.id || "");
     const decision = String(req.body?.decision || "").toLowerCase();
     if (!["approve", "reject"].includes(decision)) {
@@ -762,10 +957,154 @@ app.post("/api/admin/claims/:id/decision", async (req, res) => {
       res.status(409).json({ ok: false, error: "Claim is already reviewed." });
       return;
     }
-    res.json({ ok: true, claim: mapClaimRow(updated.rows[0]) });
+    res.json({ ok: true, claim: mapClaimRow(updated.rows[0]), trustedDevice: adminAccess.device || null });
   } catch (error) {
     console.error("Failed to update claim decision", error);
     res.status(500).json({ ok: false, error: "Could not update claim decision." });
+  }
+});
+
+app.post("/api/admin/device/trust", async (req, res) => {
+  try {
+    const adminCode = getAdminCode(req).trim().toLowerCase();
+    const expected = ADMIN_CODE.trim().toLowerCase();
+    if (!adminCode || adminCode !== expected) {
+      res.status(401).json({ ok: false, error: "Invalid admin code." });
+      return;
+    }
+    const deviceToken = getAdminDeviceToken(req);
+    if (!deviceToken) {
+      res.status(400).json({ ok: false, error: "Missing admin device token." });
+      return;
+    }
+    const trustedCount = await getTrustedAdminDeviceCount();
+    if (trustedCount > 0) {
+      const guard = await requireAdminAccess(req, res, { allowBootstrap: false });
+      if (!guard) return;
+    }
+    const tokenHash = hashAdminDeviceToken(deviceToken);
+    const label = sanitizeAdminDeviceLabel(req.body?.label);
+    const now = Date.now();
+    const upsert = await db.query(
+      `
+        INSERT INTO admin_trusted_devices (token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at)
+        VALUES ($1, $2, $3, $3, $4, $5, 0)
+        ON CONFLICT (token_hash)
+        DO UPDATE SET
+          label = EXCLUDED.label,
+          last_seen_at = EXCLUDED.last_seen_at,
+          last_ip = EXCLUDED.last_ip,
+          last_user_agent = EXCLUDED.last_user_agent,
+          revoked_at = 0
+        RETURNING id, label, created_at, last_seen_at, last_ip, last_user_agent
+      `,
+      [tokenHash, label, now, getRequestIp(req), getRequestUserAgent(req)]
+    );
+    res.json({
+      ok: true,
+      bootstrap: trustedCount <= 0,
+      trustedDevice: mapAdminDeviceRow(upsert.rows[0])
+    });
+  } catch (error) {
+    console.error("Failed to trust admin device", error);
+    res.status(500).json({ ok: false, error: "Could not trust this device." });
+  }
+});
+
+app.get("/api/admin/devices", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const currentToken = getAdminDeviceToken(req);
+    const currentTokenHash = currentToken ? hashAdminDeviceToken(currentToken) : "";
+    const result = await db.query(
+      `
+        SELECT id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent
+        FROM admin_trusted_devices
+        WHERE revoked_at = 0
+          AND token_hash IS NOT NULL
+          AND token_hash <> ''
+        ORDER BY created_at DESC, id DESC
+      `
+    );
+    const devices = result.rows.map((row) => ({
+      ...mapAdminDeviceRow(row),
+      current: Boolean(currentTokenHash && row.token_hash === currentTokenHash)
+    }));
+    res.json({ ok: true, devices });
+  } catch (error) {
+    console.error("Failed to load admin devices", error);
+    res.status(500).json({ ok: false, error: "Could not load trusted devices." });
+  }
+});
+
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const totals = await db.query(
+      `
+        WITH user_totals AS (
+          SELECT
+            COUNT(*)::int AS total_users,
+            COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int AS users_with_email,
+            COUNT(*) FILTER (WHERE password_hash IS NOT NULL AND password_hash <> '')::int AS users_with_password,
+            COUNT(*) FILTER (WHERE last_seen_at >= $1)::int AS active_users_24h,
+            COALESCE(SUM(balance), 0)::numeric AS total_balance
+          FROM users
+        ),
+        claim_totals AS (
+          SELECT
+            COUNT(*)::int AS total_claims,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_claims,
+            COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_claims,
+            COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected_claims
+          FROM claims
+        ),
+        win_totals AS (
+          SELECT
+            COUNT(*) FILTER (WHERE submitted_at >= $1)::int AS live_wins_24h,
+            COALESCE(SUM(amount) FILTER (WHERE submitted_at >= $1), 0)::numeric AS live_win_amount_24h
+          FROM live_wins
+        )
+        SELECT
+          user_totals.total_users,
+          user_totals.users_with_email,
+          user_totals.users_with_password,
+          user_totals.active_users_24h,
+          user_totals.total_balance,
+          claim_totals.total_claims,
+          claim_totals.pending_claims,
+          claim_totals.approved_claims,
+          claim_totals.rejected_claims,
+          win_totals.live_wins_24h,
+          win_totals.live_win_amount_24h
+        FROM user_totals, claim_totals, win_totals
+      `,
+      [dayAgo]
+    );
+    const row = totals.rows[0] || {};
+    res.json({
+      ok: true,
+      stats: {
+        totalUsers: Number(row.total_users) || 0,
+        usersWithEmail: Number(row.users_with_email) || 0,
+        usersWithPassword: Number(row.users_with_password) || 0,
+        activeUsers24h: Number(row.active_users_24h) || 0,
+        totalBalance: Math.round(toNumber(row.total_balance) * 100) / 100,
+        totalClaims: Number(row.total_claims) || 0,
+        pendingClaims: Number(row.pending_claims) || 0,
+        approvedClaims: Number(row.approved_claims) || 0,
+        rejectedClaims: Number(row.rejected_claims) || 0,
+        liveWins24h: Number(row.live_wins_24h) || 0,
+        liveWinAmount24h: Math.round(toNumber(row.live_win_amount_24h) * 100) / 100
+      },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load admin stats", error);
+    res.status(500).json({ ok: false, error: "Could not load admin stats." });
   }
 });
 
@@ -814,6 +1153,60 @@ async function ensureSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx
     ON users (lower(email))
     WHERE email IS NOT NULL
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_trusted_devices (
+      id BIGSERIAL PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL DEFAULT 'Trusted device',
+      created_at BIGINT NOT NULL DEFAULT 0,
+      last_seen_at BIGINT NOT NULL DEFAULT 0,
+      last_ip TEXT NOT NULL DEFAULT '',
+      last_user_agent TEXT NOT NULL DEFAULT '',
+      revoked_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS token_hash TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS label TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS created_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS last_seen_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS last_ip TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS last_user_agent TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS revoked_at BIGINT
+  `);
+  await db.query(`
+    UPDATE admin_trusted_devices
+    SET label = COALESCE(NULLIF(label, ''), 'Trusted device'),
+        created_at = COALESCE(created_at, 0),
+        last_seen_at = COALESCE(last_seen_at, 0),
+        last_ip = COALESCE(last_ip, ''),
+        last_user_agent = COALESCE(last_user_agent, ''),
+        revoked_at = COALESCE(revoked_at, 0)
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_trusted_devices_token_hash_idx
+    ON admin_trusted_devices (token_hash)
+    WHERE token_hash IS NOT NULL AND token_hash <> ''
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS claims (
