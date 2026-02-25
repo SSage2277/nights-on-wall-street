@@ -481,13 +481,31 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
 
 const RATE_LIMIT_RULES = Object.freeze([
   {
+    id: "auth-login",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/auth\/login$/i,
+    scope: "loginOrIp",
+    max: 20,
+    windowMs: 60 * 1000,
+    blockMs: 2 * 60 * 1000
+  },
+  {
+    id: "auth-register",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/auth\/register$/i,
+    scope: "ip",
+    max: 8,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 10 * 60 * 1000
+  },
+  {
     id: "auth-write",
     methods: new Set(["POST"]),
-    pattern: /^\/api\/auth\/(register|login|logout|verify-email|resend-verification)$/i,
+    pattern: /^\/api\/auth\/(logout|verify-email|resend-verification)$/i,
     scope: "ip",
     max: 30,
-    windowMs: 10 * 60 * 1000,
-    blockMs: 15 * 60 * 1000
+    windowMs: 5 * 60 * 1000,
+    blockMs: 5 * 60 * 1000
   },
   {
     id: "auth-session",
@@ -572,7 +590,11 @@ function findRateLimitRule(req) {
 function getRateLimitScopeValue(req, scope) {
   const sessionPlayerId = getSessionPlayerId(req);
   const requestPlayerId = sanitizePlayerId(req.body?.playerId || req.query?.playerId);
+  const loginUsernameKey = normalizeUsernameKey(req.body?.username);
   const ip = getRequestIp(req) || "unknown";
+  if (scope === "loginOrIp") {
+    return loginUsernameKey ? `login:${loginUsernameKey}` : `ip:${ip}`;
+  }
   if (scope === "sessionOrIp") {
     return sessionPlayerId ? `player:${sessionPlayerId}` : `ip:${ip}`;
   }
