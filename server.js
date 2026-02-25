@@ -15,16 +15,26 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const baseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
-const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "Sage1557");
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "").trim() || (IS_PRODUCTION ? "" : "Sage1557");
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const RATE_LIMIT_ENABLED = String(process.env.RATE_LIMIT_ENABLED || "1").trim() !== "0";
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
 }
 if (!SESSION_SECRET) {
   throw new Error("Missing SESSION_SECRET environment variable.");
+}
+if (!ADMIN_CODE) {
+  throw new Error("Missing VENMO_ADMIN_CODE environment variable.");
+}
+if (IS_PRODUCTION) {
+  const normalizedAdminCode = ADMIN_CODE.toLowerCase();
+  if (normalizedAdminCode === "sage1557" || normalizedAdminCode.length < 8) {
+    throw new Error("Insecure VENMO_ADMIN_CODE. Use a unique production admin code (8+ chars).");
+  }
 }
 
 const db = new Pool({
@@ -468,6 +478,221 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
   }
 }
 
+const RATE_LIMIT_RULES = Object.freeze([
+  {
+    id: "auth-write",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/auth\/(register|login|logout|verify-email|resend-verification)$/i,
+    scope: "ip",
+    max: 30,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 15 * 60 * 1000
+  },
+  {
+    id: "auth-session",
+    methods: new Set(["GET"]),
+    pattern: /^\/api\/auth\/session$/i,
+    scope: "sessionOrIp",
+    max: 180,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
+  },
+  {
+    id: "claims-submit",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/claims$/i,
+    scope: "playerOrIp",
+    max: 30,
+    windowMs: 5 * 60 * 1000,
+    blockMs: 10 * 60 * 1000
+  },
+  {
+    id: "claims-read",
+    methods: new Set(["GET"]),
+    pattern: /^\/api\/claims(\/credits)?$/i,
+    scope: "playerOrIp",
+    max: 240,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
+  },
+  {
+    id: "live-wins-write",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/live-wins$/i,
+    scope: "playerOrIp",
+    max: 120,
+    windowMs: 60 * 1000,
+    blockMs: 5 * 60 * 1000
+  },
+  {
+    id: "admin-read",
+    methods: new Set(["GET"]),
+    pattern: /^\/api\/admin\/(claims|users|stats|devices)$/i,
+    scope: "sessionOrIp",
+    max: 360,
+    windowMs: 60 * 1000,
+    blockMs: 2 * 60 * 1000
+  },
+  {
+    id: "admin-write",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/admin\//i,
+    scope: "sessionOrIp",
+    max: 80,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 15 * 60 * 1000
+  },
+  {
+    id: "api-default",
+    methods: new Set(["GET", "POST"]),
+    pattern: /^\/api\//i,
+    scope: "ip",
+    max: 300,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
+  }
+]);
+
+const rateLimitStore = new Map();
+
+function getApiPath(req) {
+  return String(req.originalUrl || req.url || "")
+    .split("?")[0]
+    .trim()
+    .toLowerCase();
+}
+
+function findRateLimitRule(req) {
+  const method = String(req.method || "GET").toUpperCase();
+  const path = getApiPath(req);
+  return RATE_LIMIT_RULES.find((rule) => rule.methods.has(method) && rule.pattern.test(path)) || null;
+}
+
+function getRateLimitScopeValue(req, scope) {
+  const sessionPlayerId = getSessionPlayerId(req);
+  const requestPlayerId = sanitizePlayerId(req.body?.playerId || req.query?.playerId);
+  const ip = getRequestIp(req) || "unknown";
+  if (scope === "sessionOrIp") {
+    return sessionPlayerId ? `player:${sessionPlayerId}` : `ip:${ip}`;
+  }
+  if (scope === "playerOrIp") {
+    return requestPlayerId ? `player:${requestPlayerId}` : (sessionPlayerId ? `player:${sessionPlayerId}` : `ip:${ip}`);
+  }
+  return `ip:${ip}`;
+}
+
+function consumeRateLimitBucket({ key, max, windowMs, blockMs }) {
+  const now = Date.now();
+  let entry = rateLimitStore.get(key);
+  if (!entry || now >= entry.resetAt) {
+    entry = {
+      count: 0,
+      resetAt: now + windowMs,
+      blockedUntil: 0
+    };
+  }
+  if (entry.blockedUntil > now) {
+    const retryAfterMs = entry.blockedUntil - now;
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    rateLimitStore.set(key, entry);
+    return {
+      allowed: false,
+      retryAfterSeconds,
+      remaining: 0,
+      resetAt: entry.resetAt
+    };
+  }
+
+  entry.count += 1;
+  const remaining = Math.max(0, max - entry.count);
+  if (entry.count > max) {
+    entry.blockedUntil = now + blockMs;
+    rateLimitStore.set(key, entry);
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil(blockMs / 1000)),
+      remaining: 0,
+      resetAt: entry.resetAt
+    };
+  }
+
+  rateLimitStore.set(key, entry);
+  return {
+    allowed: true,
+    retryAfterSeconds: 0,
+    remaining,
+    resetAt: entry.resetAt
+  };
+}
+
+function cleanupRateLimitStore() {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitStore.entries()) {
+    if (!entry) {
+      rateLimitStore.delete(key);
+      continue;
+    }
+    if (entry.blockedUntil > now) continue;
+    if (entry.resetAt > now) continue;
+    rateLimitStore.delete(key);
+  }
+}
+
+const rateLimitCleanupTimer = setInterval(cleanupRateLimitStore, 5 * 60 * 1000);
+if (typeof rateLimitCleanupTimer.unref === "function") {
+  rateLimitCleanupTimer.unref();
+}
+
+function apiRateLimitMiddleware(req, res, next) {
+  if (!RATE_LIMIT_ENABLED) {
+    next();
+    return;
+  }
+  if (String(req.method || "").toUpperCase() === "OPTIONS") {
+    next();
+    return;
+  }
+  const apiPath = getApiPath(req);
+  if (!apiPath.startsWith("/api/")) {
+    next();
+    return;
+  }
+  if (apiPath === "/api/health") {
+    next();
+    return;
+  }
+
+  const rule = findRateLimitRule(req);
+  if (!rule) {
+    next();
+    return;
+  }
+
+  const scopeValue = getRateLimitScopeValue(req, rule.scope);
+  const bucketKey = `${rule.id}|${scopeValue}`;
+  const result = consumeRateLimitBucket({
+    key: bucketKey,
+    max: rule.max,
+    windowMs: rule.windowMs,
+    blockMs: rule.blockMs
+  });
+
+  res.setHeader("X-RateLimit-Limit", String(rule.max));
+  res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+  res.setHeader("X-RateLimit-Reset", String(Math.ceil(result.resetAt / 1000)));
+
+  if (!result.allowed) {
+    res.setHeader("Retry-After", String(result.retryAfterSeconds));
+    res.status(429).json({
+      ok: false,
+      error: `Too many requests. Try again in ${result.retryAfterSeconds} seconds.`
+    });
+    return;
+  }
+
+  next();
+}
+
 app.use(express.json());
 app.use((req, res, next) => {
   const requestOrigin = String(req.headers.origin || "").trim();
@@ -507,6 +732,7 @@ app.use(
   })
 );
 app.use(express.static(__dirname));
+app.use("/api", apiRateLimitMiddleware);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "claims", database: "postgres" });
