@@ -88,6 +88,7 @@ let playerUsername = "";
 let usernameGateActive = false;
 let firstLaunchAuthMode = "register";
 let firstLaunchAuthBusy = false;
+let tradingLogoutBusy = false;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -851,13 +852,47 @@ function syncCasinoLiveFeedVisibility() {
 
 function updateTradingUsernameBadge() {
   const badge = document.getElementById("tradingUsernameBadge");
+  const textEl = document.getElementById("tradingUsernameText");
+  const logoutBtn = document.getElementById("tradingLogoutBtn");
   if (!badge) return;
   const normalized = normalizeUsername(playerUsername);
   const tradingRoot = document.getElementById("trading-section");
   const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
   const shouldShow = Boolean(normalized) && tradingVisible && !IS_PHONE_EMBED_MODE;
   badge.style.display = shouldShow ? "inline-flex" : "none";
-  if (shouldShow) badge.textContent = normalized;
+  if (textEl) textEl.textContent = shouldShow ? normalized : "";
+  if (logoutBtn) logoutBtn.disabled = tradingLogoutBusy;
+}
+
+async function logoutFromTradingBadge() {
+  if (tradingLogoutBusy) return;
+  tradingLogoutBusy = true;
+  updateTradingUsernameBadge();
+  try {
+    try {
+      await venmoApiRequest("/api/auth/logout", { method: "POST" });
+    } catch {}
+    venmoAdminUnlocked = false;
+    venmoAdminAuthCode = "";
+    if (hiddenAdminPanelOpen) closeHiddenAdminPanel();
+    setFirstLaunchAuthMode("login");
+    showFirstLaunchUsernameOverlay();
+    setFirstLaunchUsernameError("Logged out. Login to continue.");
+  } finally {
+    tradingLogoutBusy = false;
+    updateTradingUsernameBadge();
+  }
+}
+
+function initTradingUsernameBadge() {
+  const logoutBtn = document.getElementById("tradingLogoutBtn");
+  if (!logoutBtn || logoutBtn.dataset.bound === "true") return;
+  logoutBtn.dataset.bound = "true";
+  logoutBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void logoutFromTradingBadge();
+  });
 }
 
 function addSageBrand(root, position = "bottom-left", extraClass = "") {
@@ -9593,6 +9628,7 @@ function renderBlackjack(options = {}) {
 loadPhoneState();
 bankMissionLastCashSnapshot = cash;
 refreshPokerSessionMeta();
+initTradingUsernameBadge();
 initFirstLaunchUsernameSetup();
 initHiddenAdminTrigger();
 initCasinoSecretUnlockButton();

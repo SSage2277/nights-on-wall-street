@@ -809,22 +809,50 @@ body {
   right: 10px;
   z-index: 11990;
   display: none;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   justify-content: center;
-  min-height: 24px;
+  gap: 4px;
+  min-height: 40px;
   max-width: min(40vw, 260px);
-  padding: 4px 10px;
+  padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid rgba(94, 146, 188, 0.62);
   background: rgba(8, 20, 32, 0.82);
   color: #dcefff;
+  pointer-events: auto;
+}
+
+#tradingUsernameText {
+  display: block;
   font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.03em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  pointer-events: none;
+  text-align: center;
+}
+
+#tradingLogoutBtn {
+  border: 1px solid rgba(95, 143, 178, 0.72);
+  background: rgba(15, 41, 60, 0.92);
+  color: #d8ecff;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+#tradingLogoutBtn:hover {
+  background: rgba(24, 60, 84, 0.96);
+}
+
+#tradingLogoutBtn:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .first-launch-overlay {
