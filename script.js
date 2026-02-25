@@ -72,6 +72,7 @@ const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
   "username_setup_done"
 ]);
 const AUTH_EMAIL_STORAGE_KEY = "nows_auth_email_v1";
+const GUEST_MODE_STORAGE_KEY = "nows_guest_mode_v1";
 const ADMIN_DEVICE_TOKEN_STORAGE_KEY = "nows_admin_device_token_v1";
 const ADMIN_DEVICE_LABEL_STORAGE_KEY = "nows_admin_device_label_v1";
 const LOANS_ENABLED = false;
@@ -201,6 +202,16 @@ function saveAuthEmail(value) {
   return true;
 }
 
+function setGuestModeEnabled(enabled) {
+  try {
+    if (enabled) {
+      localStorage.setItem(GUEST_MODE_STORAGE_KEY, "1");
+    } else {
+      localStorage.removeItem(GUEST_MODE_STORAGE_KEY);
+    }
+  } catch {}
+}
+
 function generateAdminDeviceToken() {
   try {
     if (window.crypto?.getRandomValues) {
@@ -324,31 +335,58 @@ function setFirstLaunchAuthBusy(isBusy) {
   const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
   const registerBtn = document.getElementById("firstLaunchModeRegisterBtn");
   const loginBtn = document.getElementById("firstLaunchModeLoginBtn");
+  const guestBtn = document.getElementById("firstLaunchModeGuestBtn");
+  const resendBtn = document.getElementById("firstLaunchResendCodeBtn");
   if (confirmBtn) {
-    const label = firstLaunchAuthMode === "login" ? "Login" : "Create Account";
+    const label = firstLaunchAuthMode === "login"
+      ? "Login"
+      : firstLaunchAuthMode === "verify"
+        ? "Verify Email"
+        : firstLaunchAuthMode === "guest"
+          ? "Continue as Guest"
+        : "Create Account";
     confirmBtn.disabled = firstLaunchAuthBusy;
     confirmBtn.textContent = firstLaunchAuthBusy ? "Please wait..." : label;
   }
   if (registerBtn) registerBtn.disabled = firstLaunchAuthBusy;
   if (loginBtn) loginBtn.disabled = firstLaunchAuthBusy;
+  if (guestBtn) guestBtn.disabled = firstLaunchAuthBusy;
+  if (resendBtn) resendBtn.disabled = firstLaunchAuthBusy || firstLaunchAuthMode !== "verify";
 }
 
 function setFirstLaunchAuthMode(mode) {
-  const normalizedMode = String(mode || "").toLowerCase() === "login" ? "login" : "register";
+  const requestedMode = String(mode || "").toLowerCase();
+  const normalizedMode = requestedMode === "login"
+    ? "login"
+    : requestedMode === "verify"
+      ? "verify"
+      : requestedMode === "guest"
+        ? "guest"
+        : "register";
   firstLaunchAuthMode = normalizedMode;
   const registerBtn = document.getElementById("firstLaunchModeRegisterBtn");
   const loginBtn = document.getElementById("firstLaunchModeLoginBtn");
+  const guestBtn = document.getElementById("firstLaunchModeGuestBtn");
   const registerFields = document.getElementById("firstLaunchRegisterFields");
   const loginFields = document.getElementById("firstLaunchLoginFields");
+  const verifyFields = document.getElementById("firstLaunchVerifyFields");
+  const guestFields = document.getElementById("firstLaunchGuestFields");
   const subtitle = document.getElementById("firstLaunchSubtitle");
   if (registerBtn) registerBtn.classList.toggle("active", normalizedMode === "register");
   if (loginBtn) loginBtn.classList.toggle("active", normalizedMode === "login");
+  if (guestBtn) guestBtn.classList.toggle("active", normalizedMode === "guest");
   if (registerFields) registerFields.classList.toggle("hidden", normalizedMode !== "register");
   if (loginFields) loginFields.classList.toggle("hidden", normalizedMode !== "login");
+  if (verifyFields) verifyFields.classList.toggle("hidden", normalizedMode !== "verify");
+  if (guestFields) guestFields.classList.toggle("hidden", normalizedMode !== "guest");
   if (subtitle) {
     subtitle.textContent = normalizedMode === "login"
       ? "Login to continue."
-      : "Create an account to continue.";
+      : normalizedMode === "verify"
+        ? "Enter the code sent to your email."
+        : normalizedMode === "guest"
+          ? "Play as a guest on this device."
+        : "Create an account to continue.";
   }
   setFirstLaunchAuthBusy(firstLaunchAuthBusy);
   setFirstLaunchUsernameError("");
@@ -362,6 +400,7 @@ function applyAuthenticatedProfile(user, { useServerBalance = true } = {}) {
   if (!username || !playerId) return false;
   if (!saveUsername(username)) return false;
   if (email) saveAuthEmail(email);
+  setGuestModeEnabled(false);
   venmoClaimPlayerId = playerId;
   try {
     localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
@@ -394,6 +433,8 @@ function showFirstLaunchUsernameOverlay() {
   const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
   const registerEmailInput = document.getElementById("firstLaunchEmailInput");
   const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
+  const verifyEmailInput = document.getElementById("firstLaunchVerifyEmailInput");
+  const guestUsernameInput = document.getElementById("firstLaunchGuestUsernameInput");
   if (!overlay || !registerUsernameInput) return;
   usernameGateActive = true;
   overlay.classList.remove("hidden");
@@ -402,10 +443,22 @@ function showFirstLaunchUsernameOverlay() {
   const savedEmail = loadSavedAuthEmail();
   if (registerEmailInput && savedEmail) registerEmailInput.value = savedEmail;
   if (loginEmailInput && savedEmail) loginEmailInput.value = savedEmail;
+  if (verifyEmailInput && savedEmail) verifyEmailInput.value = savedEmail;
+  if (guestUsernameInput) guestUsernameInput.value = playerUsername || "";
   setFirstLaunchUsernameError("");
   setFirstLaunchAuthMode(firstLaunchAuthMode || "register");
   setTimeout(() => {
     const loginEmail = document.getElementById("firstLaunchLoginEmailInput");
+    const verifyEmail = document.getElementById("firstLaunchVerifyEmailInput");
+    const guestInput = document.getElementById("firstLaunchGuestUsernameInput");
+    if (firstLaunchAuthMode === "verify" && verifyEmail) {
+      verifyEmail.focus();
+      return;
+    }
+    if (firstLaunchAuthMode === "guest" && guestInput) {
+      guestInput.focus();
+      return;
+    }
     if (firstLaunchAuthMode === "login" && loginEmail) {
       loginEmail.focus();
       return;
@@ -431,7 +484,71 @@ async function submitFirstLaunchUsername() {
   const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
   const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
   const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
+  const verifyEmailInput = document.getElementById("firstLaunchVerifyEmailInput");
+  const verifyCodeInput = document.getElementById("firstLaunchVerifyCodeInput");
+  const guestUsernameInput = document.getElementById("firstLaunchGuestUsernameInput");
   if (!registerUsernameInput) return false;
+
+  if (firstLaunchAuthMode === "verify") {
+    const email = normalizeAuthEmail(verifyEmailInput?.value);
+    const code = String(verifyCodeInput?.value || "").replace(/\D+/g, "").slice(0, 6);
+    if (!email) {
+      setFirstLaunchUsernameError("Enter a valid email address.");
+      if (verifyEmailInput) verifyEmailInput.focus();
+      return false;
+    }
+    if (code.length !== 6) {
+      setFirstLaunchUsernameError("Enter the 6-digit verification code.");
+      if (verifyCodeInput) verifyCodeInput.focus();
+      return false;
+    }
+    setFirstLaunchAuthBusy(true);
+    try {
+      const payload = await venmoApiRequest("/api/auth/verify-email", {
+        method: "POST",
+        body: { email, code }
+      });
+      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true });
+      if (!ok) {
+        setFirstLaunchUsernameError("Email verified, but profile data was invalid.");
+        return false;
+      }
+      saveAuthEmail(email);
+      if (verifyCodeInput) verifyCodeInput.value = "";
+      return true;
+    } catch (error) {
+      setFirstLaunchUsernameError(String(error?.message || "Could not verify code right now."));
+      if (verifyCodeInput) verifyCodeInput.focus();
+      return false;
+    } finally {
+      setFirstLaunchAuthBusy(false);
+    }
+  }
+
+  if (firstLaunchAuthMode === "guest") {
+    const guestUsername = normalizeUsername(guestUsernameInput?.value || registerUsernameInput.value);
+    if (!guestUsername) {
+      setFirstLaunchUsernameError(`Guest username must be ${USERNAME_MIN_LEN}-${USERNAME_MAX_LEN} characters.`);
+      if (guestUsernameInput) guestUsernameInput.focus();
+      return false;
+    }
+    setFirstLaunchAuthBusy(true);
+    try {
+      if (!saveUsername(guestUsername)) {
+        setFirstLaunchUsernameError("Could not save guest username.");
+        return false;
+      }
+      setGuestModeEnabled(true);
+      hideFirstLaunchUsernameOverlay();
+      setFirstLaunchUsernameError("");
+      if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
+      if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
+      if (typeof updateUI === "function") updateUI();
+      return true;
+    } finally {
+      setFirstLaunchAuthBusy(false);
+    }
+  }
 
   if (firstLaunchAuthMode === "login") {
     const email = normalizeAuthEmail(loginEmailInput?.value);
@@ -461,6 +578,14 @@ async function submitFirstLaunchUsername() {
       if (loginPasswordInput) loginPasswordInput.value = "";
       return true;
     } catch (error) {
+      const requiresVerification = Boolean(error?.details?.requiresEmailVerification);
+      if (requiresVerification || String(error?.message || "").toLowerCase().includes("not verified")) {
+        setFirstLaunchAuthMode("verify");
+        if (verifyEmailInput) verifyEmailInput.value = email;
+        setFirstLaunchUsernameError("Email not verified. Enter the code sent to your inbox.");
+        if (verifyCodeInput) verifyCodeInput.focus();
+        return false;
+      }
       setFirstLaunchUsernameError(String(error?.message || "Could not login right now."));
       if (loginPasswordInput) loginPasswordInput.focus();
       return false;
@@ -500,6 +625,14 @@ async function submitFirstLaunchUsername() {
         balance: roundCurrency(cash)
       }
     });
+    if (payload?.requiresEmailVerification) {
+      setFirstLaunchAuthMode("verify");
+      if (verifyEmailInput) verifyEmailInput.value = email;
+      setFirstLaunchUsernameError("Verification code sent. Enter it to finish creating your account.");
+      if (registerPasswordInput) registerPasswordInput.value = "";
+      if (verifyCodeInput) verifyCodeInput.focus();
+      return false;
+    }
     const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: false });
     if (!ok) {
       setFirstLaunchUsernameError("Account created but profile data was invalid.");
@@ -520,10 +653,37 @@ async function submitFirstLaunchUsername() {
       if (loginEmailInput && email) loginEmailInput.value = email;
       setFirstLaunchUsernameError("Account exists. Switch to Login and enter your password.");
       if (loginPasswordInput) loginPasswordInput.focus();
+    } else if (message.toLowerCase().includes("deliverable")) {
+      setFirstLaunchUsernameError("Use a real email domain you can receive mail from.");
     } else {
       setFirstLaunchUsernameError(message || "Could not create account right now.");
     }
     if (registerUsernameInput) registerUsernameInput.focus();
+    return false;
+  } finally {
+    setFirstLaunchAuthBusy(false);
+  }
+}
+
+async function resendFirstLaunchVerificationCode() {
+  if (firstLaunchAuthBusy) return false;
+  const verifyEmailInput = document.getElementById("firstLaunchVerifyEmailInput");
+  const email = normalizeAuthEmail(verifyEmailInput?.value);
+  if (!email) {
+    setFirstLaunchUsernameError("Enter a valid email address.");
+    if (verifyEmailInput) verifyEmailInput.focus();
+    return false;
+  }
+  setFirstLaunchAuthBusy(true);
+  try {
+    await venmoApiRequest("/api/auth/resend-verification", {
+      method: "POST",
+      body: { email }
+    });
+    setFirstLaunchUsernameError("Verification code sent. Check your inbox.");
+    return true;
+  } catch (error) {
+    setFirstLaunchUsernameError(String(error?.message || "Could not resend code right now."));
     return false;
   } finally {
     setFirstLaunchAuthBusy(false);
@@ -544,6 +704,7 @@ async function clearLocalAccountOnDevice() {
       localStorage.removeItem(VENMO_LOCAL_CREDITED_STORAGE_KEY);
     } catch {}
     playerUsername = "";
+    setGuestModeEnabled(false);
     venmoClaimPlayerId = "";
     venmoLocallyCreditedClaimIds.clear();
     venmoClaimState.claims = [];
@@ -559,11 +720,15 @@ async function clearLocalAccountOnDevice() {
     const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
     const loginEmailInput = document.getElementById("firstLaunchLoginEmailInput");
     const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
+    const verifyEmailInput = document.getElementById("firstLaunchVerifyEmailInput");
+    const verifyCodeInput = document.getElementById("firstLaunchVerifyCodeInput");
     if (registerUsernameInput) registerUsernameInput.value = "";
     if (registerEmailInput) registerEmailInput.value = "";
     if (registerPasswordInput) registerPasswordInput.value = "";
     if (loginEmailInput) loginEmailInput.value = "";
     if (loginPasswordInput) loginPasswordInput.value = "";
+    if (verifyEmailInput) verifyEmailInput.value = "";
+    if (verifyCodeInput) verifyCodeInput.value = "";
     renderVenmoClaimStatus();
     renderVenmoAdminClaims();
     renderHiddenAdminStats();
@@ -584,17 +749,26 @@ async function initFirstLaunchUsernameSetup() {
   const registerEmailInput = document.getElementById("firstLaunchEmailInput");
   const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
   const loginPasswordInput = document.getElementById("firstLaunchLoginPasswordInput");
+  const verifyEmailInput = document.getElementById("firstLaunchVerifyEmailInput");
+  const verifyCodeInput = document.getElementById("firstLaunchVerifyCodeInput");
+  const guestUsernameInput = document.getElementById("firstLaunchGuestUsernameInput");
+  const resendCodeBtn = document.getElementById("firstLaunchResendCodeBtn");
   const confirmBtn = document.getElementById("firstLaunchUsernameConfirmBtn");
   const resetBtn = document.getElementById("firstLaunchResetAccountBtn");
   const registerModeBtn = document.getElementById("firstLaunchModeRegisterBtn");
   const loginModeBtn = document.getElementById("firstLaunchModeLoginBtn");
-  if (!overlay || !input || !confirmBtn || !registerModeBtn || !loginModeBtn || !resetBtn) return;
+  const guestModeBtn = document.getElementById("firstLaunchModeGuestBtn");
+  if (!overlay || !input || !confirmBtn || !registerModeBtn || !loginModeBtn || !guestModeBtn || !resetBtn || !resendCodeBtn) return;
 
   registerModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("register"));
   loginModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("login"));
+  guestModeBtn.addEventListener("click", () => setFirstLaunchAuthMode("guest"));
 
   confirmBtn.addEventListener("click", () => {
     submitFirstLaunchUsername();
+  });
+  resendCodeBtn.addEventListener("click", () => {
+    resendFirstLaunchVerificationCode();
   });
   resetBtn.addEventListener("click", () => {
     clearLocalAccountOnDevice();
@@ -604,7 +778,7 @@ async function initFirstLaunchUsernameSetup() {
     event.preventDefault();
     submitFirstLaunchUsername();
   });
-  [registerEmailInput, registerPasswordInput, loginEmailInput, loginPasswordInput].forEach((field) => {
+  [registerEmailInput, registerPasswordInput, loginEmailInput, loginPasswordInput, verifyEmailInput, verifyCodeInput, guestUsernameInput].forEach((field) => {
     if (!field) return;
     field.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
@@ -617,13 +791,21 @@ async function initFirstLaunchUsernameSetup() {
   if (savedUsername) {
     playerUsername = savedUsername;
     input.value = savedUsername;
+    if (guestUsernameInput) guestUsernameInput.value = savedUsername;
   }
   const savedEmail = loadSavedAuthEmail();
   if (savedEmail) {
     if (registerEmailInput) registerEmailInput.value = savedEmail;
     if (loginEmailInput) loginEmailInput.value = savedEmail;
+    if (verifyEmailInput) verifyEmailInput.value = savedEmail;
   }
-  setFirstLaunchAuthMode(savedEmail ? "login" : "register");
+  let defaultMode = savedEmail ? "login" : "register";
+  try {
+    if (!savedEmail && localStorage.getItem(GUEST_MODE_STORAGE_KEY) === "1") {
+      defaultMode = "guest";
+    }
+  } catch {}
+  setFirstLaunchAuthMode(defaultMode);
   setFirstLaunchAuthBusy(true);
   const hasSession = await hydrateAuthSessionIfPresent();
   setFirstLaunchAuthBusy(false);
@@ -4997,7 +5179,10 @@ async function venmoApiRequest(path, options = {}) {
       const response = await fetch(url, config);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload?.ok === false) {
-        lastError = new Error(payload?.error || `Request failed (${response.status})`);
+        const requestError = new Error(payload?.error || `Request failed (${response.status})`);
+        requestError.details = payload;
+        requestError.status = response.status;
+        lastError = requestError;
         continue;
       }
       return payload;
@@ -5025,6 +5210,13 @@ function getAdminRequestOptions(options = {}) {
     ...options,
     headers
   };
+}
+
+function buildAdminApiUrl(path) {
+  const safePath = String(path || "");
+  if (!venmoAdminAuthCode) return safePath;
+  const separator = safePath.includes("?") ? "&" : "?";
+  return `${safePath}${separator}adminCode=${encodeURIComponent(venmoAdminAuthCode)}`;
 }
 
 async function trustCurrentAdminDevice({ silent = false } = {}) {
@@ -5079,14 +5271,15 @@ async function refreshVenmoClaimsFromServer({ silent = false } = {}) {
   }
 }
 
-async function refreshVenmoAdminClaimsFromServer({ silent = false } = {}) {
-  if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
+async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
     const payload = await venmoApiRequest(
-      `/api/admin/claims?status=pending&adminCode=${encodeURIComponent(venmoAdminAuthCode)}`,
+      buildAdminApiUrl("/api/admin/claims?status=pending"),
       getAdminRequestOptions()
     );
     venmoClaimState.adminClaims = Array.isArray(payload.claims) ? payload.claims.map(mapServerClaim) : [];
+    venmoAdminUnlocked = true;
     renderVenmoAdminClaims();
     setHiddenAdminStatus("Admin unlocked. Device verified.");
     return true;
@@ -5100,7 +5293,7 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false } = {}) {
     renderHiddenAdminUsers();
     renderHiddenAdminStats();
     renderHiddenAdminDevices();
-    setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
+    if (!silent) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
     return false;
   }
@@ -5207,16 +5400,32 @@ function renderHiddenAdminUsers() {
       const pendingClaims = Number(user.pendingClaims) || 0;
       const wins = Number(user.totalWins) || 0;
       const lastSeen = formatDateTime(user.lastSeenAt);
+      const bannedAt = Number(user.bannedAt) || 0;
+      const isBanned = bannedAt > 0;
+      const bannedReason = escapeHtml(user.bannedReason || "");
+      const playerId = escapeHtml(String(user.playerId || ""));
+      const statusLabel = isBanned
+        ? `Banned ${formatDateTime(bannedAt)}${bannedReason ? ` (${bannedReason})` : ""}`
+        : "Active";
       return `
         <tr>
           <td>${username}</td>
           <td>${email}</td>
           <td>${formatCurrency(Number(user.balance) || 0)}</td>
+          <td>${statusLabel}</td>
           <td>${passwordState}</td>
           <td>${claims}</td>
           <td>${pendingClaims}</td>
           <td>${wins}</td>
           <td>${lastSeen}</td>
+          <td>
+            ${
+              isBanned
+                ? `<button type="button" data-user-action="unban" data-player-id="${playerId}">Unban</button>`
+                : `<button type="button" data-user-action="ban" data-player-id="${playerId}">Ban</button>`
+            }
+            <button type="button" data-user-action="remove" data-player-id="${playerId}">Remove</button>
+          </td>
         </tr>
       `;
     })
@@ -5228,11 +5437,13 @@ function renderHiddenAdminUsers() {
           <th>Username</th>
           <th>Email</th>
           <th>Current Balance</th>
+          <th>Status</th>
           <th>Password</th>
           <th>Claims</th>
           <th>Pending</th>
           <th>Wins</th>
           <th>Last Seen</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -5254,10 +5465,13 @@ function renderHiddenAdminStats() {
   }
   const cards = [
     ["Users", Number(stats.totalUsers) || 0],
+    ["Users Banned", Number(stats.bannedUsers) || 0],
     ["Active (24h)", Number(stats.activeUsers24h) || 0],
     ["Claims Pending", Number(stats.pendingClaims) || 0],
     ["Claims Approved", Number(stats.approvedClaims) || 0],
     ["Live Wins (24h)", Number(stats.liveWins24h) || 0],
+    ["Devices Active", Number(stats.trustedDevicesActive) || 0],
+    ["Devices Banned", Number(stats.trustedDevicesBanned) || 0],
     ["Total Balance", formatCurrency(Number(stats.totalBalance) || 0)]
   ]
     .map(([label, value]) => `
@@ -5282,21 +5496,37 @@ function renderHiddenAdminDevices() {
     return;
   }
   const rows = devices
-    .map((device) => `
-      <tr>
-        <td>${escapeHtml(device.label || "Trusted device")}${device.current ? " (This device)" : ""}</td>
-        <td>${formatDateTime(device.trustedAt)}</td>
-        <td>${formatDateTime(device.lastSeenAt)}</td>
-      </tr>
-    `)
+    .map((device) => {
+      const deviceId = escapeHtml(String(device.id || ""));
+      const isActive = device.active !== false && Number(device.revokedAt) <= 0;
+      const status = isActive ? "Active" : `Banned ${formatDateTime(device.revokedAt)}`;
+      return `
+        <tr>
+          <td>${escapeHtml(device.label || "Trusted device")}${device.current ? " (This device)" : ""}</td>
+          <td>${status}</td>
+          <td>${formatDateTime(device.trustedAt)}</td>
+          <td>${formatDateTime(device.lastSeenAt)}</td>
+          <td>
+            ${
+              isActive
+                ? `<button type="button" data-device-action="ban" data-device-id="${deviceId}">Ban</button>`
+                : `<button type="button" data-device-action="unban" data-device-id="${deviceId}">Unban</button>`
+            }
+            <button type="button" data-device-action="remove" data-device-id="${deviceId}">Remove</button>
+          </td>
+        </tr>
+      `;
+    })
     .join("");
   hiddenAdminDevicesEl.innerHTML = `
     <table class="hidden-admin-table">
       <thead>
         <tr>
           <th>Device</th>
+          <th>Status</th>
           <th>Trusted</th>
           <th>Last Seen</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -5304,14 +5534,15 @@ function renderHiddenAdminDevices() {
   `;
 }
 
-async function refreshHiddenAdminUsersFromServer({ silent = false } = {}) {
-  if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
+async function refreshHiddenAdminUsersFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
     const payload = await venmoApiRequest(
-      `/api/admin/users?adminCode=${encodeURIComponent(venmoAdminAuthCode)}`,
+      buildAdminApiUrl("/api/admin/users"),
       getAdminRequestOptions()
     );
     venmoClaimState.adminUsers = Array.isArray(payload.users) ? payload.users : [];
+    venmoAdminUnlocked = true;
     renderHiddenAdminUsers();
     return true;
   } catch (error) {
@@ -5322,14 +5553,15 @@ async function refreshHiddenAdminUsersFromServer({ silent = false } = {}) {
   }
 }
 
-async function refreshHiddenAdminStatsFromServer({ silent = false } = {}) {
-  if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
+async function refreshHiddenAdminStatsFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
     const payload = await venmoApiRequest(
-      `/api/admin/stats?adminCode=${encodeURIComponent(venmoAdminAuthCode)}`,
+      buildAdminApiUrl("/api/admin/stats"),
       getAdminRequestOptions()
     );
     venmoClaimState.adminStats = payload?.stats || null;
+    venmoAdminUnlocked = true;
     renderHiddenAdminStats();
     return true;
   } catch (error) {
@@ -5340,20 +5572,160 @@ async function refreshHiddenAdminStatsFromServer({ silent = false } = {}) {
   }
 }
 
-async function refreshHiddenAdminDevicesFromServer({ silent = false } = {}) {
-  if (!venmoAdminUnlocked || !venmoAdminAuthCode) return false;
+async function refreshHiddenAdminDevicesFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
     const payload = await venmoApiRequest(
-      `/api/admin/devices?adminCode=${encodeURIComponent(venmoAdminAuthCode)}`,
+      buildAdminApiUrl("/api/admin/devices"),
       getAdminRequestOptions()
     );
     venmoClaimState.adminDevices = Array.isArray(payload.devices) ? payload.devices : [];
+    venmoAdminUnlocked = true;
     renderHiddenAdminDevices();
     return true;
   } catch (error) {
     venmoClaimState.adminDevices = [];
     renderHiddenAdminDevices();
     if (!silent) setHiddenAdminStatus(`Could not load devices: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function tryAutoUnlockAdminFromTrustedDevice() {
+  if (venmoAdminUnlocked) return true;
+  try {
+    getAdminDeviceToken();
+  } catch {
+    return false;
+  }
+  const claimsOk = await refreshVenmoAdminClaimsFromServer({ silent: true, allowWhenLocked: true });
+  if (!claimsOk) return false;
+  await refreshHiddenAdminStatsFromServer({ silent: true, allowWhenLocked: true });
+  await refreshHiddenAdminUsersFromServer({ silent: true, allowWhenLocked: true });
+  await refreshHiddenAdminDevicesFromServer({ silent: true, allowWhenLocked: true });
+  setHiddenAdminStatus("Trusted device recognized. Admin unlocked.");
+  return true;
+}
+
+async function banAdminDevice(deviceId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !deviceId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/devices/${encodeURIComponent(deviceId)}/ban`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    setHiddenAdminStatus("Device banned.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not ban device: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function unbanAdminDevice(deviceId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !deviceId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/devices/${encodeURIComponent(deviceId)}/unban`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    setHiddenAdminStatus("Device unbanned.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not unban device: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function removeAdminDevice(deviceId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !deviceId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/devices/${encodeURIComponent(deviceId)}/remove`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    setHiddenAdminStatus("Device removed.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not remove device: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function banAdminUser(playerId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !playerId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/ban`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    await refreshVenmoAdminClaimsFromServer({ silent: true });
+    setHiddenAdminStatus("User banned.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not ban user: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function unbanAdminUser(playerId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !playerId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/unban`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    await refreshVenmoAdminClaimsFromServer({ silent: true });
+    setHiddenAdminStatus("User unbanned.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not unban user: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function removeAdminUser(playerId) {
+  if (!venmoAdminUnlocked || !venmoAdminAuthCode || !playerId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/remove`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: venmoAdminAuthCode }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    await refreshVenmoAdminClaimsFromServer({ silent: true });
+    setHiddenAdminStatus("User removed.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not remove user: ${error.message}`, true);
     return false;
   }
 }
@@ -5377,9 +5749,10 @@ function startHiddenAdminLivePolling() {
       hiddenAdminLivePollTimer = null;
       return;
     }
-    if (!venmoAdminUnlocked || !venmoAdminAuthCode) return;
+    if (!venmoAdminUnlocked) return;
     refreshHiddenAdminUsersFromServer({ silent: true });
     refreshHiddenAdminStatsFromServer({ silent: true });
+    refreshHiddenAdminDevicesFromServer({ silent: true });
   }, HIDDEN_ADMIN_LIVE_POLL_MS);
 }
 
@@ -5398,8 +5771,9 @@ async function openHiddenAdminPanel() {
   hiddenAdminOverlayEl.classList.remove("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
   hiddenAdminPanelOpen = true;
+  await tryAutoUnlockAdminFromTrustedDevice();
   setHiddenAdminStatus(
-    venmoAdminUnlocked ? "Admin unlocked. Device verified." : "Enter admin code to unlock this trusted device."
+    venmoAdminUnlocked ? "Admin unlocked. Device verified." : "Enter admin code to unlock this device."
   );
   renderVenmoAdminClaims();
   renderHiddenAdminStats();
@@ -5441,6 +5815,34 @@ function initHiddenAdminTrigger() {
   if (hiddenAdminOverlayEl) {
     hiddenAdminOverlayEl.addEventListener("click", (event) => {
       if (event.target === hiddenAdminOverlayEl) closeHiddenAdminPanel();
+    });
+  }
+  if (hiddenAdminUsersEl) {
+    hiddenAdminUsersEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("button[data-user-action][data-player-id]")
+        : null;
+      if (!target) return;
+      const action = String(target.getAttribute("data-user-action") || "");
+      const playerId = String(target.getAttribute("data-player-id") || "");
+      if (!action || !playerId) return;
+      if (action === "ban") banAdminUser(playerId);
+      if (action === "unban") unbanAdminUser(playerId);
+      if (action === "remove") removeAdminUser(playerId);
+    });
+  }
+  if (hiddenAdminDevicesEl) {
+    hiddenAdminDevicesEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("button[data-device-action][data-device-id]")
+        : null;
+      if (!target) return;
+      const action = String(target.getAttribute("data-device-action") || "");
+      const deviceId = String(target.getAttribute("data-device-id") || "");
+      if (!action || !deviceId) return;
+      if (action === "ban") banAdminDevice(deviceId);
+      if (action === "unban") unbanAdminDevice(deviceId);
+      if (action === "remove") removeAdminDevice(deviceId);
     });
   }
   document.addEventListener("keydown", (event) => {
@@ -5587,7 +5989,12 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
   let code = typedCode || venmoAdminAuthCode;
   if (forcePrompt && !typedCode) code = "";
-  if (!code) return false;
+  if (!code) {
+    const autoUnlocked = await tryAutoUnlockAdminFromTrustedDevice();
+    if (autoUnlocked) return true;
+    setHiddenAdminStatus("Enter admin code to unlock this device.", true);
+    return false;
+  }
   venmoAdminAuthCode = code;
   if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = code;
   const trusted = await trustCurrentAdminDevice({ silent: true });

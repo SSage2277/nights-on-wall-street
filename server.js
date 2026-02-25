@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import express from "express";
 import crypto from "node:crypto";
+import dns from "node:dns/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import connectPgSimple from "connect-pg-simple";
@@ -18,6 +19,9 @@ const baseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
 const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "Sage1557");
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const EMAIL_FROM = String(process.env.EMAIL_FROM || "Nights on Wall Street <onboarding@resend.dev>").trim();
+const EMAIL_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -84,6 +88,70 @@ function sanitizePassword(value) {
   if (!password) return "";
   if (password.length < 8 || password.length > 72) return "";
   return password;
+}
+
+function sanitizeVerificationCode(value) {
+  const code = String(value || "").trim();
+  if (!/^\d{6}$/.test(code)) return "";
+  return code;
+}
+
+function hashVerificationCode(email, code) {
+  const base = `${sanitizeEmail(email)}|${sanitizeVerificationCode(code)}|${SESSION_SECRET}`;
+  return crypto.createHash("sha256").update(base).digest("hex");
+}
+
+function createVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function hasDeliverableEmailDomain(email) {
+  const safeEmail = sanitizeEmail(email);
+  const domain = safeEmail.split("@")[1] || "";
+  if (!domain) return false;
+  try {
+    const mxRecords = await dns.resolveMx(domain);
+    if (Array.isArray(mxRecords) && mxRecords.length > 0) return true;
+  } catch {}
+  try {
+    const aRecords = await dns.resolve(domain);
+    return Array.isArray(aRecords) && aRecords.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function sendVerificationEmail(email, code) {
+  const safeEmail = sanitizeEmail(email);
+  const safeCode = sanitizeVerificationCode(code);
+  if (!safeEmail || !safeCode) {
+    throw new Error("Invalid verification email payload.");
+  }
+  if (!RESEND_API_KEY) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[dev] verification code for ${safeEmail}: ${safeCode}`);
+      return;
+    }
+    throw new Error("Email verification service is not configured.");
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${RESEND_API_KEY}`
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [safeEmail],
+      subject: "Your Nights on Wall Street verification code",
+      text: `Your verification code is ${safeCode}. It expires in 10 minutes.`,
+      html: `<p>Your verification code is <strong>${safeCode}</strong>.</p><p>It expires in 10 minutes.</p>`
+    })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.message || `Email send failed (${response.status}).`);
+  }
 }
 
 function sanitizeClaimSource(value) {
@@ -173,6 +241,8 @@ function mapAdminUserRow(row) {
   return {
     ...base,
     hasPassword: row.has_password === true,
+    bannedAt: Number(row.banned_at) || 0,
+    bannedReason: String(row.banned_reason || ""),
     totalClaims: Number(row.total_claims) || 0,
     pendingClaims: Number(row.pending_claims) || 0,
     approvedClaims: Number(row.approved_claims) || 0,
@@ -196,6 +266,61 @@ function getAdminCode(req) {
   return String(req.query?.adminCode || req.body?.adminCode || "");
 }
 
+async function issueEmailVerificationForUser({
+  playerId,
+  username,
+  usernameKey,
+  email,
+  passwordHash,
+  balance
+}) {
+  const safeEmail = sanitizeEmail(email);
+  const safePlayerId = sanitizePlayerId(playerId);
+  const safeUsername = sanitizeUsername(username);
+  const safeUsernameKey = normalizeUsernameKey(usernameKey || username);
+  const safePasswordHash = String(passwordHash || "").trim();
+  const safeBalance = Math.round(toNumber(balance) * 100) / 100;
+  if (!safeEmail || !safePlayerId || !safeUsername || !safeUsernameKey || !safePasswordHash) {
+    throw new Error("Invalid email verification payload.");
+  }
+  const verificationCode = createVerificationCode();
+  const codeHash = hashVerificationCode(safeEmail, verificationCode);
+  const now = Date.now();
+  const expiresAt = now + EMAIL_VERIFICATION_TTL_MS;
+  await db.query(
+    `
+      INSERT INTO email_verification_codes (
+        email,
+        player_id,
+        username,
+        username_key,
+        password_hash,
+        balance,
+        code_hash,
+        expires_at,
+        attempts,
+        created_at,
+        last_sent_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $9)
+      ON CONFLICT (email)
+      DO UPDATE SET
+        player_id = EXCLUDED.player_id,
+        username = EXCLUDED.username,
+        username_key = EXCLUDED.username_key,
+        password_hash = EXCLUDED.password_hash,
+        balance = EXCLUDED.balance,
+        code_hash = EXCLUDED.code_hash,
+        expires_at = EXCLUDED.expires_at,
+        attempts = 0,
+        created_at = EXCLUDED.created_at,
+        last_sent_at = EXCLUDED.last_sent_at
+    `,
+    [safeEmail, safePlayerId, safeUsername, safeUsernameKey, safePasswordHash, safeBalance, codeHash, expiresAt, now]
+  );
+  await sendVerificationEmail(safeEmail, verificationCode);
+}
+
 function sanitizeAdminDeviceToken(value) {
   const token = String(value || "").trim();
   if (!token) return "";
@@ -210,6 +335,18 @@ function sanitizeAdminDeviceLabel(value) {
     .trim();
   if (!label) return "Trusted device";
   return label.slice(0, 80);
+}
+
+function sanitizeBanReason(value) {
+  const reason = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!reason) return "";
+  return reason.slice(0, 180);
+}
+
+function isBannedTimestamp(value) {
+  return Number(value) > 0;
 }
 
 function hashAdminDeviceToken(token) {
@@ -258,8 +395,38 @@ function mapAdminDeviceRow(row) {
     trustedAt: Number(row.created_at) || 0,
     lastSeenAt: Number(row.last_seen_at) || 0,
     lastIp: String(row.last_ip || ""),
-    lastUserAgent: String(row.last_user_agent || "")
+    lastUserAgent: String(row.last_user_agent || ""),
+    revokedAt: Number(row.revoked_at) || 0,
+    active: Number(row.revoked_at) <= 0
   };
+}
+
+async function getUserBanStateByPlayerId(playerId) {
+  const result = await db.query(
+    `
+      SELECT player_id, banned_at, banned_reason
+      FROM users
+      WHERE player_id = $1
+      LIMIT 1
+    `,
+    [playerId]
+  );
+  if (!result.rowCount) return null;
+  const row = result.rows[0];
+  return {
+    playerId: String(row.player_id || ""),
+    bannedAt: Number(row.banned_at) || 0,
+    bannedReason: String(row.banned_reason || "")
+  };
+}
+
+async function assertUserNotBannedByPlayerId(playerId, res) {
+  const banState = await getUserBanStateByPlayerId(playerId);
+  if (!banState) return true;
+  if (!isBannedTimestamp(banState.bannedAt)) return true;
+  const reasonSuffix = banState.bannedReason ? ` (${banState.bannedReason})` : "";
+  res.status(403).json({ ok: false, error: `Account is banned${reasonSuffix}.` });
+  return false;
 }
 
 async function touchTrustedAdminDeviceByHash(tokenHash, req) {
@@ -276,51 +443,62 @@ async function touchTrustedAdminDeviceByHash(tokenHash, req) {
 }
 
 async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
-  const entered = getAdminCode(req).trim().toLowerCase();
-  const expected = ADMIN_CODE.trim().toLowerCase();
-  if (!entered || entered !== expected) {
-    res.status(401).json({ ok: false, error: "Invalid admin code." });
-    return null;
-  }
   try {
-    const trustedCount = await getTrustedAdminDeviceCount();
     const deviceToken = getAdminDeviceToken(req);
+    const tokenHash = deviceToken ? hashAdminDeviceToken(deviceToken) : "";
+    if (tokenHash) {
+      const trustedLookup = await db.query(
+        `
+          SELECT id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+          FROM admin_trusted_devices
+          WHERE token_hash = $1
+            AND revoked_at = 0
+          LIMIT 1
+        `,
+        [tokenHash]
+      );
+      if (trustedLookup.rowCount) {
+        await touchTrustedAdminDeviceByHash(tokenHash, req);
+        return {
+          ok: true,
+          bootstrap: false,
+          trustedCount: await getTrustedAdminDeviceCount(),
+          token: deviceToken,
+          tokenHash,
+          viaTrustedDevice: true,
+          viaCode: false,
+          device: mapAdminDeviceRow(trustedLookup.rows[0])
+        };
+      }
+    }
+
+    const entered = getAdminCode(req).trim().toLowerCase();
+    const expected = ADMIN_CODE.trim().toLowerCase();
+    if (!entered || entered !== expected) {
+      res.status(401).json({ ok: false, error: "Invalid admin code." });
+      return null;
+    }
+    const trustedCount = await getTrustedAdminDeviceCount();
     if (trustedCount <= 0 && allowBootstrap) {
       return {
         ok: true,
         bootstrap: true,
         trustedCount: 0,
         token: deviceToken,
-        tokenHash: deviceToken ? hashAdminDeviceToken(deviceToken) : ""
+        tokenHash,
+        viaTrustedDevice: false,
+        viaCode: true
       };
     }
-    if (!deviceToken) {
-      res.status(401).json({ ok: false, error: "Trusted admin device required." });
-      return null;
-    }
-    const tokenHash = hashAdminDeviceToken(deviceToken);
-    const lookup = await db.query(
-      `
-        SELECT id, label, created_at, last_seen_at, last_ip, last_user_agent
-        FROM admin_trusted_devices
-        WHERE token_hash = $1
-          AND revoked_at = 0
-        LIMIT 1
-      `,
-      [tokenHash]
-    );
-    if (!lookup.rowCount) {
-      res.status(401).json({ ok: false, error: "This device is not trusted for admin access." });
-      return null;
-    }
-    await touchTrustedAdminDeviceByHash(tokenHash, req);
     return {
       ok: true,
       bootstrap: false,
       trustedCount,
       token: deviceToken,
       tokenHash,
-      device: mapAdminDeviceRow(lookup.rows[0])
+      viaTrustedDevice: false,
+      viaCode: true,
+      device: null
     };
   } catch (error) {
     console.error("Failed admin access validation", error);
@@ -386,7 +564,7 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, last_seen_at
+        SELECT player_id, username, username_key, email, balance, last_seen_at, banned_at, banned_reason, email_verified_at
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -396,6 +574,16 @@ app.get("/api/auth/session", async (req, res) => {
     if (!lookup.rowCount) {
       req.session.destroy(() => {});
       res.json({ ok: true, authenticated: false });
+      return;
+    }
+    if (isBannedTimestamp(lookup.rows[0].banned_at)) {
+      req.session.destroy(() => {});
+      res.status(403).json({ ok: false, authenticated: false, error: "Account is banned." });
+      return;
+    }
+    if (!Number(lookup.rows[0].email_verified_at)) {
+      req.session.destroy(() => {});
+      res.status(403).json({ ok: false, authenticated: false, error: "Email is not verified." });
       return;
     }
     res.json({
@@ -422,6 +610,10 @@ app.post("/api/auth/register", async (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid email address." });
       return;
     }
+    if (!(await hasDeliverableEmailDomain(email))) {
+      res.status(400).json({ ok: false, error: "Email domain is not deliverable." });
+      return;
+    }
     if (!password) {
       res.status(400).json({ ok: false, error: "Password must be 8-72 characters." });
       return;
@@ -431,10 +623,68 @@ app.post("/api/auth/register", async (req, res) => {
       return;
     }
     const safeBalance = Number.isFinite(balance) && balance >= 0 ? Math.round(balance * 100) / 100 : 0;
+    const existingByEmail = await db.query(
+      `
+        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at, banned_at, banned_reason, email_verified_at
+        FROM users
+        WHERE lower(email) = lower($1)
+        LIMIT 1
+      `,
+      [email]
+    );
+    if (existingByEmail.rowCount) {
+      const existing = existingByEmail.rows[0];
+      if (isBannedTimestamp(existing.banned_at)) {
+        const reason = sanitizeBanReason(existing.banned_reason);
+        res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+        return;
+      }
+      const existingHash = String(existing.password_hash || "");
+      if (!existingHash) {
+        res.status(409).json({ ok: false, error: "Email already in use." });
+        return;
+      }
+      const passwordMatch = await bcrypt.compare(password, existingHash);
+      if (!passwordMatch) {
+        res.status(401).json({ ok: false, error: "Invalid email or password." });
+        return;
+      }
+      if (Number(existing.email_verified_at) > 0) {
+        const refreshed = await db.query(
+          `
+            UPDATE users
+            SET last_seen_at = $1
+            WHERE player_id = $2
+            RETURNING player_id, username, username_key, email, balance, last_seen_at
+          `,
+          [Date.now(), existing.player_id]
+        );
+        req.session.playerId = sanitizePlayerId(existing.player_id);
+        res.json({
+          ok: true,
+          user: normalizeUserForClient(refreshed.rows[0] || existing)
+        });
+        return;
+      }
+      await issueEmailVerificationForUser({
+        playerId: existing.player_id,
+        username: existing.username,
+        usernameKey: existing.username_key,
+        email: existing.email,
+        passwordHash: existing.password_hash,
+        balance: existing.balance
+      });
+      res.json({
+        ok: true,
+        requiresEmailVerification: true,
+        email
+      });
+      return;
+    }
     const passwordHash = await bcrypt.hash(password, 12);
     const existingByPlayerId = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at
+        SELECT player_id, email, password_hash, banned_at, banned_reason
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -443,33 +693,14 @@ app.post("/api/auth/register", async (req, res) => {
     );
     if (existingByPlayerId.rowCount) {
       const existing = existingByPlayerId.rows[0];
+      if (isBannedTimestamp(existing.banned_at)) {
+        const reason = sanitizeBanReason(existing.banned_reason);
+        res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+        return;
+      }
       const hasCredentials = Boolean(sanitizeEmail(existing.email) && String(existing.password_hash || "").trim());
       if (hasCredentials) {
-        const existingEmail = sanitizeEmail(existing.email);
-        if (existingEmail !== email) {
-          res.status(409).json({ ok: false, error: "Account already exists for this player. Please login." });
-          return;
-        }
-        const passwordMatch = await bcrypt.compare(password, String(existing.password_hash || ""));
-        if (!passwordMatch) {
-          res.status(401).json({ ok: false, error: "Invalid email or password." });
-          return;
-        }
-        const now = Date.now();
-        const refreshed = await db.query(
-          `
-            UPDATE users
-            SET last_seen_at = $1
-            WHERE player_id = $2
-            RETURNING player_id, username, username_key, email, balance, last_seen_at
-          `,
-          [now, playerId]
-        );
-        req.session.playerId = playerId;
-        res.json({
-          ok: true,
-          user: normalizeUserForClient(refreshed.rows[0] || existing)
-        });
+        res.status(409).json({ ok: false, error: "Account already exists for this player. Please login." });
         return;
       }
     }
@@ -489,27 +720,36 @@ app.post("/api/auth/register", async (req, res) => {
     }
     const upsert = await db.query(
       `
-        INSERT INTO users (player_id, username, username_key, email, password_hash, balance, last_seen_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO users (player_id, username, username_key, email, password_hash, balance, last_seen_at, email_verified_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
         ON CONFLICT (player_id)
         DO UPDATE SET
           username = EXCLUDED.username,
           username_key = EXCLUDED.username_key,
           email = EXCLUDED.email,
           password_hash = EXCLUDED.password_hash,
+          email_verified_at = 0,
           balance = CASE
             WHEN users.balance > EXCLUDED.balance THEN users.balance
             ELSE EXCLUDED.balance
           END,
           last_seen_at = EXCLUDED.last_seen_at
-        RETURNING player_id, username, username_key, email, balance, last_seen_at
+        RETURNING player_id, username, username_key, email, password_hash, balance, last_seen_at
       `,
       [playerId, username, usernameKey, email, passwordHash, safeBalance, Date.now()]
     );
-    req.session.playerId = playerId;
+    await issueEmailVerificationForUser({
+      playerId,
+      username,
+      usernameKey,
+      email,
+      passwordHash,
+      balance: upsert.rows[0]?.balance ?? safeBalance
+    });
     res.json({
       ok: true,
-      user: normalizeUserForClient(upsert.rows[0])
+      requiresEmailVerification: true,
+      email
     });
   } catch (error) {
     if (error?.code === "23505") {
@@ -520,7 +760,7 @@ app.post("/api/auth/register", async (req, res) => {
       return;
     }
     console.error("Failed to register auth user", error);
-    res.status(500).json({ ok: false, error: "Could not register account." });
+    res.status(500).json({ ok: false, error: "Could not start email verification." });
   }
 });
 
@@ -534,7 +774,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at
+        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at, banned_at, banned_reason, email_verified_at
         FROM users
         WHERE lower(email) = lower($1)
         LIMIT 1
@@ -546,6 +786,11 @@ app.post("/api/auth/login", async (req, res) => {
       return;
     }
     const user = lookup.rows[0];
+    if (isBannedTimestamp(user.banned_at)) {
+      const reason = sanitizeBanReason(user.banned_reason);
+      res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+      return;
+    }
     const storedHash = String(user.password_hash || "");
     if (!storedHash) {
       res.status(401).json({ ok: false, error: "Account password is not set." });
@@ -554,6 +799,18 @@ app.post("/api/auth/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, storedHash);
     if (!isMatch) {
       res.status(401).json({ ok: false, error: "Invalid email or password." });
+      return;
+    }
+    if (!Number(user.email_verified_at)) {
+      await issueEmailVerificationForUser({
+        playerId: user.player_id,
+        username: user.username,
+        usernameKey: user.username_key,
+        email: user.email,
+        passwordHash: user.password_hash,
+        balance: user.balance
+      });
+      res.status(403).json({ ok: false, error: "Email is not verified.", requiresEmailVerification: true, email });
       return;
     }
     await db.query(
@@ -569,6 +826,143 @@ app.post("/api/auth/login", async (req, res) => {
   } catch (error) {
     console.error("Failed to login", error);
     res.status(500).json({ ok: false, error: "Could not login." });
+  }
+});
+
+app.post("/api/auth/verify-email", async (req, res) => {
+  try {
+    const email = sanitizeEmail(req.body?.email);
+    const code = sanitizeVerificationCode(req.body?.code);
+    if (!email || !code) {
+      res.status(400).json({ ok: false, error: "Invalid verification payload." });
+      return;
+    }
+    const verificationLookup = await db.query(
+      `
+        SELECT email, player_id, code_hash, expires_at, attempts
+        FROM email_verification_codes
+        WHERE lower(email) = lower($1)
+        LIMIT 1
+      `,
+      [email]
+    );
+    if (!verificationLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "No pending verification found." });
+      return;
+    }
+    const verification = verificationLookup.rows[0];
+    if (Number(verification.expires_at) < Date.now()) {
+      res.status(410).json({ ok: false, error: "Verification code expired. Request a new code." });
+      return;
+    }
+    if (Number(verification.attempts) >= 8) {
+      res.status(429).json({ ok: false, error: "Too many invalid attempts. Request a new code." });
+      return;
+    }
+    const expectedHash = String(verification.code_hash || "");
+    const providedHash = hashVerificationCode(email, code);
+    if (!expectedHash || expectedHash !== providedHash) {
+      await db.query(
+        `
+          UPDATE email_verification_codes
+          SET attempts = attempts + 1
+          WHERE lower(email) = lower($1)
+        `,
+        [email]
+      );
+      res.status(401).json({ ok: false, error: "Invalid verification code." });
+      return;
+    }
+    const userLookup = await db.query(
+      `
+        SELECT player_id, username, username_key, email, balance, last_seen_at, banned_at, banned_reason
+        FROM users
+        WHERE lower(email) = lower($1)
+        LIMIT 1
+      `,
+      [email]
+    );
+    if (!userLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Account not found for this email." });
+      return;
+    }
+    const user = userLookup.rows[0];
+    if (isBannedTimestamp(user.banned_at)) {
+      const reason = sanitizeBanReason(user.banned_reason);
+      res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+      return;
+    }
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET email_verified_at = $1,
+            last_seen_at = $1
+        WHERE lower(email) = lower($2)
+        RETURNING player_id, username, username_key, email, balance, last_seen_at
+      `,
+      [now, email]
+    );
+    await db.query(
+      `
+        DELETE FROM email_verification_codes
+        WHERE lower(email) = lower($1)
+      `,
+      [email]
+    );
+    req.session.playerId = sanitizePlayerId(updated.rows[0]?.player_id || user.player_id);
+    res.json({
+      ok: true,
+      user: normalizeUserForClient(updated.rows[0] || user)
+    });
+  } catch (error) {
+    console.error("Failed to verify email", error);
+    res.status(500).json({ ok: false, error: "Could not verify email." });
+  }
+});
+
+app.post("/api/auth/resend-verification", async (req, res) => {
+  try {
+    const email = sanitizeEmail(req.body?.email);
+    if (!email) {
+      res.status(400).json({ ok: false, error: "Invalid email address." });
+      return;
+    }
+    const userLookup = await db.query(
+      `
+        SELECT player_id, username, username_key, email, password_hash, balance, banned_at, banned_reason, email_verified_at
+        FROM users
+        WHERE lower(email) = lower($1)
+        LIMIT 1
+      `,
+      [email]
+    );
+    if (!userLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Account not found for this email." });
+      return;
+    }
+    const user = userLookup.rows[0];
+    if (isBannedTimestamp(user.banned_at)) {
+      const reason = sanitizeBanReason(user.banned_reason);
+      res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+      return;
+    }
+    if (Number(user.email_verified_at) > 0) {
+      res.status(409).json({ ok: false, error: "Email is already verified." });
+      return;
+    }
+    await issueEmailVerificationForUser({
+      playerId: user.player_id,
+      username: user.username,
+      usernameKey: user.username_key,
+      email: user.email,
+      passwordHash: user.password_hash,
+      balance: user.balance
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Failed to resend verification email", error);
+    res.status(500).json({ ok: false, error: "Could not resend verification code." });
   }
 });
 
@@ -617,6 +1011,7 @@ app.post("/api/live-wins", async (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid live win payload." });
       return;
     }
+    if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
     const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0
       ? Math.round(multiplierRaw * 100) / 100
       : null;
@@ -666,6 +1061,7 @@ app.post("/api/claims", async (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid player id." });
       return;
     }
+    if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
     if (!pack) {
       res.status(400).json({ ok: false, error: "Invalid package." });
       return;
@@ -804,6 +1200,7 @@ app.post("/api/users/sync", async (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid user sync payload." });
       return;
     }
+    if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
     if (sessionPlayerId && sessionPlayerId !== playerId) {
       res.status(403).json({ ok: false, error: "Session does not match this player." });
       return;
@@ -893,6 +1290,8 @@ app.get("/api/admin/users", async (req, res) => {
           u.email,
           u.balance,
           u.last_seen_at,
+          u.banned_at,
+          u.banned_reason,
           (u.password_hash IS NOT NULL AND u.password_hash <> '') AS has_password,
           COALESCE(claims.total_claims, 0) AS total_claims,
           COALESCE(claims.pending_claims, 0) AS pending_claims,
@@ -1019,10 +1418,9 @@ app.get("/api/admin/devices", async (req, res) => {
     const currentTokenHash = currentToken ? hashAdminDeviceToken(currentToken) : "";
     const result = await db.query(
       `
-        SELECT id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent
+        SELECT id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
         FROM admin_trusted_devices
-        WHERE revoked_at = 0
-          AND token_hash IS NOT NULL
+        WHERE token_hash IS NOT NULL
           AND token_hash <> ''
         ORDER BY created_at DESC, id DESC
       `
@@ -1038,6 +1436,239 @@ app.get("/api/admin/devices", async (req, res) => {
   }
 });
 
+app.post("/api/admin/devices/:id/ban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const deviceId = Number(req.params?.id);
+    if (!Number.isInteger(deviceId) || deviceId <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid device id." });
+      return;
+    }
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE admin_trusted_devices
+        SET revoked_at = $1
+        WHERE id = $2
+          AND revoked_at = 0
+        RETURNING id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+      `,
+      [now, deviceId]
+    );
+    if (!updated.rowCount) {
+      const exists = await db.query("SELECT id FROM admin_trusted_devices WHERE id = $1 LIMIT 1", [deviceId]);
+      if (!exists.rowCount) {
+        res.status(404).json({ ok: false, error: "Device not found." });
+        return;
+      }
+      res.status(409).json({ ok: false, error: "Device is already banned." });
+      return;
+    }
+    res.json({ ok: true, device: mapAdminDeviceRow(updated.rows[0]) });
+  } catch (error) {
+    console.error("Failed to ban trusted device", error);
+    res.status(500).json({ ok: false, error: "Could not ban device." });
+  }
+});
+
+app.post("/api/admin/devices/:id/unban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const deviceId = Number(req.params?.id);
+    if (!Number.isInteger(deviceId) || deviceId <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid device id." });
+      return;
+    }
+    const updated = await db.query(
+      `
+        UPDATE admin_trusted_devices
+        SET revoked_at = 0
+        WHERE id = $1
+          AND revoked_at > 0
+        RETURNING id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+      `,
+      [deviceId]
+    );
+    if (!updated.rowCount) {
+      const exists = await db.query("SELECT id FROM admin_trusted_devices WHERE id = $1 LIMIT 1", [deviceId]);
+      if (!exists.rowCount) {
+        res.status(404).json({ ok: false, error: "Device not found." });
+        return;
+      }
+      res.status(409).json({ ok: false, error: "Device is not banned." });
+      return;
+    }
+    res.json({ ok: true, device: mapAdminDeviceRow(updated.rows[0]) });
+  } catch (error) {
+    console.error("Failed to unban trusted device", error);
+    res.status(500).json({ ok: false, error: "Could not unban device." });
+  }
+});
+
+app.post("/api/admin/devices/:id/remove", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const deviceId = Number(req.params?.id);
+    if (!Number.isInteger(deviceId) || deviceId <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid device id." });
+      return;
+    }
+    const removed = await db.query(
+      `
+        DELETE FROM admin_trusted_devices
+        WHERE id = $1
+        RETURNING id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+      `,
+      [deviceId]
+    );
+    if (!removed.rowCount) {
+      res.status(404).json({ ok: false, error: "Device not found." });
+      return;
+    }
+    res.json({ ok: true, device: mapAdminDeviceRow(removed.rows[0]) });
+  } catch (error) {
+    console.error("Failed to remove trusted device", error);
+    res.status(500).json({ ok: false, error: "Could not remove device." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/ban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const reason = sanitizeBanReason(req.body?.reason);
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET banned_at = $1,
+            banned_reason = $2
+        WHERE player_id = $3
+          AND banned_at = 0
+        RETURNING player_id
+      `,
+      [now, reason, playerId]
+    );
+    if (!updated.rowCount) {
+      const exists = await db.query("SELECT player_id, banned_at FROM users WHERE player_id = $1 LIMIT 1", [playerId]);
+      if (!exists.rowCount) {
+        res.status(404).json({ ok: false, error: "User not found." });
+        return;
+      }
+      res.status(409).json({ ok: false, error: "User is already banned." });
+      return;
+    }
+    await db.query(
+      `
+        DELETE FROM user_sessions
+        WHERE sess::text LIKE $1
+      `,
+      [`%\"playerId\":\"${playerId}\"%`]
+    );
+    res.json({ ok: true, playerId, bannedAt: now, bannedReason: reason });
+  } catch (error) {
+    console.error("Failed to ban user", error);
+    res.status(500).json({ ok: false, error: "Could not ban user." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/unban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET banned_at = 0,
+            banned_reason = ''
+        WHERE player_id = $1
+          AND banned_at > 0
+        RETURNING player_id
+      `,
+      [playerId]
+    );
+    if (!updated.rowCount) {
+      const exists = await db.query("SELECT player_id, banned_at FROM users WHERE player_id = $1 LIMIT 1", [playerId]);
+      if (!exists.rowCount) {
+        res.status(404).json({ ok: false, error: "User not found." });
+        return;
+      }
+      res.status(409).json({ ok: false, error: "User is not banned." });
+      return;
+    }
+    res.json({ ok: true, playerId });
+  } catch (error) {
+    console.error("Failed to unban user", error);
+    res.status(500).json({ ok: false, error: "Could not unban user." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/remove", async (req, res) => {
+  const client = await db.connect();
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    await client.query("BEGIN");
+    await client.query("DELETE FROM claims WHERE player_id = $1", [playerId]);
+    await client.query("DELETE FROM live_wins WHERE player_id = $1", [playerId]);
+    await client.query(
+      `
+        DELETE FROM user_sessions
+        WHERE sess::text LIKE $1
+      `,
+      [`%\"playerId\":\"${playerId}\"%`]
+    );
+    const removedUser = await client.query(
+      `
+        DELETE FROM users
+        WHERE player_id = $1
+        RETURNING player_id, username, email
+      `,
+      [playerId]
+    );
+    if (!removedUser.rowCount) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      removed: {
+        playerId: String(removedUser.rows[0].player_id || ""),
+        username: sanitizeUsername(removedUser.rows[0].username) || "Unknown",
+        email: sanitizeEmail(removedUser.rows[0].email) || ""
+      }
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("Failed to remove user", error);
+    res.status(500).json({ ok: false, error: "Could not remove user." });
+  } finally {
+    client.release();
+  }
+});
+
 app.get("/api/admin/stats", async (req, res) => {
   try {
     const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
@@ -1048,6 +1679,7 @@ app.get("/api/admin/stats", async (req, res) => {
         WITH user_totals AS (
           SELECT
             COUNT(*)::int AS total_users,
+            COUNT(*) FILTER (WHERE banned_at > 0)::int AS banned_users,
             COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int AS users_with_email,
             COUNT(*) FILTER (WHERE password_hash IS NOT NULL AND password_hash <> '')::int AS users_with_password,
             COUNT(*) FILTER (WHERE last_seen_at >= $1)::int AS active_users_24h,
@@ -1067,9 +1699,16 @@ app.get("/api/admin/stats", async (req, res) => {
             COUNT(*) FILTER (WHERE submitted_at >= $1)::int AS live_wins_24h,
             COALESCE(SUM(amount) FILTER (WHERE submitted_at >= $1), 0)::numeric AS live_win_amount_24h
           FROM live_wins
+        ),
+        device_totals AS (
+          SELECT
+            COUNT(*) FILTER (WHERE revoked_at = 0)::int AS trusted_devices_active,
+            COUNT(*) FILTER (WHERE revoked_at > 0)::int AS trusted_devices_banned
+          FROM admin_trusted_devices
         )
         SELECT
           user_totals.total_users,
+          user_totals.banned_users,
           user_totals.users_with_email,
           user_totals.users_with_password,
           user_totals.active_users_24h,
@@ -1079,8 +1718,10 @@ app.get("/api/admin/stats", async (req, res) => {
           claim_totals.approved_claims,
           claim_totals.rejected_claims,
           win_totals.live_wins_24h,
-          win_totals.live_win_amount_24h
-        FROM user_totals, claim_totals, win_totals
+          win_totals.live_win_amount_24h,
+          device_totals.trusted_devices_active,
+          device_totals.trusted_devices_banned
+        FROM user_totals, claim_totals, win_totals, device_totals
       `,
       [dayAgo]
     );
@@ -1089,6 +1730,7 @@ app.get("/api/admin/stats", async (req, res) => {
       ok: true,
       stats: {
         totalUsers: Number(row.total_users) || 0,
+        bannedUsers: Number(row.banned_users) || 0,
         usersWithEmail: Number(row.users_with_email) || 0,
         usersWithPassword: Number(row.users_with_password) || 0,
         activeUsers24h: Number(row.active_users_24h) || 0,
@@ -1098,7 +1740,9 @@ app.get("/api/admin/stats", async (req, res) => {
         approvedClaims: Number(row.approved_claims) || 0,
         rejectedClaims: Number(row.rejected_claims) || 0,
         liveWins24h: Number(row.live_wins_24h) || 0,
-        liveWinAmount24h: Math.round(toNumber(row.live_win_amount_24h) * 100) / 100
+        liveWinAmount24h: Math.round(toNumber(row.live_win_amount_24h) * 100) / 100,
+        trustedDevicesActive: Number(row.trusted_devices_active) || 0,
+        trustedDevicesBanned: Number(row.trusted_devices_banned) || 0
       },
       trustedDevice: adminAccess.device || null
     });
@@ -1116,8 +1760,11 @@ async function ensureSchema() {
       username_key TEXT NOT NULL UNIQUE,
       email TEXT,
       password_hash TEXT,
+      email_verified_at BIGINT NOT NULL DEFAULT 0,
       balance NUMERIC(14,2) NOT NULL DEFAULT 0,
-      last_seen_at BIGINT NOT NULL DEFAULT 0
+      last_seen_at BIGINT NOT NULL DEFAULT 0,
+      banned_at BIGINT NOT NULL DEFAULT 0,
+      banned_reason TEXT NOT NULL DEFAULT ''
     )
   `);
   await db.query(`
@@ -1127,6 +1774,10 @@ async function ensureSchema() {
   await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS password_hash TEXT
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS email_verified_at BIGINT NOT NULL DEFAULT 0
   `);
   await db.query(`
     ALTER TABLE users
@@ -1141,9 +1792,23 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS last_seen_at BIGINT NOT NULL DEFAULT 0
   `);
   await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS banned_at BIGINT NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS banned_reason TEXT NOT NULL DEFAULT ''
+  `);
+  await db.query(`
     UPDATE users
-    SET username_key = lower(username)
+    SET username_key = lower(username),
+        email_verified_at = COALESCE(email_verified_at, 0),
+        banned_at = COALESCE(banned_at, 0),
+        banned_reason = COALESCE(banned_reason, '')
     WHERE username_key IS NULL OR username_key = ''
+       OR email_verified_at IS NULL
+       OR banned_at IS NULL
+       OR banned_reason IS NULL
   `);
   await db.query(`
     CREATE INDEX IF NOT EXISTS users_username_key_idx
@@ -1153,6 +1818,81 @@ async function ensureSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx
     ON users (lower(email))
     WHERE email IS NOT NULL
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS email_verification_codes (
+      email TEXT PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      username_key TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      code_hash TEXT NOT NULL,
+      expires_at BIGINT NOT NULL DEFAULT 0,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL DEFAULT 0,
+      last_sent_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS email TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS username_key TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS password_hash TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS balance NUMERIC(14,2)
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS code_hash TEXT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS expires_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS attempts INTEGER
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS created_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE email_verification_codes
+    ADD COLUMN IF NOT EXISTS last_sent_at BIGINT
+  `);
+  await db.query(`
+    UPDATE email_verification_codes
+    SET username = COALESCE(NULLIF(username, ''), 'Player'),
+        username_key = COALESCE(NULLIF(username_key, ''), lower(COALESCE(NULLIF(username, ''), 'player'))),
+        balance = COALESCE(balance, 0),
+        code_hash = COALESCE(code_hash, ''),
+        expires_at = COALESCE(expires_at, 0),
+        attempts = COALESCE(attempts, 0),
+        created_at = COALESCE(created_at, 0),
+        last_sent_at = COALESCE(last_sent_at, 0)
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS email_verification_codes_email_idx
+    ON email_verification_codes (lower(email))
+    WHERE email IS NOT NULL AND email <> ''
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS admin_trusted_devices (
