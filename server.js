@@ -20,6 +20,7 @@ const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "").trim() || (IS_PROD
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
 const RATE_LIMIT_ENABLED = String(process.env.RATE_LIMIT_ENABLED || "1").trim() !== "0";
+const ALLOW_WEAK_ADMIN_CODE = String(process.env.ALLOW_WEAK_ADMIN_CODE || "0").trim() === "1";
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -32,7 +33,7 @@ if (!ADMIN_CODE) {
 }
 if (IS_PRODUCTION) {
   const normalizedAdminCode = ADMIN_CODE.toLowerCase();
-  if (normalizedAdminCode === "sage1557" || normalizedAdminCode.length < 8) {
+  if (!ALLOW_WEAK_ADMIN_CODE && (normalizedAdminCode === "sage1557" || normalizedAdminCode.length < 8)) {
     throw new Error("Insecure VENMO_ADMIN_CODE. Use a unique production admin code (8+ chars).");
   }
 }
