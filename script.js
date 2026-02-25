@@ -500,6 +500,10 @@ async function submitFirstLaunchUsername() {
         method: "POST",
         body: { username, password }
       });
+      const sessionReady = await ensureAuthSessionReady(payload?.user?.playerId || "");
+      if (!sessionReady) {
+        throw new Error("Login session was not saved. Open the live site and try again.");
+      }
       const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true });
       if (!ok) {
         setFirstLaunchUsernameError("Login succeeded but profile data was invalid.");
@@ -539,6 +543,10 @@ async function submitFirstLaunchUsername() {
         balance: roundCurrency(cash)
       }
     });
+    const sessionReady = await ensureAuthSessionReady(payload?.user?.playerId || "");
+    if (!sessionReady) {
+      throw new Error("Account created, but login session was not saved. Open the live site and login.");
+    }
     const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: false });
     if (!ok) {
       setFirstLaunchUsernameError("Account created but profile data was invalid.");
@@ -5034,6 +5042,8 @@ function getVenmoPackLabel(packId) {
 
 async function venmoApiRequest(path, options = {}) {
   const config = { ...options };
+  const skipFallback = config.skipFallback === true;
+  delete config.skipFallback;
   if (!config.credentials) config.credentials = "include";
   if (config.body && typeof config.body !== "string") {
     config.body = JSON.stringify(config.body);
@@ -5043,7 +5053,16 @@ async function venmoApiRequest(path, options = {}) {
     };
   }
   const urlsToTry = [path];
-  if (typeof path === "string" && !/^https?:\/\//i.test(path)) {
+  const isRelativePath = typeof path === "string" && !/^https?:\/\//i.test(path);
+  const isApiPath = isRelativePath && String(path).startsWith("/api/");
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+  const isFileProtocol = window.location.protocol === "file:";
+  const allowFallback =
+    !skipFallback &&
+    isRelativePath &&
+    (!isApiPath || isFileProtocol || isLocalHost);
+  if (allowFallback) {
     urlsToTry.push(`${VENMO_API_FALLBACK_BASE}${path}`);
   }
   let lastError = new Error("Request failed");
@@ -5065,6 +5084,21 @@ async function venmoApiRequest(path, options = {}) {
     }
   }
   throw lastError;
+}
+
+async function ensureAuthSessionReady(expectedPlayerId = "") {
+  const safeExpectedId = String(expectedPlayerId || "").trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const sessionPayload = await venmoApiRequest("/api/auth/session", { skipFallback: true });
+      const sessionPlayerId = String(sessionPayload?.user?.playerId || "").trim();
+      if (sessionPayload?.authenticated && (!safeExpectedId || sessionPlayerId === safeExpectedId)) {
+        return true;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return false;
 }
 
 function getAdminDeviceToken() {
@@ -5092,6 +5126,26 @@ function buildAdminApiUrl(path) {
   return String(path || "");
 }
 
+function isAdminLoginRequiredError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("login required for admin access") ||
+    message.includes("session account not found") ||
+    message.includes("please login again")
+  );
+}
+
+function handleAdminLoginRequired(error) {
+  if (!isAdminLoginRequiredError(error)) return false;
+  venmoAdminUnlocked = false;
+  setHiddenAdminStatus("Login required. Sign in with username/password, then unlock admin.", true);
+  try {
+    setFirstLaunchAuthMode("login");
+    showFirstLaunchUsernameOverlay();
+  } catch {}
+  return true;
+}
+
 async function trustCurrentAdminDevice({ silent = false } = {}) {
   if (!venmoAdminAuthCode) return false;
   try {
@@ -5108,8 +5162,11 @@ async function trustCurrentAdminDevice({ silent = false } = {}) {
     }
     return true;
   } catch (error) {
+    const handledLoginRequired = handleAdminLoginRequired(error);
     if (!silent) {
-      setHiddenAdminStatus(String(error?.message || "Could not trust this device."), true);
+      if (!handledLoginRequired) {
+        setHiddenAdminStatus(String(error?.message || "Could not trust this device."), true);
+      }
     }
     return false;
   }
@@ -5166,7 +5223,8 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLock
     renderHiddenAdminUsers();
     renderHiddenAdminStats();
     renderHiddenAdminDevices();
-    if (!silent) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
+    const handledLoginRequired = handleAdminLoginRequired(error);
+    if (!silent && !handledLoginRequired) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
     return false;
   }

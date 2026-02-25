@@ -18,6 +18,7 @@ const baseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
 const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "Sage1557");
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -499,8 +500,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      sameSite: IS_PRODUCTION ? "none" : "lax",
+      secure: IS_PRODUCTION,
       maxAge: 1000 * 60 * 60 * 24 * 30
     }
   })
