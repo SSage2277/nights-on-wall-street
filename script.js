@@ -1524,16 +1524,16 @@ const ACHIEVEMENTS = [
     check: () => achievementState.stats.newsSeen >= 25
   },
   {
-    id: "loan-taker",
-    title: "Bank Client",
-    description: "Take out a loan.",
-    check: () => achievementState.stats.loansTaken >= 1
+    id: "casino-win-10",
+    title: "Casino Regular",
+    description: "Win 10 casino rounds.",
+    check: () => achievementState.stats.casinoWins >= 10
   },
   {
-    id: "debt-free",
-    title: "Debt Free",
-    description: "Repay all debt after taking a loan.",
-    check: () => achievementState.stats.loansTaken >= 1 && loanPrincipal + loanInterest <= 0
+    id: "casino-win-50",
+    title: "Casino Grinder",
+    description: "Win 50 casino rounds.",
+    check: () => achievementState.stats.casinoWins >= 50
   },
   {
     id: "casino-win",
@@ -1554,6 +1554,7 @@ const ACHIEVEMENTS = [
     check: () => getNetWorth() >= 5000
   }
 ];
+const BANK_ACHIEVEMENT_CATEGORY = "Casino Mastery";
 
 function formatAchievementRewardBundle(reward, rewardKey = "") {
   if (!reward || typeof reward !== "object") return "";
@@ -1601,7 +1602,7 @@ function getAllAchievementsForSidebar() {
       id: `bank-achievement-${mission.id}`,
       title: mission.name,
       description: rewardText ? `${mission.description} Reward: ${rewardText}` : mission.description,
-      category: "Bank / Loan",
+      category: BANK_ACHIEVEMENT_CATEGORY,
       bankSortIndex: BANK_ACHIEVEMENT_ORDER_INDEX.has(mission.id)
         ? BANK_ACHIEVEMENT_ORDER_INDEX.get(mission.id)
         : 9999,
@@ -1625,15 +1626,12 @@ function getTradingAchievementProgressMeta(achievementId) {
       return { current: achievementState.stats.steps, goal: 250 };
     case "news-25":
       return { current: achievementState.stats.newsSeen, goal: 25 };
-    case "loan-taker":
-      return { current: achievementState.stats.loansTaken, goal: 1 };
-    case "debt-free": {
-      const hasLoan = achievementState.stats.loansTaken >= 1;
-      const debtCleared = getTotalDebt() <= 0;
-      return { current: hasLoan ? (debtCleared ? 2 : 1) : 0, goal: 2 };
-    }
     case "casino-win":
       return { current: achievementState.stats.casinoWins, goal: 1 };
+    case "casino-win-10":
+      return { current: achievementState.stats.casinoWins, goal: 10 };
+    case "casino-win-50":
+      return { current: achievementState.stats.casinoWins, goal: 50 };
     case "net-2k":
       return { current: netWorth, goal: 2000 };
     case "net-5k":
@@ -1648,7 +1646,7 @@ function getAchievementProgressMeta(achievement) {
   let current = 0;
   let goal = 1;
 
-  if (achievement.category === "Bank / Loan" && achievement.id.startsWith("bank-achievement-")) {
+  if (achievement.category === BANK_ACHIEVEMENT_CATEGORY && achievement.id.startsWith("bank-achievement-")) {
     const missionId = achievement.id.replace("bank-achievement-", "");
     const mission = typeof BANK_MISSION_DEF_MAP !== "undefined" ? BANK_MISSION_DEF_MAP.get(missionId) : null;
     if (mission) {
@@ -1708,7 +1706,7 @@ function renderAchievements() {
 
   const fragment = document.createDocumentFragment();
   const allAchievements = getAllAchievementsForSidebar();
-  const categories = ["Trading", "Bank / Loan"];
+  const categories = ["Trading", BANK_ACHIEVEMENT_CATEGORY];
 
   categories.forEach((category) => {
     const entries = allAchievements
@@ -1718,10 +1716,28 @@ function renderAchievements() {
         const unlockedB = Boolean(achievementState.unlocked[b.id]);
         if (unlockedA !== unlockedB) return unlockedA ? 1 : -1;
 
-        if (category === "Bank / Loan") {
-          const idxA = Number.isFinite(a.bankSortIndex) ? a.bankSortIndex : 9999;
-          const idxB = Number.isFinite(b.bankSortIndex) ? b.bankSortIndex : 9999;
-          if (idxA !== idxB) return idxA - idxB;
+        if (category === BANK_ACHIEVEMENT_CATEGORY) {
+          const metaA = getAchievementProgressMeta(a);
+          const metaB = getAchievementProgressMeta(b);
+          if (Math.abs(metaA.ratio - metaB.ratio) > 0.0001) return metaB.ratio - metaA.ratio;
+
+          const missionIdA = a.id.replace("bank-achievement-", "");
+          const missionIdB = b.id.replace("bank-achievement-", "");
+          const missionA = BANK_MISSION_DEF_MAP.get(missionIdA);
+          const missionB = BANK_MISSION_DEF_MAP.get(missionIdB);
+          const easyRankA =
+            missionA && Number(missionA.goal) === 1 && BANK_CASINO_GAME_EASY_ORDER_INDEX.has(String(missionA.casinoGameKey || ""))
+              ? BANK_CASINO_GAME_EASY_ORDER_INDEX.get(String(missionA.casinoGameKey || ""))
+              : Number.POSITIVE_INFINITY;
+          const easyRankB =
+            missionB && Number(missionB.goal) === 1 && BANK_CASINO_GAME_EASY_ORDER_INDEX.has(String(missionB.casinoGameKey || ""))
+              ? BANK_CASINO_GAME_EASY_ORDER_INDEX.get(String(missionB.casinoGameKey || ""))
+              : Number.POSITIVE_INFINITY;
+          if (easyRankA !== easyRankB) return easyRankA - easyRankB;
+
+          const goalA = Number(missionA?.goal) || 1;
+          const goalB = Number(missionB?.goal) || 1;
+          if (goalA !== goalB) return goalA - goalB;
           return a.title.localeCompare(b.title);
         }
 
@@ -1787,7 +1803,7 @@ function updateAchievements(currentNet) {
 loadAchievements();
 
 const PHONE_STORAGE_KEY = "casino_phone_v1";
-const BANK_MISSION_STORAGE_KEY = "casino_bank_missions_v1";
+const BANK_MISSION_STORAGE_KEY = "casino_bank_missions_v2";
 const phoneState = {
   cash: roundCurrency(cash),
   shares: Math.max(0, Math.floor(Number(shares) || 0)),
@@ -1831,57 +1847,89 @@ const TOTAL_RESET_STORAGE_KEYS = [
 ];
 const TOTAL_RESET_STORAGE_PREFIXES = ["casino_", "trading_", "horse_race_", "dragon_tower_"];
 
-const BANK_MISSION_DEFS = [
-  { id: "bank-1", name: "Loan Rookie", description: "Take out 1 loan.", goal: 1, reward: { cash: 50, xp: 25 } },
-  { id: "bank-2", name: "Loan Regular", description: "Take out 5 total loans (lifetime).", goal: 5, reward: { cash: 150, xp: 60 } },
-  { id: "bank-3", name: "Loan Veteran", description: "Take out 15 total loans (lifetime).", goal: 15, reward: { cash: 400, xp: 150 } },
-  { id: "bank-4", name: "Frequent Borrower", description: "Take out 30 total loans.", goal: 30, reward: { cash: 800, xp: 250 } },
-  { id: "bank-5", name: "Big Borrower I", description: "Take a loan >= $250.", goal: 1, reward: { cash: 120, xp: 40 } },
-  { id: "bank-6", name: "Big Borrower II", description: "Take a loan >= $1,000.", goal: 1, reward: { cash: 350, xp: 120 } },
-  { id: "bank-7", name: "Big Borrower III", description: "Take a loan >= $5,000.", goal: 1, reward: { cash: 1200, xp: 350 } },
-  { id: "bank-8", name: "Small & Safe", description: "Take a loan <= $100.", goal: 1, reward: { cash: 40, xp: 20 } },
-  { id: "bank-9", name: "Immediate Regret", description: "Repay a loan within 5 market steps.", goal: 1, reward: { cash: 90, xp: 40 } },
-  { id: "bank-10", name: "Quick Repay", description: "Repay a loan within 10 market steps.", goal: 1, reward: { cash: 120, xp: 55 } },
-  { id: "bank-11", name: "Patient Repay", description: "Stay in debt for 100 market steps then repay.", goal: 1, reward: { cash: 250, xp: 120 } },
-  { id: "bank-12", name: "Long Haul", description: "Stay in debt for 300 market steps then repay.", goal: 1, reward: { cash: 600, xp: 240 } },
-  { id: "bank-13", name: "Debt Timer I", description: "Accumulate 50 total debt steps.", goal: 50, reward: { cash: 80, xp: 35 } },
-  { id: "bank-14", name: "Debt Timer II", description: "Accumulate 250 total debt steps.", goal: 250, reward: { cash: 200, xp: 90 } },
-  { id: "bank-15", name: "Debt Timer III", description: "Accumulate 1,000 total debt steps.", goal: 1000, reward: { cash: 650, xp: 260 } },
-  { id: "bank-16", name: "Debt Free Streak", description: "Be debt-free for 200 consecutive market steps.", goal: 200, reward: { cash: 200, xp: 100 } },
-  { id: "bank-17", name: "Back to Debt", description: "Become debt-free, then take another loan later.", goal: 1, reward: { cash: 100, xp: 50 } },
-  { id: "bank-18", name: "Clean Slate x3", description: "Repay debt to zero 3 separate times.", goal: 3, reward: { cash: 220, xp: 110 } },
-  { id: "bank-19", name: "Clean Slate x10", description: "Repay debt to zero 10 separate times.", goal: 10, reward: { cash: 700, xp: 300 } },
-  { id: "bank-20", name: "Close Call", description: "Repay a loan when cash is under $50.", goal: 1, reward: { cash: 150, xp: 80 } },
-  { id: "bank-21", name: "Broke & Borrowing", description: "While in debt, drop cash under $100 at least once.", goal: 1, reward: { cash: 140, xp: 70 } },
-  { id: "bank-22", name: "Debt Cap Warning", description: "Attempt to take a loan while blocked by debt cap.", goal: 1, reward: { cash: 60, xp: 30 } },
-  { id: "bank-23", name: "Cap Survivor", description: "Hit the debt cap (or within 95% of cap) and later return to debt=0.", goal: 1, reward: { cash: 500, xp: 220 } },
-  { id: "bank-24", name: "Borrow for Trading", description: "Take a loan, then close any trade afterward.", goal: 1, reward: { cash: 120, xp: 60 } },
-  { id: "bank-25", name: "Borrow to Profit", description: "Take a loan, then achieve +$250 trading profit before repaying.", goal: 1, reward: { cash: 300, xp: 140 } },
-  { id: "bank-26", name: "Borrow to Win", description: "Take a loan, then win in any casino game before repaying.", goal: 1, reward: { cash: 180, xp: 90 } },
-  { id: "bank-27", name: "Responsible Borrowing", description: "Take 3 loans total with no debt-cap blocked attempts.", goal: 3, reward: { cash: 160, xp: 80 } },
-  { id: "bank-28", name: "Repaid in Red", description: "Repay a loan while net worth is below starting value.", goal: 1, reward: { cash: 220, xp: 110 } },
-  { id: "bank-29", name: "Interest Pain I", description: "Pay $100 total in interest (lifetime).", goal: 100, reward: { cash: 200, xp: 100 } },
-  { id: "bank-30", name: "Interest Pain II", description: "Pay $500 total in interest.", goal: 500, reward: { cash: 600, xp: 220 } },
-  { id: "bank-31", name: "Interest Pain III", description: "Pay $2,000 total in interest.", goal: 2000, reward: { cash: 1800, xp: 500 } },
-  { id: "bank-32", name: "Borrower’s Balance", description: "Keep cash above $1,000 for 100 steps while in debt.", goal: 100, reward: { cash: 300, xp: 140 } },
-  { id: "bank-33", name: "Debt Discipline", description: "While in debt, place no casino bets for 100 steps.", goal: 100, reward: { cash: 240, xp: 120 } },
-  { id: "bank-34", name: "Emergency Fund", description: "While in debt, build cash back up to $2,000+.", goal: 1, reward: { cash: 450, xp: 200 } },
-  { id: "bank-35", name: "Payback Punch", description: "Repay a loan immediately after a casino loss.", goal: 1, reward: { cash: 180, xp: 90 } },
-  { id: "bank-36", name: "One-Two Repay", description: "Take a loan, then repay as your very next bank action.", goal: 1, reward: { cash: 120, xp: 60 } },
-  { id: "bank-37", name: "Debt Dodger", description: "Go 1,000 market steps without taking a loan.", goal: 1000, reward: { cash: 700, xp: 300 } },
-  { id: "bank-38", name: "Bank Power User", description: "Open the bank app 50 times.", goal: 50, reward: { cash: 150, xp: 70 } },
-  { id: "bank-39", name: "Mission Banker", description: "Claim 10 bank achievement rewards in Missions.", goal: 10, reward: { cash: 300, xp: 150, tokens: 1 } },
-  { id: "bank-40", name: "Bank Legend", description: "Claim all bank achievement rewards.", goal: 40, reward: { cash: 2000, xp: 1000, tokens: 5 } }
+const BANK_CASINO_GAME_DEFS = [
+  { key: "blackjack", label: "Blackjack" },
+  { key: "slots", label: "Slots" },
+  { key: "dragontower", label: "Dragon Tower" },
+  { key: "horseracing", label: "Horse Racing" },
+  { key: "dice", label: "Dice" },
+  { key: "slide", label: "Slide" },
+  { key: "crash", label: "Crash" },
+  { key: "mines", label: "Mines" },
+  { key: "crossyroad", label: "Crossy" },
+  { key: "roulette", label: "Roulette" },
+  { key: "diamonds", label: "Diamonds" },
+  { key: "plinko", label: "Plinko" },
+  { key: "hilo", label: "Hi-Lo" },
+  { key: "keno", label: "Keno" }
 ];
+const BANK_CASINO_GAME_EASY_ORDER = [
+  "slots",
+  "roulette",
+  "blackjack",
+  "dice",
+  "plinko",
+  "keno",
+  "hilo",
+  "dragontower",
+  "horseracing",
+  "crash",
+  "slide",
+  "diamonds",
+  "mines",
+  "crossyroad"
+];
+const BANK_CASINO_GAME_EASY_ORDER_INDEX = new Map(
+  BANK_CASINO_GAME_EASY_ORDER.map((key, index) => [key, index])
+);
+const BANK_CASINO_TIER_DEFS = [
+  { suffix: "Starter", wins: 1, reward: { cash: 50, xp: 25 } },
+  { suffix: "Regular", wins: 5, reward: { cash: 140, xp: 60 } },
+  { suffix: "Grinder", wins: 15, reward: { cash: 320, xp: 130 } },
+  { suffix: "Streak", wins: 35, reward: { cash: 680, xp: 260 } },
+  { suffix: "Legend", wins: 75, reward: { cash: 1300, xp: 480 } }
+];
+const BANK_MISSION_GAME_TIERS = new Map();
+const BANK_MISSION_DEFS = [];
+
+BANK_CASINO_GAME_DEFS.forEach((gameDef) => {
+  const tierMissionIds = [];
+  BANK_CASINO_TIER_DEFS.forEach((tierDef, tierIndex) => {
+    const missionId = `bank-casino-${gameDef.key}-t${tierIndex + 1}`;
+    tierMissionIds.push(missionId);
+    BANK_MISSION_DEFS.push({
+      id: missionId,
+      name: `${gameDef.label} ${tierDef.suffix}`,
+      description: `Win ${tierDef.wins} ${gameDef.label} rounds.`,
+      goal: tierDef.wins,
+      reward: { ...tierDef.reward },
+      casinoGameKey: gameDef.key
+    });
+  });
+  BANK_MISSION_GAME_TIERS.set(gameDef.key, tierMissionIds);
+});
+
+const BANK_MISSION_BANKER_ID = "bank-casino-mission-banker";
+const BANK_MISSION_LEGEND_ID = "bank-casino-legend";
+const BANK_MISSION_CORE_COUNT = BANK_MISSION_DEFS.length;
+
+BANK_MISSION_DEFS.push({
+  id: BANK_MISSION_BANKER_ID,
+  name: "Mission Banker",
+  description: `Claim 20 casino achievement rewards in Missions.`,
+  goal: 20,
+  reward: { cash: 1200, xp: 500, tokens: 2 }
+});
+BANK_MISSION_DEFS.push({
+  id: BANK_MISSION_LEGEND_ID,
+  name: "Casino Legend",
+  description: "Claim all casino game achievement rewards.",
+  goal: BANK_MISSION_CORE_COUNT + 1,
+  reward: { cash: 4000, xp: 1800, tokens: 6 }
+});
+
 const BANK_MISSION_DEF_MAP = new Map(BANK_MISSION_DEFS.map((mission) => [mission.id, mission]));
-const BANK_ACHIEVEMENT_ORDER = [
-  "bank-1", "bank-8", "bank-5", "bank-9", "bank-36", "bank-10", "bank-24", "bank-17", "bank-22",
-  "bank-26", "bank-21", "bank-20", "bank-28", "bank-2", "bank-18", "bank-27", "bank-38", "bank-13",
-  "bank-6", "bank-25", "bank-11", "bank-35", "bank-32", "bank-33", "bank-14", "bank-29",
-  "bank-34", "bank-3", "bank-12", "bank-30", "bank-19", "bank-7",
-  "bank-4", "bank-23", "bank-15", "bank-31",
-  "bank-39", "bank-40", "bank-16", "bank-37"
-];
+const BANK_ACHIEVEMENT_ORDER = BANK_MISSION_DEFS.map((mission) => mission.id);
 const BANK_ACHIEVEMENT_ORDER_INDEX = new Map(BANK_ACHIEVEMENT_ORDER.map((id, index) => [id, index]));
 const MISSION_MAX_LEVEL = 50;
 const MISSION_LEVEL_MILESTONES = {
@@ -1921,7 +1969,8 @@ function createDefaultBankMissionState() {
       sessionEmergencyFund: false,
       sessionActive: false,
       pendingCasinoLoss: false,
-      casinoBetSinceLastStep: false
+      casinoBetSinceLastStep: false,
+      casinoWinsByGame: Object.fromEntries(BANK_CASINO_GAME_DEFS.map((gameDef) => [gameDef.key, 0]))
     }
   };
 }
@@ -2490,6 +2539,58 @@ function clearTotalProgressStorage() {
   } catch (error) {}
 }
 
+function resetAchievementStateInMemory() {
+  achievementState.unlocked = {};
+  achievementState.stats = {
+    steps: 0,
+    buys: 0,
+    sells: 0,
+    newsSeen: 0,
+    loansTaken: 0,
+    casinoWins: 0,
+    peakNet: BASE_NET_WORTH,
+    peakCash: BASE_NET_WORTH
+  };
+}
+
+function resetBankMissionStateInMemory() {
+  const defaults = createDefaultBankMissionState();
+  bankMissionState.progress = { ...defaults.progress };
+  bankMissionState.completed = { ...defaults.completed };
+  bankMissionState.claimed = { ...defaults.claimed };
+  bankMissionState.counters = {
+    ...defaults.counters,
+    casinoWinsByGame: { ...defaults.counters.casinoWinsByGame }
+  };
+}
+
+function resetPhoneProgressStateInMemory() {
+  phoneState.unread = 0;
+  phoneState.notifications = [];
+  phoneState.bankHistory = [];
+  phoneState.casinoProfit = 0;
+  phoneState.autoSavingsPercent = 0;
+  phoneState.settings = {
+    animations: true,
+    popupSeconds: 2.2,
+    autoRoundLimit: 0,
+    uiScale: 100
+  };
+  phoneState.missionsClaimed = {};
+  phoneState.missionXp = 0;
+  phoneState.missionTokens = 0;
+  phoneState.missionLevelMilestonesClaimed = {};
+  phoneState.vip = {
+    active: false,
+    purchasedAt: 0,
+    lastWeeklyBonusAt: 0
+  };
+  phoneState.autoRoundCounters = {
+    slots: 0,
+    roulette: 0
+  };
+}
+
 function applyProgressResetState() {
   cash = roundCurrency(BASE_NET_WORTH);
   shares = 0;
@@ -2497,11 +2598,19 @@ function applyProgressResetState() {
   savingsBalance = 0;
   autoSavingsPercent = 0;
 
+  resetPhoneProgressStateInMemory();
+  resetBankMissionStateInMemory();
+  resetAchievementStateInMemory();
+
   phoneState.cash = cash;
   phoneState.shares = shares;
   phoneState.avgCost = avgCost;
   phoneState.savingsBalance = savingsBalance;
   phoneState.autoSavingsPercent = autoSavingsPercent;
+  bankMissionLastCashSnapshot = cash;
+  pokerLastSessionProfit = 0;
+  refreshPokerSessionMeta();
+  renderAchievements();
 }
 
 async function syncResetBalanceToServer() {
@@ -3250,6 +3359,12 @@ function loadBankMissionState() {
         bankMissionState.counters[key] = Number.isFinite(next) ? next : defaultValue;
       } else if (typeof defaultValue === "boolean") {
         bankMissionState.counters[key] = Boolean(bankMissionState.counters[key]);
+      } else if (defaultValue && typeof defaultValue === "object") {
+        const currentObject = bankMissionState.counters[key];
+        bankMissionState.counters[key] =
+          currentObject && typeof currentObject === "object"
+            ? { ...defaultValue, ...currentObject }
+            : { ...defaultValue };
       } else {
         bankMissionState.counters[key] = bankMissionState.counters[key] ?? defaultValue;
       }
@@ -3309,33 +3424,27 @@ function syncBankMissionDerivedProgress() {
   const counters = bankMissionState.counters;
   let dirty = false;
 
-  dirty = setBankMissionProgress("bank-1", counters.loansTakenLifetime) || dirty;
-  dirty = setBankMissionProgress("bank-2", counters.loansTakenLifetime) || dirty;
-  dirty = setBankMissionProgress("bank-3", counters.loansTakenLifetime) || dirty;
-  dirty = setBankMissionProgress("bank-4", counters.loansTakenLifetime) || dirty;
-  dirty = setBankMissionProgress("bank-13", counters.debtStepsTotal) || dirty;
-  dirty = setBankMissionProgress("bank-14", counters.debtStepsTotal) || dirty;
-  dirty = setBankMissionProgress("bank-15", counters.debtStepsTotal) || dirty;
-  dirty = setBankMissionProgress("bank-16", counters.debtFreeStepStreak) || dirty;
-  dirty = setBankMissionProgress("bank-18", counters.debtClears) || dirty;
-  dirty = setBankMissionProgress("bank-19", counters.debtClears) || dirty;
-  dirty = setBankMissionProgress("bank-27", counters.blockedLoanAttempts === 0 ? counters.loansTakenLifetime : 0, { allowDecrease: true }) || dirty;
-  dirty = setBankMissionProgress("bank-29", counters.interestPaidTotal) || dirty;
-  dirty = setBankMissionProgress("bank-30", counters.interestPaidTotal) || dirty;
-  dirty = setBankMissionProgress("bank-31", counters.interestPaidTotal) || dirty;
-  dirty = setBankMissionProgress("bank-37", counters.noLoanStepStreak) || dirty;
-  dirty = setBankMissionProgress("bank-38", counters.bankAppOpens) || dirty;
+  BANK_CASINO_GAME_DEFS.forEach((gameDef) => {
+    const missionIds = BANK_MISSION_GAME_TIERS.get(gameDef.key) || [];
+    const wins = Math.max(0, Math.floor(Number(counters.casinoWinsByGame?.[gameDef.key]) || 0));
+    missionIds.forEach((missionId) => {
+      dirty = setBankMissionProgress(missionId, wins) || dirty;
+    });
+  });
 
-  const claimedForBanker = getBankClaimedCount({ exclude: ["bank-39", "bank-40"] });
-  dirty = setBankMissionProgress("bank-39", claimedForBanker) || dirty;
+  const claimedForBanker = getBankClaimedCount({ exclude: [BANK_MISSION_BANKER_ID, BANK_MISSION_LEGEND_ID] });
+  dirty = setBankMissionProgress(BANK_MISSION_BANKER_ID, claimedForBanker) || dirty;
 
-  const claimedForLegend = getBankClaimedCount({ exclude: ["bank-40"] });
-  const legendProgress = isBankMissionClaimed("bank-40") || isBankMissionCompleted("bank-40")
-    ? BANK_MISSION_DEF_MAP.get("bank-40").goal
-    : Math.min(BANK_MISSION_DEF_MAP.get("bank-40").goal, claimedForLegend);
-  dirty = setBankMissionProgress("bank-40", legendProgress, { allowDecrease: true }) || dirty;
-  if (claimedForLegend >= BANK_MISSION_DEFS.length - 1) {
-    dirty = completeBankMission("bank-40") || dirty;
+  const legendMission = BANK_MISSION_DEF_MAP.get(BANK_MISSION_LEGEND_ID);
+  if (legendMission) {
+    const claimedForLegend = getBankClaimedCount({ exclude: [BANK_MISSION_LEGEND_ID] });
+    const legendProgress = isBankMissionClaimed(BANK_MISSION_LEGEND_ID) || isBankMissionCompleted(BANK_MISSION_LEGEND_ID)
+      ? legendMission.goal
+      : Math.min(legendMission.goal, claimedForLegend);
+    dirty = setBankMissionProgress(BANK_MISSION_LEGEND_ID, legendProgress, { allowDecrease: true }) || dirty;
+    if (claimedForLegend >= legendMission.goal) {
+      dirty = completeBankMission(BANK_MISSION_LEGEND_ID) || dirty;
+    }
   }
 
   return dirty;
@@ -3623,18 +3732,37 @@ function renderPhoneBankMissions() {
     saveBankMissionState();
   }
 
+  const getStatusSortRank = (status) => {
+    if (status === "claimable") return 0;
+    if (status === "progress") return 1;
+    if (status === "locked") return 2;
+    return 3;
+  };
+  const getSingleWinEasyRank = (mission) => {
+    if (!mission || Number(mission.goal) !== 1) return Number.POSITIVE_INFINITY;
+    const gameKey = String(mission.casinoGameKey || "");
+    if (!BANK_CASINO_GAME_EASY_ORDER_INDEX.has(gameKey)) return Number.POSITIVE_INFINITY;
+    return BANK_CASINO_GAME_EASY_ORDER_INDEX.get(gameKey);
+  };
+
   const cards = BANK_MISSION_DEFS.map((mission, index) => {
     const progress = getBankMissionProgress(mission.id);
     const status = getBankMissionStatus(mission);
     const ratio = mission.goal > 0 ? progress / mission.goal : 0;
-    const sortWeight =
-      status === "claimable" ? 0 :
-      status === "progress" ? 1 :
-      status === "locked" ? 2 : 3;
-    return { mission, progress, status, ratio, sortWeight, index };
+    return {
+      mission,
+      progress,
+      status,
+      ratio,
+      statusRank: getStatusSortRank(status),
+      singleWinEasyRank: getSingleWinEasyRank(mission),
+      index
+    };
   }).sort((a, b) => {
-    if (a.sortWeight !== b.sortWeight) return a.sortWeight - b.sortWeight;
-    if (a.sortWeight === 1 && a.ratio !== b.ratio) return b.ratio - a.ratio;
+    if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+    if (Math.abs(a.ratio - b.ratio) > 0.0001) return b.ratio - a.ratio;
+    if (a.singleWinEasyRank !== b.singleWinEasyRank) return a.singleWinEasyRank - b.singleWinEasyRank;
+    if (a.mission.goal !== b.mission.goal) return a.mission.goal - b.mission.goal;
     return a.index - b.index;
   });
 
@@ -3663,7 +3791,6 @@ function renderPhoneBankMissions() {
       ` : ""}
       <div class="reward-line">Reward: ${getMissionRewardText(mission.reward, mission.id)}</div>
       <div class="row">
-        <span>Achievement #${mission.id.replace("bank-", "")}</span>
         <button type="button" ${status !== "claimable" ? "disabled" : ""}>${status === "claimed" ? "Claimed" : "Claim"}</button>
       </div>
     `;
@@ -3832,13 +3959,49 @@ function trackBankMissionTradeClosed(realizedProfit) {
   saveBankMissionState();
 }
 
-function trackBankMissionCasinoWin(amount) {
+function normalizeBankCasinoGameKey(rawKey) {
+  const normalized = String(rawKey || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  const aliases = {
+    blackjack: "blackjack",
+    slots: "slots",
+    dragontower: "dragontower",
+    dragon: "dragontower",
+    horseracing: "horseracing",
+    horse: "horseracing",
+    dice: "dice",
+    slide: "slide",
+    crash: "crash",
+    mines: "mines",
+    crossyroad: "crossyroad",
+    crossy: "crossyroad",
+    roulette: "roulette",
+    diamonds: "diamonds",
+    plinko: "plinko",
+    hilo: "hilo",
+    keno: "keno"
+  };
+  const canonical = aliases[normalized];
+  return canonical && BANK_MISSION_GAME_TIERS.has(canonical) ? canonical : null;
+}
+
+function trackBankMissionCasinoWin(amount, sourceKey = activeCasinoGameKey) {
   const counters = bankMissionState.counters;
+  if (!(Number(amount) > 0)) return;
+
+  const normalizedGameKey = normalizeBankCasinoGameKey(sourceKey);
+  if (normalizedGameKey) {
+    const currentWins = Math.max(0, Math.floor(Number(counters.casinoWinsByGame?.[normalizedGameKey]) || 0));
+    counters.casinoWinsByGame[normalizedGameKey] = currentWins + 1;
+  }
+
   if (counters.sessionActive && getTotalDebt() > 0 && Number(amount) > 0) {
     counters.sessionCasinoWin = true;
-    completeBankMission("bank-26");
   }
   counters.pendingCasinoLoss = false;
+  syncBankMissionDerivedProgress();
   saveBankMissionState();
 }
 
@@ -4459,7 +4622,7 @@ function showCasinoWinPopup(amountOrOptions, fallbackMultiplier = null) {
   amountEl.textContent = formatCasinoWinMoney(winAmount);
   popup.classList.toggle("big-win", isBigWin);
   phoneState.casinoProfit = roundCurrency(phoneState.casinoProfit + winAmount);
-  trackBankMissionCasinoWin(winAmount);
+  trackBankMissionCasinoWin(winAmount, options.source || activeCasinoGameKey);
   refreshPhoneCasinoApp();
   savePhoneState();
   pushPhoneNotification("good", `Casino win: +${formatCurrency(winAmount)}`);
@@ -11083,11 +11246,8 @@ function loadCasinoPoker() {
       return;
     }
 
-    const toCall = highestBet - p.bet;
     el.controls.classList.remove("hidden");
-    el.btnCheck.classList.toggle("hidden", toCall > 0);
-    el.btnCall.classList.toggle("hidden", toCall === 0);
-    if (toCall > 0) el.amtCall.innerText = `$${toCall}`;
+    updateHeroActionControls(p);
   }
 
   function nextPhase() {
@@ -11120,6 +11280,47 @@ function loadCasinoPoker() {
     return Math.max(blinds.big, 10);
   }
 
+  function getRaiseMeta(player, raiseByRaw, minRaiseOverride = null) {
+    const minRaise = minRaiseOverride ?? getMinRaise();
+    let raiseBy = Number.parseInt(raiseByRaw, 10);
+    if (Number.isNaN(raiseBy) || raiseBy < minRaise) raiseBy = minRaise;
+
+    const toCall = Math.max(0, highestBet - player.bet);
+    const targetBet = highestBet + raiseBy;
+    const added = Math.max(0, targetBet - player.bet);
+    const shortBy = Math.max(0, added - player.bank);
+    const maxRaiseBy = Math.max(0, Math.floor(player.bank + player.bet - highestBet));
+
+    return {
+      minRaise,
+      raiseBy,
+      toCall,
+      targetBet,
+      added,
+      shortBy,
+      maxRaiseBy,
+      canRaise: added <= player.bank
+    };
+  }
+
+  function updateHeroActionControls(player) {
+    if (!player || player.isAi) return;
+    const toCall = Math.max(0, highestBet - player.bet);
+    el.btnCheck.classList.toggle("hidden", toCall > 0);
+    el.btnCall.classList.toggle("hidden", toCall === 0);
+    el.amtCall.innerText = toCall > 0 ? `$${toCall}` : "";
+
+    const raiseMeta = getRaiseMeta(player, el.inputRaise.value);
+    if (raiseMeta.canRaise) {
+      el.btnRaise.textContent = `Raise To $${raiseMeta.targetBet}`;
+      el.btnRaise.title = "";
+      return;
+    }
+
+    el.btnRaise.textContent = `Raise To $${raiseMeta.targetBet} (Need $${Math.ceil(raiseMeta.shortBy)} more)`;
+    el.btnRaise.title = `Not enough chips to raise. Max raise by: $${raiseMeta.maxRaiseBy}.`;
+  }
+
   function registerBetPulse() {
     el.potWrap.classList.remove("live");
     void el.potWrap.offsetWidth;
@@ -11134,7 +11335,6 @@ function loadCasinoPoker() {
   function act(action) {
     const p = seats[turnIndex];
     if (!p) return;
-    actionsTaken += 1;
 
     if (action === "Raise") {
       let raiseBy = parseInt(el.inputRaise.value, 10);
@@ -11143,15 +11343,22 @@ function loadCasinoPoker() {
         raiseBy = Math.max(minRaise, Math.floor(Math.max(blinds.big, pot * 0.35)));
         raiseBy = Math.ceil(raiseBy / 5) * 5;
       }
-      if (Number.isNaN(raiseBy) || raiseBy < minRaise) raiseBy = minRaise;
-      const total = highestBet + raiseBy;
-      const added = total - p.bet;
+      const raiseMeta = getRaiseMeta(p, raiseBy, minRaise);
+      if (!p.isAi && !raiseMeta.canRaise) {
+        el.status.innerText = `Not enough chips to raise. Need $${Math.ceil(raiseMeta.shortBy)} more.`;
+        say(p.id, "Can't raise");
+        addLog(`${p.name} tried to raise without enough chips.`);
+        updateHeroActionControls(p);
+        return;
+      }
+      raiseBy = raiseMeta.raiseBy;
+      const added = raiseMeta.added;
       if (p.bank >= added) {
         p.bank -= added;
         p.bet += added;
         pot += added;
         highestBet = p.bet;
-        actionsTaken = 1;
+        actionsTaken = 0;
         say(p.id, `Raise $${raiseBy}`);
         addLog(`${p.name} raises $${raiseBy}`);
         registerBetPulse();
@@ -11159,6 +11366,8 @@ function loadCasinoPoker() {
         action = "Call";
       }
     }
+
+    actionsTaken += 1;
 
     if (action === "Fold") {
       p.folded = true;
@@ -11480,6 +11689,11 @@ function loadCasinoPoker() {
   bind(el.btnCheck, "click", () => act("Check"));
   bind(el.btnCall, "click", () => act("Call"));
   bind(el.btnRaise, "click", () => act("Raise"));
+  bind(el.inputRaise, "input", () => {
+    const p = seats[turnIndex];
+    if (!p || p.isAi) return;
+    updateHeroActionControls(p);
+  });
   bind(el.btnSplitPot, "click", () => resolvePendingTieDecision("split"));
   bind(el.btnShowdownPot, "click", () => resolvePendingTieDecision("showdown"));
 
@@ -11576,6 +11790,11 @@ function loadAppPoker() {
   pk.btnCheck.onclick = () => act("Check");
   pk.btnCall.onclick = () => act("Call");
   pk.btnRaise.onclick = () => act("Raise");
+  pk.inputRaise.oninput = () => {
+    const current = p_seats[p_turnIndex];
+    if (!current || current.isAi) return;
+    updateLegacyPokerActionControls(current);
+  };
 
   initTableLayout();
   initPokerGame();
@@ -11814,6 +12033,30 @@ function findNextActivePlayer() {
   } while (!p_seats[p_turnIndex] || !p_seats[p_turnIndex].inHand || p_seats[p_turnIndex].folded);
 }
 
+function updateLegacyPokerActionControls(player) {
+  if (!pk || !player || player.isAi) return;
+  const toCall = Math.max(0, p_highestBet - player.bet);
+  pk.btnCheck.style.display = toCall > 0 ? "none" : "block";
+  pk.btnCall.style.display = toCall === 0 ? "none" : "block";
+  pk.amtCall.innerText = toCall > 0 ? `$${toCall}` : "";
+
+  let raiseBy = Number.parseInt(pk.inputRaise.value, 10);
+  if (Number.isNaN(raiseBy) || raiseBy < 10) raiseBy = 10;
+  const targetBet = p_highestBet + raiseBy;
+  const added = Math.max(0, targetBet - player.bet);
+  const shortBy = Math.max(0, added - player.bank);
+  const maxRaiseBy = Math.max(0, Math.floor(player.bank + player.bet - p_highestBet));
+
+  if (shortBy > 0) {
+    pk.btnRaise.textContent = `Raise To $${targetBet} (Need $${Math.ceil(shortBy)} more)`;
+    pk.btnRaise.title = `Not enough chips to raise. Max raise by: $${maxRaiseBy}.`;
+  } else {
+    pk.btnRaise.textContent = `Raise To $${targetBet}`;
+    pk.btnRaise.title = "";
+  }
+  pk.btnRaise.disabled = p_playerRaiseUsedThisRound;
+}
+
 function nextTurn() {
   const activeInHand = p_seats.filter((p) => p && p.inHand && !p.folded);
   if (activeInHand.length === 1) {
@@ -11839,13 +12082,9 @@ function nextTurn() {
       clearTimeout(p_aiTimeoutId);
       p_aiTimeoutId = null;
     }
-    const toCall = p_highestBet - p.bet;
     pk.controls.classList.remove("poker-hidden");
     positionPokerControlsNearUser();
-    pk.btnCheck.style.display = toCall > 0 ? "none" : "block";
-    pk.btnCall.style.display = toCall === 0 ? "none" : "block";
-    pk.btnRaise.disabled = p_playerRaiseUsedThisRound;
-    if (toCall > 0) pk.amtCall.innerText = `$${toCall}`;
+    updateLegacyPokerActionControls(p);
   }
 }
 
@@ -11892,6 +12131,15 @@ function act(action) {
 
     const total = p_highestBet + val;
     const added = total - p.bet;
+
+    if (!p.isAi && p.bank < added) {
+      const shortBy = Math.ceil(added - p.bank);
+      pk.status.innerText = `Not enough chips to raise. Need $${shortBy} more.`;
+      say(p.id, "Can't raise");
+      updateLegacyPokerActionControls(p);
+      p_actionsTaken = Math.max(0, p_actionsTaken - 1);
+      return;
+    }
 
     if (p.bank >= added) {
       p.bank -= added;
@@ -12515,8 +12763,7 @@ function loadCasinoPlinkoNeon() {
   function renderMultipliers() {
     if (!multipliersEl || !oddsTooltip) return;
     multipliersEl.innerHTML = "";
-    multipliersEl.style.display = "flex";
-    multipliersEl.style.justifyContent = "flex-start";
+    multipliersEl.style.display = "grid";
 
     const weights = getWeightsForRows(rows);
     const totalWeight = weights.reduce((sum, value) => sum + value, 0);
@@ -12544,8 +12791,8 @@ function loadCasinoPlinkoNeon() {
     const scaledLeftBoundary = leftBoundary * displayScale;
     multipliersEl.style.left = `${canvasOffsetX + scaledLeftBoundary}px`;
     multipliersEl.style.width = `${scaledDx * bins}px`;
+    multipliersEl.style.gridTemplateColumns = `repeat(${bins}, minmax(0, 1fr))`;
 
-    const multiplierWidth = Math.max(20, scaledDx - 2);
     const baseHeight = rows <= 10 ? 34 : rows <= 14 ? 32 : 30;
     const multiplierHeight = baseHeight * Math.max(1, Math.min(1.45, displayScale));
     const baseFontPx = rows <= 10 ? 11 : rows <= 14 ? 10 : 8;
@@ -12558,7 +12805,7 @@ function loadCasinoPlinkoNeon() {
       div.textContent = `${multiplier}x`;
       div.style.background = getColor(multiplier);
       div.style.margin = "0";
-      div.style.width = `${multiplierWidth}px`;
+      div.style.width = "100%";
       div.style.height = `${multiplierHeight}px`;
       div.style.fontSize = `${multiplierFontPx}px`;
 
@@ -14518,6 +14765,29 @@ function loadDragonTower() {
                   <option value="either">After win or loss</option>
                 </select>
               </div>
+
+              <div class="field">
+                <label for="autoPickMode">Auto Pick</label>
+                <select id="autoPickMode">
+                  <option value="random" selected>Random (AI chooses)</option>
+                  <option value="lane-1">Always tile 1</option>
+                  <option value="lane-2">Always tile 2</option>
+                  <option value="lane-3">Always tile 3</option>
+                  <option value="lane-4">Always tile 4</option>
+                  <option value="pattern">Pattern</option>
+                </select>
+              </div>
+
+              <div class="field" id="autoPickPatternWrap" hidden>
+                <label for="autoPickPattern">Pattern (1-4)</label>
+                <input
+                  type="text"
+                  id="autoPickPattern"
+                  value="1,2,3,4"
+                  placeholder="Example: 1,4,2,3"
+                  autocomplete="off"
+                />
+              </div>
             </div>
           </div>
 
@@ -14611,6 +14881,9 @@ function loadDragonTower() {
   const autoRoundsEl = container.querySelector("#autoRounds");
   const autoSpeedEl = container.querySelector("#autoSpeed");
   const autoStopEl = container.querySelector("#autoStop");
+  const autoPickModeEl = container.querySelector("#autoPickMode");
+  const autoPickPatternWrapEl = container.querySelector("#autoPickPatternWrap");
+  const autoPickPatternEl = container.querySelector("#autoPickPattern");
 
   function save() {
     localStorage.setItem("dragon_tower_high", String(highScore));
@@ -14681,7 +14954,36 @@ function loadDragonTower() {
     if (autoRoundsEl) autoRoundsEl.disabled = !allow;
     if (autoSpeedEl) autoSpeedEl.disabled = !allow;
     if (autoStopEl) autoStopEl.disabled = !allow;
+    if (autoPickModeEl) autoPickModeEl.disabled = !allow;
+    if (autoPickPatternEl) autoPickPatternEl.disabled = !allow || (autoPickModeEl?.value || "random") !== "pattern";
     setTabsEnabled(allow);
+  }
+
+  function syncAutoPickUi() {
+    const mode = autoPickModeEl?.value || "random";
+    const showPattern = mode === "pattern";
+    if (autoPickPatternWrapEl) autoPickPatternWrapEl.hidden = !showPattern;
+    if (autoPickPatternEl) autoPickPatternEl.disabled = !showPattern || autoRunning;
+  }
+
+  function parseAutoPattern() {
+    const raw = String(autoPickPatternEl?.value || "");
+    const values = raw
+      .split(/[^\d]+/g)
+      .map((token) => Number.parseInt(token, 10))
+      .filter((value) => Number.isInteger(value) && value >= 1 && value <= TILES)
+      .map((value) => value - 1);
+    return values;
+  }
+
+  function getAutoPickColumn(config, pickIndex) {
+    if (config.pickMode === "lane" && Number.isInteger(config.fixedCol)) {
+      return config.fixedCol;
+    }
+    if (config.pickMode === "pattern" && Array.isArray(config.pattern) && config.pattern.length > 0) {
+      return config.pattern[pickIndex % config.pattern.length];
+    }
+    return Math.floor(Math.random() * TILES);
   }
 
   function syncButtons() {
@@ -14729,16 +15031,33 @@ function loadDragonTower() {
     const rounds = Math.max(0, parseInt(autoRoundsEl?.value || "0", 10) || 0);
     const speed = autoSpeedEl?.value || "normal";
     const stop = autoStopEl?.value || "never";
+    const pickModeRaw = autoPickModeEl?.value || "random";
+    const pattern = pickModeRaw === "pattern" ? parseAutoPattern() : [];
 
     let delay = 420;
     if (speed === "fast") delay = 260;
     if (speed === "slow") delay = 650;
 
+    let pickMode = "random";
+    let fixedCol = null;
+    if (pickModeRaw.startsWith("lane-")) {
+      const col = Number.parseInt(pickModeRaw.split("-")[1] || "", 10) - 1;
+      if (Number.isInteger(col) && col >= 0 && col < TILES) {
+        pickMode = "lane";
+        fixedCol = col;
+      }
+    } else if (pickModeRaw === "pattern" && pattern.length > 0) {
+      pickMode = "pattern";
+    }
+
     return {
       cashoutRow,
       rounds,
       delay,
-      stop
+      stop,
+      pickMode,
+      fixedCol,
+      pattern
     };
   }
 
@@ -14766,6 +15085,7 @@ function loadDragonTower() {
         break;
       }
 
+      let roundPickIndex = 0;
       while (!destroyed && autoRunning && gameActive) {
         if (runId !== autoRunId) return;
 
@@ -14781,7 +15101,8 @@ function loadDragonTower() {
         }
 
         await sleep(config.delay);
-        const col = Math.floor(Math.random() * TILES);
+        const col = getAutoPickColumn(config, roundPickIndex);
+        roundPickIndex += 1;
         clickTile(currentRow, col);
       }
 
@@ -15096,6 +15417,12 @@ function loadDragonTower() {
     });
   });
 
+  if (autoPickModeEl) {
+    autoPickModeEl.addEventListener("change", () => {
+      syncAutoPickUi();
+    });
+  }
+
   container.querySelectorAll("[data-chip]").forEach((button) => {
     button.addEventListener("click", () => {
       const factor = parseFloat(button.getAttribute("data-chip") || "1");
@@ -15111,6 +15438,7 @@ function loadDragonTower() {
   });
 
   init();
+  syncAutoPickUi();
 
   activeCasinoCleanup = () => {
     destroyed = true;
