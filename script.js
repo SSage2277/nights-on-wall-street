@@ -5835,6 +5835,8 @@ let venmoClaimPollTimer = null;
 const venmoLocallyCreditedClaimIds = new Set();
 let userProfileSyncTimer = null;
 let lastUserProfileSyncAt = 0;
+let userProfileSyncSequence = 0;
+let userProfileSyncLatestStartedSequence = 0;
 let hiddenAdminPanelOpen = false;
 let hiddenAdminLivePollTimer = null;
 let hiddenAdminLivePollTick = 0;
@@ -6055,6 +6057,8 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
   const now = Date.now();
   if (!force && now - lastUserProfileSyncAt < USER_PROFILE_SYNC_INTERVAL_MS) return false;
   lastUserProfileSyncAt = now;
+  const syncSequence = ++userProfileSyncSequence;
+  userProfileSyncLatestStartedSequence = syncSequence;
   try {
     const payload = await venmoApiRequest("/api/users/sync", {
       method: "POST",
@@ -6068,7 +6072,8 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
         autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
       }
     });
-    if (payload?.user) {
+    const isLatestSync = syncSequence === userProfileSyncLatestStartedSequence;
+    if (force && payload?.user && isLatestSync) {
       const beforeSig = getPersistProfileSignature();
       applyServerPortfolioSnapshot(payload.user, { useServerBalance: true });
       const afterSig = getPersistProfileSignature();
@@ -6080,7 +6085,8 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
     return true;
   } catch (error) {
     const serverUser = error?.details?.user;
-    if (serverUser) {
+    const isLatestSync = syncSequence === userProfileSyncLatestStartedSequence;
+    if (serverUser && isLatestSync) {
       const beforeSig = getPersistProfileSignature();
       applyServerPortfolioSnapshot(serverUser, { useServerBalance: true });
       const afterSig = getPersistProfileSignature();
