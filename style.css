@@ -988,6 +988,130 @@ body {
   border-bottom-color: rgba(183, 237, 255, 0.9);
 }
 
+.first-play-tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 16580;
+  display: block;
+  background: rgba(3, 8, 13, 0.9);
+  backdrop-filter: blur(4px);
+}
+
+.first-play-tutorial-overlay.hidden {
+  display: none;
+}
+
+.first-play-tutorial-spotlight {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 150px;
+  height: 54px;
+  border-radius: 12px;
+  border: 2px solid rgba(122, 221, 255, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(16, 112, 145, 0.55),
+    0 0 22px rgba(72, 201, 255, 0.6),
+    inset 0 0 22px rgba(72, 201, 255, 0.22);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: left 180ms ease, top 180ms ease, width 180ms ease, height 180ms ease, opacity 140ms ease;
+}
+
+.first-play-tutorial-spotlight.hidden {
+  opacity: 0;
+}
+
+.first-play-tutorial-card {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 30px));
+  border-radius: 14px;
+  border: 1px solid #31516a;
+  background: linear-gradient(180deg, #13293b, #0e1f2d);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.56);
+  padding: 18px;
+  text-align: left;
+  transition: left 180ms ease, top 180ms ease, transform 180ms ease;
+}
+
+.first-play-tutorial-step-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid #2d5874;
+  background: rgba(8, 25, 38, 0.82);
+  color: #8fbedf;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.first-play-tutorial-card h2 {
+  margin: 10px 0 4px;
+  color: #ecf8ff;
+  font-size: 1.25rem;
+}
+
+.first-play-tutorial-card h3 {
+  margin: 0 0 10px;
+  color: #cbebff;
+  font-size: 1rem;
+}
+
+.first-play-tutorial-card p {
+  margin: 0;
+  color: #b5cee2;
+  font-size: 0.94rem;
+  line-height: 1.5;
+  min-height: 82px;
+}
+
+.first-play-tutorial-nav {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.first-play-tutorial-nav button {
+  flex: 1;
+  width: auto;
+  margin-top: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #38c9ff;
+  background: linear-gradient(180deg, #0f7da5, #0a5d7d);
+  color: #effbff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.first-play-tutorial-nav .first-play-tutorial-secondary {
+  border-color: #35546c;
+  background: #0c1e2c;
+  color: #cfe6f7;
+}
+
+.tutorial-target-highlight {
+  position: relative;
+  z-index: 16590 !important;
+  outline: 2px solid rgba(122, 221, 255, 0.95);
+  outline-offset: 3px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(16, 112, 145, 0.46), 0 0 20px rgba(72, 201, 255, 0.4);
+}
+
+.first-play-tutorial-nav .first-play-tutorial-secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .hidden-admin-trigger {
   position: fixed;
   top: 6px;

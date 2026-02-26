@@ -872,8 +872,41 @@ function setFirstPlayTutorialHighlightTarget(target) {
   firstPlayTutorialHighlightedTarget = target;
 }
 
+function ensureFirstPlayTutorialDom() {
+  let overlay = document.getElementById("firstPlayTutorialOverlay");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "firstPlayTutorialOverlay";
+  overlay.className = "first-play-tutorial-overlay hidden";
+  overlay.setAttribute("aria-hidden", "true");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:16580;display:none;background:rgba(3,8,13,.9);backdrop-filter:blur(4px);";
+  overlay.innerHTML = `
+    <div id="firstPlayTutorialSpotlight" class="first-play-tutorial-spotlight hidden" aria-hidden="true" style="position:fixed;left:50%;top:50%;width:150px;height:54px;border-radius:12px;border:2px solid rgba(122,221,255,.95);box-shadow:0 0 0 2px rgba(16,112,145,.55),0 0 22px rgba(72,201,255,.6),inset 0 0 22px rgba(72,201,255,.22);transform:translate(-50%,-50%);pointer-events:none;"></div>
+    <div class="first-play-tutorial-card" role="dialog" aria-modal="true" aria-labelledby="firstPlayTutorialTitle" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,calc(100vw - 30px));border-radius:14px;border:1px solid #31516a;background:linear-gradient(180deg,#13293b,#0e1f2d);box-shadow:0 18px 44px rgba(0,0,0,.56);padding:18px;text-align:left;color:#ecf8ff;">
+      <div class="first-play-tutorial-step-meta" id="firstPlayTutorialStepMeta" style="display:inline-flex;min-height:22px;padding:3px 10px;border-radius:999px;border:1px solid #2d5874;background:rgba(8,25,38,.82);color:#8fbedf;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">Step 1 of ${FIRST_PLAY_TUTORIAL_STEPS.length}</div>
+      <h2 id="firstPlayTutorialTitle" style="margin:10px 0 4px;color:#ecf8ff;font-size:1.25rem;">Quick Start Tutorial</h2>
+      <h3 id="firstPlayTutorialStepTitle" style="margin:0 0 10px;color:#cbebff;font-size:1rem;">Welcome</h3>
+      <p id="firstPlayTutorialStepBody" style="margin:0;color:#b5cee2;font-size:.94rem;line-height:1.5;min-height:82px;">This quick walkthrough shows the main controls before you start playing.</p>
+      <div class="first-play-tutorial-nav" style="margin-top:16px;display:flex;gap:10px;">
+        <button id="firstPlayTutorialSkipBtn" class="first-play-tutorial-secondary" type="button" style="flex:1;padding:10px;border-radius:8px;border:1px solid #35546c;background:#0c1e2c;color:#cfe6f7;font-weight:700;cursor:pointer;">Skip</button>
+        <button id="firstPlayTutorialBackBtn" class="first-play-tutorial-secondary" type="button" style="flex:1;padding:10px;border-radius:8px;border:1px solid #35546c;background:#0c1e2c;color:#cfe6f7;font-weight:700;cursor:pointer;">Back</button>
+        <button id="firstPlayTutorialNextBtn" type="button" style="flex:1;padding:10px;border-radius:8px;border:1px solid #38c9ff;background:linear-gradient(180deg,#0f7da5,#0a5d7d);color:#effbff;font-weight:700;cursor:pointer;">Next</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function setFirstPlayTutorialOverlayVisible(overlay, visible) {
+  if (!overlay) return;
+  overlay.classList.toggle("hidden", !visible);
+  overlay.setAttribute("aria-hidden", visible ? "false" : "true");
+  overlay.style.display = visible ? "block" : "none";
+}
+
 function positionFirstPlayTutorialUi() {
-  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const overlay = ensureFirstPlayTutorialDom();
   const card = overlay?.querySelector(".first-play-tutorial-card");
   const spotlight = document.getElementById("firstPlayTutorialSpotlight");
   if (!overlay || !card || !spotlight || overlay.classList.contains("hidden")) return;
@@ -951,11 +984,10 @@ function renderFirstPlayTutorialStep() {
 }
 
 function hideFirstPlayTutorialOverlay({ markSeen = true } = {}) {
-  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const overlay = ensureFirstPlayTutorialDom();
   const spotlight = document.getElementById("firstPlayTutorialSpotlight");
   if (!overlay) return;
-  overlay.classList.add("hidden");
-  overlay.setAttribute("aria-hidden", "true");
+  setFirstPlayTutorialOverlayVisible(overlay, false);
   if (spotlight) {
     spotlight.classList.add("hidden");
     spotlight.style.left = "";
@@ -988,7 +1020,7 @@ function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}
     if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
     if (typeof updateTradingUsernameBadge === "function") updateTradingUsernameBadge();
   }
-  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const overlay = ensureFirstPlayTutorialDom();
   const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
   if (!overlay || !nextBtn) return;
   const tutorialKey = getFirstPlayTutorialKey({ playerId, scope });
@@ -996,8 +1028,7 @@ function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}
   firstPlayTutorialCurrentKey = tutorialKey;
   firstPlayTutorialStepIndex = 0;
   renderFirstPlayTutorialStep();
-  overlay.classList.remove("hidden");
-  overlay.setAttribute("aria-hidden", "false");
+  setFirstPlayTutorialOverlayVisible(overlay, true);
   setTimeout(() => {
     positionFirstPlayTutorialUi();
     nextBtn.focus();
@@ -1005,7 +1036,7 @@ function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}
 }
 
 function initFirstPlayTutorial() {
-  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const overlay = ensureFirstPlayTutorialDom();
   const skipBtn = document.getElementById("firstPlayTutorialSkipBtn");
   const backBtn = document.getElementById("firstPlayTutorialBackBtn");
   const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
