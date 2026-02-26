@@ -110,6 +110,7 @@ let antiTamperClearStreak = 0;
 let antiTamperOverlayEl = null;
 let antiTamperPresentationReady = false;
 let antiTamperScanArmedUntil = 0;
+const ANTI_TAMPER_ARM_MS = 45000;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -511,6 +512,12 @@ function detectLikelyDevtoolsOpen() {
   return (widthGap > 280 && widthRatio > 0.22) || (heightGap > 220 && heightRatio > 0.2);
 }
 
+function armAntiTamperScan(durationMs = ANTI_TAMPER_ARM_MS) {
+  const ms = Math.max(1000, Number(durationMs) || ANTI_TAMPER_ARM_MS);
+  const until = Date.now() + ms;
+  antiTamperScanArmedUntil = Math.max(antiTamperScanArmedUntil, until);
+}
+
 function initAntiTamperGuards() {
   if (IS_PHONE_EMBED_MODE || antiTamperGuardsInitialized) return;
   antiTamperGuardsInitialized = true;
@@ -521,7 +528,7 @@ function initAntiTamperGuards() {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-    antiTamperScanArmedUntil = Date.now() + 45000;
+    armAntiTamperScan(ANTI_TAMPER_ARM_MS);
     pushAntiTamperNotice("Developer shortcut blocked.");
   };
   window.addEventListener("keydown", blockShortcut, true);
@@ -530,10 +537,29 @@ function initAntiTamperGuards() {
   const blockContextMenu = (event) => {
     event.preventDefault();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    armAntiTamperScan(15000);
     pushAntiTamperNotice("Right-click is disabled.");
   };
   window.addEventListener("contextmenu", blockContextMenu, true);
   document.addEventListener("contextmenu", blockContextMenu, true);
+
+  let lastWidthGap = Math.abs(window.outerWidth - window.innerWidth);
+  let lastHeightGap = Math.abs(window.outerHeight - window.innerHeight);
+  window.addEventListener("resize", () => {
+    const widthGap = Math.abs(window.outerWidth - window.innerWidth);
+    const heightGap = Math.abs(window.outerHeight - window.innerHeight);
+    const widthJump = Math.abs(widthGap - lastWidthGap);
+    const heightJump = Math.abs(heightGap - lastHeightGap);
+    if (widthJump > 80 || heightJump > 80 || detectLikelyDevtoolsOpen()) {
+      armAntiTamperScan(ANTI_TAMPER_ARM_MS);
+    }
+    lastWidthGap = widthGap;
+    lastHeightGap = heightGap;
+  });
+  window.addEventListener("focus", () => {
+    armAntiTamperScan(7000);
+  });
+  armAntiTamperScan(7000);
 
   antiTamperDevtoolsTimer = window.setInterval(() => {
     if (Date.now() > antiTamperScanArmedUntil) {
