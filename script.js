@@ -101,6 +101,10 @@ let authSessionLikelyAuthenticated = false;
 let authSessionWatchdogTimer = null;
 let authSessionWatchdogBusy = false;
 let bannedOverlayActive = false;
+let antiTamperGuardsInitialized = false;
+let antiTamperLastNoticeAt = 0;
+let antiTamperDevtoolsOpen = false;
+let antiTamperDevtoolsTimer = null;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -415,6 +419,55 @@ function hideBannedOverlay() {
   bannedOverlayActive = false;
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
+}
+
+function pushAntiTamperNotice(message) {
+  const now = Date.now();
+  if (now - antiTamperLastNoticeAt < 1600) return;
+  antiTamperLastNoticeAt = now;
+  try {
+    setBankMessage(String(message || "Action blocked."));
+  } catch {}
+}
+
+function isBlockedDevtoolsShortcut(event) {
+  const key = String(event?.key || "").toLowerCase();
+  const hasPrimary = event?.ctrlKey === true || event?.metaKey === true;
+  if (key === "f12") return true;
+  if (hasPrimary && event?.shiftKey === true && ["i", "j", "c", "k"].includes(key)) return true;
+  if (hasPrimary && event?.altKey === true && ["i", "j", "c", "k"].includes(key)) return true;
+  if (hasPrimary && key === "u") return true;
+  return false;
+}
+
+function initAntiTamperGuards() {
+  if (IS_PHONE_EMBED_MODE || antiTamperGuardsInitialized) return;
+  antiTamperGuardsInitialized = true;
+
+  document.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    pushAntiTamperNotice("Right-click is disabled.");
+  }, { capture: true });
+
+  document.addEventListener("keydown", (event) => {
+    if (!isBlockedDevtoolsShortcut(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    pushAntiTamperNotice("Developer shortcut blocked.");
+  }, true);
+
+  antiTamperDevtoolsTimer = window.setInterval(() => {
+    const widthGap = Math.abs(window.outerWidth - window.innerWidth);
+    const heightGap = Math.abs(window.outerHeight - window.innerHeight);
+    const likelyOpen = widthGap > 170 || heightGap > 170;
+    if (likelyOpen && !antiTamperDevtoolsOpen) {
+      antiTamperDevtoolsOpen = true;
+      if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
+      pushAntiTamperNotice("Developer tools detected.");
+    } else if (!likelyOpen) {
+      antiTamperDevtoolsOpen = false;
+    }
+  }, 1200);
 }
 
 async function pollAuthSessionWatchdog() {
@@ -10274,6 +10327,7 @@ function renderBlackjack(options = {}) {
 loadPhoneState();
 bankMissionLastCashSnapshot = cash;
 refreshPokerSessionMeta();
+initAntiTamperGuards();
 initTradingUsernameBadge();
 bindPersistenceFlushHandlers();
 initFirstLaunchUsernameSetup();
