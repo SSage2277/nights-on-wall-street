@@ -72,6 +72,7 @@ const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
   "username_setup_done"
 ]);
 const GUEST_MODE_STORAGE_KEY = "nows_guest_mode_v1";
+const FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY = "nows_first_play_tutorial_seen_v1";
 const ADMIN_DEVICE_TOKEN_STORAGE_KEY = "nows_admin_device_token_v1";
 const ADMIN_DEVICE_LABEL_STORAGE_KEY = "nows_admin_device_label_v1";
 const LOANS_ENABLED = false;
@@ -96,6 +97,8 @@ let playerUsername = "";
 let usernameGateActive = false;
 let firstLaunchAuthMode = "register";
 let firstLaunchAuthBusy = false;
+let firstPlayTutorialCurrentKey = "";
+let firstPlayTutorialStepIndex = 0;
 let tradingLogoutBusy = false;
 let authSessionLikelyAuthenticated = false;
 let authSessionWatchdogTimer = null;
@@ -114,6 +117,24 @@ const ANTI_TAMPER_ARM_MS = 45000;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
+const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
+  {
+    title: "Trading Floor",
+    body: "Buy low, sell high, and watch your cash in the top right. Your balance now saves to your account."
+  },
+  {
+    title: "Phone Apps",
+    body: "Use the phone for Banking, Casino games, and Claims. Casino and leaderboard data are live only when online."
+  },
+  {
+    title: "Account Safety",
+    body: "Use a strong password and log out from the username badge when done on shared devices."
+  },
+  {
+    title: "You're Ready",
+    body: "That’s it. Build your balance, track your rank, and have fun."
+  }
+]);
 
 function getHighBetRigChance(betAmount, intensity = 1) {
   const bet = Number(betAmount);
@@ -225,6 +246,43 @@ function setGuestModeEnabled(enabled) {
       localStorage.removeItem(GUEST_MODE_STORAGE_KEY);
     }
   } catch {}
+}
+
+function loadFirstPlayTutorialSeenMap() {
+  try {
+    const raw = localStorage.getItem(FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveFirstPlayTutorialSeenMap(mapValue) {
+  try {
+    localStorage.setItem(FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY, JSON.stringify(mapValue));
+  } catch {}
+}
+
+function getFirstPlayTutorialKey({ playerId = "", scope = "account" } = {}) {
+  const normalizedPlayerId = String(playerId || "").trim();
+  if (!normalizedPlayerId) return "";
+  return `${scope === "guest" ? "guest" : "account"}:${normalizedPlayerId}`;
+}
+
+function hasSeenFirstPlayTutorial(tutorialKey) {
+  if (!tutorialKey) return true;
+  const seenMap = loadFirstPlayTutorialSeenMap();
+  return Boolean(seenMap[tutorialKey]);
+}
+
+function markFirstPlayTutorialSeen(tutorialKey) {
+  if (!tutorialKey) return;
+  const seenMap = loadFirstPlayTutorialSeenMap();
+  seenMap[tutorialKey] = Date.now();
+  saveFirstPlayTutorialSeenMap(seenMap);
 }
 
 function generateAdminDeviceToken() {
@@ -705,6 +763,7 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
   hideBannedOverlay();
   startAuthSessionWatchdog();
   hideFirstLaunchUsernameOverlay();
+  showFirstPlayTutorialIfNeeded({ playerId, scope: "account" });
   setFirstLaunchUsernameError("");
   if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
   if (typeof updateUI === "function") updateUI();
@@ -769,6 +828,73 @@ function hideFirstLaunchUsernameOverlay() {
   if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
 }
 
+function renderFirstPlayTutorialStep() {
+  const titleEl = document.getElementById("firstPlayTutorialStepTitle");
+  const bodyEl = document.getElementById("firstPlayTutorialStepBody");
+  const metaEl = document.getElementById("firstPlayTutorialStepMeta");
+  const backBtn = document.getElementById("firstPlayTutorialBackBtn");
+  const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
+  if (!titleEl || !bodyEl || !metaEl || !backBtn || !nextBtn) return;
+  const lastIndex = FIRST_PLAY_TUTORIAL_STEPS.length - 1;
+  const safeIndex = Math.max(0, Math.min(firstPlayTutorialStepIndex, lastIndex));
+  firstPlayTutorialStepIndex = safeIndex;
+  const step = FIRST_PLAY_TUTORIAL_STEPS[safeIndex] || FIRST_PLAY_TUTORIAL_STEPS[0];
+  titleEl.textContent = step?.title || "Tutorial";
+  bodyEl.textContent = step?.body || "";
+  metaEl.textContent = `Step ${safeIndex + 1} of ${FIRST_PLAY_TUTORIAL_STEPS.length}`;
+  backBtn.disabled = safeIndex === 0;
+  nextBtn.textContent = safeIndex >= lastIndex ? "Start Playing" : "Next";
+}
+
+function hideFirstPlayTutorialOverlay({ markSeen = true } = {}) {
+  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+  if (markSeen && firstPlayTutorialCurrentKey) {
+    markFirstPlayTutorialSeen(firstPlayTutorialCurrentKey);
+  }
+  firstPlayTutorialCurrentKey = "";
+  firstPlayTutorialStepIndex = 0;
+}
+
+function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}) {
+  if (IS_PHONE_EMBED_MODE) return;
+  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
+  if (!overlay || !nextBtn) return;
+  const tutorialKey = getFirstPlayTutorialKey({ playerId, scope });
+  if (!tutorialKey || hasSeenFirstPlayTutorial(tutorialKey)) return;
+  firstPlayTutorialCurrentKey = tutorialKey;
+  firstPlayTutorialStepIndex = 0;
+  renderFirstPlayTutorialStep();
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  setTimeout(() => {
+    nextBtn.focus();
+  }, 0);
+}
+
+function initFirstPlayTutorial() {
+  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const backBtn = document.getElementById("firstPlayTutorialBackBtn");
+  const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
+  if (!overlay || !backBtn || !nextBtn) return;
+  backBtn.addEventListener("click", () => {
+    firstPlayTutorialStepIndex = Math.max(0, firstPlayTutorialStepIndex - 1);
+    renderFirstPlayTutorialStep();
+  });
+  nextBtn.addEventListener("click", () => {
+    const lastIndex = FIRST_PLAY_TUTORIAL_STEPS.length - 1;
+    if (firstPlayTutorialStepIndex >= lastIndex) {
+      hideFirstPlayTutorialOverlay({ markSeen: true });
+      return;
+    }
+    firstPlayTutorialStepIndex += 1;
+    renderFirstPlayTutorialStep();
+  });
+}
+
 async function submitFirstLaunchUsername() {
   if (firstLaunchAuthBusy) return false;
   const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
@@ -795,6 +921,7 @@ async function submitFirstLaunchUsername() {
       hideFirstLaunchUsernameOverlay();
       setFirstLaunchUsernameError("");
       if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
+      showFirstPlayTutorialIfNeeded({ playerId: venmoClaimPlayerId, scope: "guest" });
       if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
       if (typeof updateUI === "function") updateUI();
       return true;
@@ -942,6 +1069,7 @@ async function clearLocalAccountOnDevice() {
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
+    hideFirstPlayTutorialOverlay({ markSeen: false });
     setFirstLaunchAuthMode("register");
     const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
     const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
@@ -1455,6 +1583,7 @@ async function logoutFromTradingBadge() {
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
+    hideFirstPlayTutorialOverlay({ markSeen: false });
     if (hiddenAdminPanelOpen) closeHiddenAdminPanel();
     setFirstLaunchAuthMode("login");
     showFirstLaunchUsernameOverlay();
@@ -11374,6 +11503,7 @@ refreshPokerSessionMeta();
 initAntiTamperGuards();
 initTradingUsernameBadge();
 bindPersistenceFlushHandlers();
+initFirstPlayTutorial();
 initFirstLaunchUsernameSetup();
 initHiddenAdminTrigger();
 initCasinoSecretUnlockButton();
