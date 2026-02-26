@@ -82,9 +82,11 @@ let casinoEarlyUnlockOverride = false;
 let activeCasinoGameKey = "lobby";
 const CASINO_LIVE_FEED_LIMIT = 40;
 const CASINO_LEADERBOARD_LIMIT = 12;
+const CASINO_LEADERBOARD_POLL_MS = 1000;
 const casinoLiveFeedEntries = [];
 const casinoLeaderboardEntries = [];
 let casinoLiveFeedTimer = null;
+let casinoLeaderboardTimer = null;
 let casinoLiveFeedRequestInFlight = false;
 let casinoLeaderboardRequestInFlight = false;
 let casinoLeaderboardStream = null;
@@ -1114,6 +1116,16 @@ function startCasinoLiveFeedTicker() {
     void refreshCasinoLiveFeedFromServer();
     if (!casinoLeaderboardStream) void refreshCasinoLeaderboardFromServer();
   }, 4200);
+
+  if (!casinoLeaderboardTimer) {
+    casinoLeaderboardTimer = window.setInterval(() => {
+      const casinoRoot = document.getElementById("casino-section");
+      if (!casinoRoot || casinoRoot.style.display === "none") return;
+      if (activeCasinoGameKey !== "lobby") return;
+      if (!isCasinoLiveDataEnabled()) return;
+      void refreshCasinoLeaderboardFromServer();
+    }, CASINO_LEADERBOARD_POLL_MS);
+  }
 }
 
 function handleCasinoLiveDataConnectionChange() {
