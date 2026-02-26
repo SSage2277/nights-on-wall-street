@@ -137,6 +137,67 @@ function sanitizeGameLabel(value) {
   return normalized.slice(0, 24);
 }
 
+function sanitizeFeedbackCategory(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "bug" || normalized === "idea" || normalized === "other") return normalized;
+  return "idea";
+}
+
+function sanitizeFeedbackMessage(value) {
+  const normalized = String(value || "")
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ")
+    .replace(/\u200B/g, "")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+  if (!normalized) return "";
+  return normalized.slice(0, 500);
+}
+
+const PROFANITY_BLOCKLIST = Object.freeze([
+  "fuck",
+  "fucking",
+  "motherfucker",
+  "fucker",
+  "bitch",
+  "bitches",
+  "shit",
+  "bullshit",
+  "asshole",
+  "bastard",
+  "dick",
+  "dildo",
+  "cunt",
+  "pussy",
+  "slut",
+  "whore",
+  "porn",
+  "nigger",
+  "nigga",
+  "retard",
+  "faggot",
+  "kike",
+  "spic"
+]);
+
+function normalizeProfanityText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[@4]/g, "a")
+    .replace(/[!1|]/g, "i")
+    .replace(/[0]/g, "o")
+    .replace(/[3]/g, "e")
+    .replace(/[5$]/g, "s")
+    .replace(/[7]/g, "t")
+    .replace(/[^a-z]/g, "");
+}
+
+function hasProfanity(value) {
+  const compact = normalizeProfanityText(value);
+  if (!compact) return false;
+  return PROFANITY_BLOCKLIST.some((term) => compact.includes(normalizeProfanityText(term)));
+}
+
 function claimWithPack(claim) {
   const pack = STORE_PACKAGES[claim.packId] || STORE_PACKAGES[claim.pack_id] || null;
   return {
@@ -202,6 +263,18 @@ function mapLeaderboardRow(row) {
     balance: Math.round(toNumber(row.balance) * 100) / 100,
     lastSeenAt: Number(row.last_seen_at) || 0,
     rank: Number(row.rank) || 0
+  };
+}
+
+function mapFeedbackRow(row) {
+  return {
+    id: String(row.id || ""),
+    playerId: String(row.player_id || ""),
+    username: sanitizeUsername(row.username) || "Unknown",
+    category: sanitizeFeedbackCategory(row.category),
+    message: String(row.message || ""),
+    status: String(row.status || "open"),
+    submittedAt: Number(row.submitted_at) || 0
   };
 }
 
@@ -664,6 +737,24 @@ const RATE_LIMIT_RULES = Object.freeze([
     blockMs: 5 * 60 * 1000
   },
   {
+    id: "feedback-read",
+    methods: new Set(["GET"]),
+    pattern: /^\/api\/feedback$/i,
+    scope: "sessionOrIp",
+    max: 120,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
+  },
+  {
+    id: "feedback-submit",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/feedback$/i,
+    scope: "sessionOrIp",
+    max: 10,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 60 * 60 * 1000
+  },
+  {
     id: "admin-read",
     methods: new Set(["GET"]),
     pattern: /^\/api\/admin\/(claims|users|stats|devices)$/i,
@@ -1084,6 +1175,84 @@ app.post("/api/auth/logout", (req, res) => {
     res.clearCookie("nows.sid");
     res.json({ ok: true });
   });
+});
+
+app.get("/api/feedback", async (req, res) => {
+  try {
+    const playerId = getSessionPlayerId(req);
+    if (!playerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(30, Math.floor(rawLimit))) : 15;
+    const result = await db.query(
+      `
+        SELECT id, player_id, username, category, message, status, submitted_at
+        FROM feedback_submissions
+        WHERE player_id = $1
+        ORDER BY submitted_at DESC, id DESC
+        LIMIT $2
+      `,
+      [playerId, limit]
+    );
+    res.json({ ok: true, feedback: result.rows.map(mapFeedbackRow) });
+  } catch (error) {
+    console.error("Failed to load feedback submissions", error);
+    res.status(500).json({ ok: false, error: "Could not load feedback." });
+  }
+});
+
+app.post("/api/feedback", async (req, res) => {
+  try {
+    const playerId = getSessionPlayerId(req);
+    if (!playerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    const message = sanitizeFeedbackMessage(req.body?.message);
+    const category = sanitizeFeedbackCategory(req.body?.category);
+    if (!message || message.length < 6) {
+      res.status(400).json({ ok: false, error: "Feedback must be at least 6 characters." });
+      return;
+    }
+    if (hasProfanity(message)) {
+      res.status(400).json({ ok: false, error: "Please remove profanity and try again." });
+      return;
+    }
+    const userLookup = await db.query(
+      `
+        SELECT player_id, username, banned_at, banned_reason
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [playerId]
+    );
+    if (!userLookup.rowCount) {
+      req.session.destroy(() => {});
+      res.status(401).json({ ok: false, error: "Session account not found. Please login again." });
+      return;
+    }
+    const user = userLookup.rows[0];
+    if (isBannedTimestamp(user.banned_at)) {
+      const reason = sanitizeBanReason(user.banned_reason);
+      res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+      return;
+    }
+    const inserted = await db.query(
+      `
+        INSERT INTO feedback_submissions (player_id, username, category, message, status, submitted_at, reviewed_at)
+        VALUES ($1, $2, $3, $4, 'open', $5, 0)
+        RETURNING id, player_id, username, category, message, status, submitted_at
+      `,
+      [playerId, sanitizeUsername(user.username) || "Player", category, message, Date.now()]
+    );
+    res.json({ ok: true, feedback: mapFeedbackRow(inserted.rows[0]) });
+  } catch (error) {
+    console.error("Failed to submit feedback", error);
+    res.status(500).json({ ok: false, error: "Could not submit feedback." });
+  }
 });
 
 app.get("/api/live-wins", async (req, res) => {
@@ -1857,6 +2026,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
 
     await client.query("BEGIN");
     const claimsDeleted = await client.query("DELETE FROM claims");
+    const feedbackDeleted = await client.query("DELETE FROM feedback_submissions");
     const winsDeleted = await client.query("DELETE FROM live_wins");
     const verificationDeleted = await client.query("DELETE FROM email_verification_codes");
     const sessionsDeleted = await client.query(
@@ -1914,6 +2084,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
       reset: {
         usersDeleted: usersDeleted.rowCount,
         claimsDeleted: claimsDeleted.rowCount,
+        feedbackDeleted: feedbackDeleted.rowCount,
         liveWinsDeleted: winsDeleted.rowCount,
         pendingVerificationsDeleted: verificationDeleted.rowCount,
         sessionsDeleted: sessionsDeleted.rowCount,
@@ -2310,6 +2481,63 @@ async function ensureSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS claims_txn_norm_unique_idx
     ON claims (txn_norm)
     WHERE txn_norm IS NOT NULL AND txn_norm <> ''
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS feedback_submissions (
+      id BIGSERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'idea',
+      message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      submitted_at BIGINT NOT NULL DEFAULT 0,
+      reviewed_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS category TEXT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS message TEXT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS status TEXT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS submitted_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE feedback_submissions
+    ADD COLUMN IF NOT EXISTS reviewed_at BIGINT
+  `);
+  await db.query(`
+    UPDATE feedback_submissions
+    SET username = COALESCE(NULLIF(username, ''), 'Player'),
+        category = COALESCE(NULLIF(category, ''), 'idea'),
+        message = COALESCE(message, ''),
+        status = COALESCE(NULLIF(status, ''), 'open'),
+        submitted_at = COALESCE(submitted_at, 0),
+        reviewed_at = COALESCE(reviewed_at, 0)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS feedback_submissions_player_submitted_idx
+    ON feedback_submissions (player_id, submitted_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS feedback_submissions_submitted_idx
+    ON feedback_submissions (submitted_at DESC, id DESC)
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS live_wins (

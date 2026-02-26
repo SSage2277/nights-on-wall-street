@@ -105,6 +105,10 @@ let antiTamperGuardsInitialized = false;
 let antiTamperLastNoticeAt = 0;
 let antiTamperDevtoolsOpen = false;
 let antiTamperDevtoolsTimer = null;
+let antiTamperDetectedStreak = 0;
+let antiTamperClearStreak = 0;
+let antiTamperOverlayEl = null;
+let antiTamperPresentationReady = false;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -430,42 +434,117 @@ function pushAntiTamperNotice(message) {
   } catch {}
 }
 
+function ensureAntiTamperPresentation() {
+  if (antiTamperPresentationReady) return;
+  antiTamperPresentationReady = true;
+  const styleEl = document.createElement("style");
+  styleEl.id = "antiTamperStyle";
+  styleEl.textContent = `
+    #antiTamperOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 999999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: rgba(3, 8, 14, 0.92);
+      color: #ffd896;
+      font-weight: 700;
+      font-size: 17px;
+      line-height: 1.45;
+      letter-spacing: 0.01em;
+      backdrop-filter: blur(2px);
+    }
+    #antiTamperOverlay.active {
+      display: flex;
+    }
+    body.anti-tamper-lock {
+      overflow: hidden !important;
+    }
+    body.anti-tamper-lock > *:not(#antiTamperOverlay) {
+      pointer-events: none !important;
+      user-select: none !important;
+      filter: blur(1px);
+    }
+  `;
+  document.head.appendChild(styleEl);
+
+  antiTamperOverlayEl = document.createElement("div");
+  antiTamperOverlayEl.id = "antiTamperOverlay";
+  antiTamperOverlayEl.setAttribute("aria-hidden", "true");
+  antiTamperOverlayEl.textContent = "Developer tools detected. Close DevTools to continue.";
+  document.body.appendChild(antiTamperOverlayEl);
+}
+
+function setAntiTamperLock(locked) {
+  ensureAntiTamperPresentation();
+  document.body.classList.toggle("anti-tamper-lock", Boolean(locked));
+  if (!antiTamperOverlayEl) return;
+  antiTamperOverlayEl.classList.toggle("active", Boolean(locked));
+  antiTamperOverlayEl.setAttribute("aria-hidden", locked ? "false" : "true");
+}
+
 function isBlockedDevtoolsShortcut(event) {
   const key = String(event?.key || "").toLowerCase();
+  const code = String(event?.code || "");
   const hasPrimary = event?.ctrlKey === true || event?.metaKey === true;
-  if (key === "f12") return true;
+  if (key === "f12" || code === "F12") return true;
   if (hasPrimary && event?.shiftKey === true && ["i", "j", "c", "k"].includes(key)) return true;
   if (hasPrimary && event?.altKey === true && ["i", "j", "c", "k"].includes(key)) return true;
+  if (hasPrimary && event?.shiftKey === true && ["KeyI", "KeyJ", "KeyC", "KeyK"].includes(code)) return true;
+  if (hasPrimary && event?.altKey === true && ["KeyI", "KeyJ", "KeyC", "KeyK"].includes(code)) return true;
   if (hasPrimary && key === "u") return true;
   return false;
+}
+
+function detectLikelyDevtoolsOpen() {
+  const widthGap = Math.abs(window.outerWidth - window.innerWidth);
+  const heightGap = Math.abs(window.outerHeight - window.innerHeight);
+  return widthGap > 140 || heightGap > 140;
 }
 
 function initAntiTamperGuards() {
   if (IS_PHONE_EMBED_MODE || antiTamperGuardsInitialized) return;
   antiTamperGuardsInitialized = true;
+  ensureAntiTamperPresentation();
 
-  document.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-    pushAntiTamperNotice("Right-click is disabled.");
-  }, { capture: true });
-
-  document.addEventListener("keydown", (event) => {
+  const blockShortcut = (event) => {
     if (!isBlockedDevtoolsShortcut(event)) return;
     event.preventDefault();
     event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     pushAntiTamperNotice("Developer shortcut blocked.");
-  }, true);
+  };
+  window.addEventListener("keydown", blockShortcut, true);
+  document.addEventListener("keydown", blockShortcut, true);
+
+  const blockContextMenu = (event) => {
+    event.preventDefault();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    pushAntiTamperNotice("Right-click is disabled.");
+  };
+  window.addEventListener("contextmenu", blockContextMenu, true);
+  document.addEventListener("contextmenu", blockContextMenu, true);
 
   antiTamperDevtoolsTimer = window.setInterval(() => {
-    const widthGap = Math.abs(window.outerWidth - window.innerWidth);
-    const heightGap = Math.abs(window.outerHeight - window.innerHeight);
-    const likelyOpen = widthGap > 170 || heightGap > 170;
-    if (likelyOpen && !antiTamperDevtoolsOpen) {
+    if (detectLikelyDevtoolsOpen()) {
+      antiTamperDetectedStreak += 1;
+      antiTamperClearStreak = 0;
+    } else {
+      antiTamperDetectedStreak = 0;
+      antiTamperClearStreak += 1;
+    }
+    if (antiTamperDetectedStreak >= 2 && !antiTamperDevtoolsOpen) {
       antiTamperDevtoolsOpen = true;
       if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
+      if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
+      setAntiTamperLock(true);
       pushAntiTamperNotice("Developer tools detected.");
-    } else if (!likelyOpen) {
+    } else if (antiTamperClearStreak >= 3 && antiTamperDevtoolsOpen) {
       antiTamperDevtoolsOpen = false;
+      setAntiTamperLock(false);
     }
   }, 1200);
 }
@@ -2298,6 +2377,10 @@ let phoneHomeAnimFailSafeTimer = null;
 let phoneOverlayAnimTimer = null;
 const phoneLastLaunchIconByApp = {};
 const phoneDockPinnedApps = new Set(["messages", "bank", "portfolio", "casino"]);
+const PHONE_FEEDBACK_MESSAGE_MIN_LEN = 6;
+const PHONE_FEEDBACK_MESSAGE_MAX_LEN = 500;
+let phoneFeedbackEntries = [];
+let phoneFeedbackSubmitBusy = false;
 let phoneMiniAppsBound = false;
 let phoneMiniFrameMessageBound = false;
 let phoneMiniCashBridgeBound = false;
@@ -3129,6 +3212,9 @@ function setPhoneApp(appName) {
   if (app === "portfolio") refreshPhonePortfolioApp();
   if (app === "casino") refreshPhoneCasinoApp();
   if (app === "missions") renderPhoneMissions();
+  if (app === "feedback") {
+    void refreshPhoneFeedbackFromServer({ silent: true });
+  }
 }
 
 function openPhone(appName = "home") {
@@ -3487,6 +3573,126 @@ function renderPhoneMessages() {
     fragment.appendChild(row);
   });
   phoneUi.messageList.appendChild(fragment);
+}
+
+function getPhoneFeedbackCategoryLabel(category) {
+  const normalized = String(category || "").trim().toLowerCase();
+  if (normalized === "bug") return "Bug";
+  if (normalized === "other") return "Other";
+  return "Idea";
+}
+
+function getPhoneFeedbackStatusLabel(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "closed") return "Closed";
+  if (normalized === "reviewed") return "Reviewed";
+  return "Open";
+}
+
+function setPhoneFeedbackStatus(message, isError = false) {
+  if (!phoneUi.feedbackStatus) return;
+  phoneUi.feedbackStatus.textContent = String(message || "");
+  phoneUi.feedbackStatus.style.color = isError ? "#ff8ea0" : "#9eb6c8";
+}
+
+function renderPhoneFeedbackList(entries = phoneFeedbackEntries) {
+  if (!phoneUi.feedbackList) return;
+  phoneUi.feedbackList.innerHTML = "";
+  if (!Array.isArray(entries) || entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "phone-message-item phone-feedback-item";
+    empty.innerHTML = `<div class="meta"><span>Feedback</span><span>--:--</span></div><div>No feedback submitted yet.</div>`;
+    phoneUi.feedbackList.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "phone-message-item phone-feedback-item";
+    row.innerHTML = `
+      <div class="meta"><span>${escapeHtml(getPhoneFeedbackCategoryLabel(entry?.category))}</span><span>${escapeHtml(formatDateTime(entry?.submittedAt))}</span></div>
+      <div>${escapeHtml(entry?.message || "")}</div>
+      <div class="meta"><strong>${escapeHtml(getPhoneFeedbackStatusLabel(entry?.status))}</strong><span></span></div>
+    `;
+    fragment.appendChild(row);
+  });
+  phoneUi.feedbackList.appendChild(fragment);
+}
+
+async function refreshPhoneFeedbackFromServer({ silent = false } = {}) {
+  if (!authSessionLikelyAuthenticated) {
+    phoneFeedbackEntries = [];
+    renderPhoneFeedbackList(phoneFeedbackEntries);
+    if (!silent) setPhoneFeedbackStatus("Login required to view feedback.", true);
+    return false;
+  }
+  try {
+    const payload = await venmoApiRequest("/api/feedback?limit=20");
+    phoneFeedbackEntries = Array.isArray(payload?.feedback) ? payload.feedback : [];
+    renderPhoneFeedbackList(phoneFeedbackEntries);
+    if (!silent) {
+      setPhoneFeedbackStatus(phoneFeedbackEntries.length > 0 ? "Feedback synced." : "No feedback submitted yet.");
+    }
+    return true;
+  } catch (error) {
+    if (!silent) {
+      setPhoneFeedbackStatus(String(error?.message || "Could not load feedback."), true);
+    }
+    return false;
+  }
+}
+
+async function submitPhoneFeedback() {
+  if (phoneFeedbackSubmitBusy) return;
+  if (!phoneUi.feedbackInput) return;
+  const message = String(phoneUi.feedbackInput.value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const category = String(phoneUi.feedbackCategory?.value || "idea")
+    .trim()
+    .toLowerCase();
+
+  if (!authSessionLikelyAuthenticated) {
+    setPhoneFeedbackStatus("Login required to submit feedback.", true);
+    return;
+  }
+  if (message.length < PHONE_FEEDBACK_MESSAGE_MIN_LEN) {
+    setPhoneFeedbackStatus(`Feedback must be at least ${PHONE_FEEDBACK_MESSAGE_MIN_LEN} characters.`, true);
+    return;
+  }
+  if (message.length > PHONE_FEEDBACK_MESSAGE_MAX_LEN) {
+    setPhoneFeedbackStatus(`Feedback must be ${PHONE_FEEDBACK_MESSAGE_MAX_LEN} characters or less.`, true);
+    return;
+  }
+
+  phoneFeedbackSubmitBusy = true;
+  if (phoneUi.feedbackSubmitBtn) phoneUi.feedbackSubmitBtn.disabled = true;
+  setPhoneFeedbackStatus("Submitting feedback...");
+  try {
+    const payload = await venmoApiRequest("/api/feedback", {
+      method: "POST",
+      body: { category, message }
+    });
+    if (phoneUi.feedbackInput) phoneUi.feedbackInput.value = "";
+    const created = payload?.feedback;
+    if (created && typeof created === "object") {
+      const createdId = String(created.id || "");
+      phoneFeedbackEntries = [created, ...phoneFeedbackEntries.filter((item) => String(item?.id || "") !== createdId)];
+      if (phoneFeedbackEntries.length > 30) {
+        phoneFeedbackEntries = phoneFeedbackEntries.slice(0, 30);
+      }
+      renderPhoneFeedbackList(phoneFeedbackEntries);
+    } else {
+      await refreshPhoneFeedbackFromServer({ silent: true });
+    }
+    setPhoneFeedbackStatus("Feedback submitted. Thanks.");
+  } catch (error) {
+    setPhoneFeedbackStatus(String(error?.message || "Could not submit feedback."), true);
+  } finally {
+    phoneFeedbackSubmitBusy = false;
+    if (phoneUi.feedbackSubmitBtn) phoneUi.feedbackSubmitBtn.disabled = false;
+  }
 }
 
 function refreshPhoneBankApp() {
@@ -4531,6 +4737,11 @@ function initPhone() {
   phoneUi.settingUiScale = document.getElementById("phoneSettingUiScale");
   phoneUi.settingUiScaleLabel = document.getElementById("phoneUiScaleLabel");
   phoneUi.totalResetBtn = document.getElementById("phoneTotalResetBtn");
+  phoneUi.feedbackCategory = document.getElementById("phoneFeedbackCategory");
+  phoneUi.feedbackInput = document.getElementById("phoneFeedbackInput");
+  phoneUi.feedbackSubmitBtn = document.getElementById("phoneFeedbackSubmitBtn");
+  phoneUi.feedbackStatus = document.getElementById("phoneFeedbackStatus");
+  phoneUi.feedbackList = document.getElementById("phoneFeedbackList");
 
   if (!phoneUi.openBtn || !phoneUi.overlay) return;
 
@@ -4665,6 +4876,19 @@ function initPhone() {
   if (phoneUi.totalResetBtn) {
     phoneUi.totalResetBtn.addEventListener("click", runTotalProgressReset);
   }
+  if (phoneUi.feedbackSubmitBtn) {
+    phoneUi.feedbackSubmitBtn.addEventListener("click", () => {
+      void submitPhoneFeedback();
+    });
+  }
+  if (phoneUi.feedbackInput) {
+    phoneUi.feedbackInput.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        void submitPhoneFeedback();
+      }
+    });
+  }
 
   const quickGames = [
     ["blackjack", "Blackjack"],
@@ -4701,6 +4925,8 @@ function initPhone() {
 
   renderPhoneBadge();
   renderPhoneMessages();
+  renderPhoneFeedbackList(phoneFeedbackEntries);
+  setPhoneFeedbackStatus("Submit feedback to help improve the game.");
   refreshPhonePanels();
   pushPhoneNotification("info", "Phone online. Apps ready.");
 }

@@ -389,6 +389,10 @@
                 <circle cx="32" cy="32" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
                 <path d="M32 12v8M32 44v8M12 32h8M44 32h8M18 18l6 6M40 40l6 6M46 18l-6 6M24 40l-6 6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
               </symbol>
+              <symbol id="picon-feedback" viewBox="0 0 64 64">
+                <path d="M12 14h40a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30L16 58V46h-4a6 6 0 0 1-6-6V20a6 6 0 0 1 6-6z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                <path d="M22 24h20M22 32h14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+              </symbol>
             </svg>
 
             <div class="phone-app-grid">
@@ -415,6 +419,10 @@
               <button class="phone-home-app" data-target-app="settings" type="button">
                 <span class="phone-home-icon icon-settings"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-settings"></use></svg></span>
                 <span class="phone-home-app-name">Settings</span>
+              </button>
+              <button class="phone-home-app" data-target-app="feedback" type="button">
+                <span class="phone-home-icon icon-messages"><svg class="phone-home-svg" viewBox="0 0 64 64"><use href="#picon-feedback"></use></svg></span>
+                <span class="phone-home-app-name">Feedback</span>
               </button>
             </div>
 
@@ -547,6 +555,22 @@
             <span>Total reset (clears all progress)</span>
             <button id="phoneTotalResetBtn" class="phone-danger-btn" type="button">Reset All</button>
           </div>
+        </section>
+
+        <section id="phoneAppFeedback" class="phone-app">
+          <div class="phone-subheader"><span>Game Feedback</span></div>
+          <div class="phone-inline-controls">
+            <select id="phoneFeedbackCategory">
+              <option value="idea">Idea</option>
+              <option value="bug">Bug</option>
+              <option value="other">Other</option>
+            </select>
+            <button id="phoneFeedbackSubmitBtn" type="button">Submit</button>
+          </div>
+          <textarea id="phoneFeedbackInput" rows="5" maxlength="500" placeholder="Tell us what to improve (no profanity)."></textarea>
+          <div id="phoneFeedbackStatus" class="phone-feedback-status"></div>
+          <div class="phone-subheader"><span>Your Recent Feedback</span></div>
+          <div id="phoneFeedbackList" class="phone-list compact"></div>
         </section>
       </div>
       <button id="phoneHomeBtn" class="phone-home-bar" type="button" aria-label="Phone home"></button>

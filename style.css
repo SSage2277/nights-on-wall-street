@@ -2245,6 +2245,7 @@ h1 {
 }
 
 .phone-inline-controls input,
+.phone-inline-controls select,
 .phone-setting-row input[type="number"] {
   width: 100%;
   min-width: 0;
@@ -2253,6 +2254,10 @@ h1 {
   color: #e4f0f9;
   border-radius: 8px;
   padding: 7px 8px;
+}
+
+.phone-inline-controls select {
+  appearance: none;
 }
 
 .phone-inline-controls button,
@@ -2321,6 +2326,30 @@ h1 {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+}
+
+#phoneAppFeedback textarea {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #3b576a;
+  background: #132532;
+  color: #e4f0f9;
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+}
+
+.phone-feedback-status {
+  margin-top: 6px;
+  min-height: 16px;
+  font-size: 11px;
+  color: #9eb6c8;
+}
+
+.phone-feedback-item .meta strong {
+  color: #8dffbc;
 }
 
 .phone-mission {
@@ -3617,6 +3646,22 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 #casinoLeaderboardList li.is-you {
   border-color: rgba(136, 255, 185, 0.7);
   box-shadow: 0 0 0 1px rgba(136, 255, 185, 0.35) inset;
+}
+
+#casinoLeaderboardList li.leaderboard-divider {
+  border-style: dashed;
+  border-color: rgba(68, 101, 126, 0.75);
+  color: #9db2c2;
+  background: rgba(10, 21, 31, 0.58);
+}
+
+#casinoLeaderboardList li.leaderboard-divider .amt {
+  color: #9db2c2;
+}
+
+#casinoLeaderboardList li.is-you-outside-top {
+  border-color: rgba(136, 255, 185, 0.85);
+  background: rgba(14, 38, 28, 0.64);
 }
 
 .casino-live-data-notice {
