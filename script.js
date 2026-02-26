@@ -81,9 +81,12 @@ const CASINO_EARLY_UNLOCK_STORAGE_KEY = "casino_early_unlock_v1";
 let casinoEarlyUnlockOverride = false;
 let activeCasinoGameKey = "lobby";
 const CASINO_LIVE_FEED_LIMIT = 40;
+const CASINO_LEADERBOARD_LIMIT = 12;
 const casinoLiveFeedEntries = [];
+const casinoLeaderboardEntries = [];
 let casinoLiveFeedTimer = null;
 let casinoLiveFeedRequestInFlight = false;
+let casinoLeaderboardRequestInFlight = false;
 let playerUsername = "";
 let usernameGateActive = false;
 let firstLaunchAuthMode = "register";
@@ -832,7 +835,14 @@ function renderCasinoLiveFeed() {
   const countEl = document.getElementById("casinoLiveFeedCount");
   if (!listEl) return;
   listEl.innerHTML = "";
-  if (countEl) countEl.textContent = String(casinoLiveFeedEntries.length);
+  const liveDataEnabled = isCasinoLiveDataEnabled();
+  if (countEl) countEl.textContent = liveDataEnabled ? String(casinoLiveFeedEntries.length) : "—";
+  if (!liveDataEnabled) {
+    const offline = document.createElement("li");
+    offline.innerHTML = `<span>Offline (disabled)</span><span class="amt">—</span>`;
+    listEl.appendChild(offline);
+    return;
+  }
   if (casinoLiveFeedEntries.length === 0) {
     const empty = document.createElement("li");
     empty.innerHTML = `<span>No wins yet</span><span class="amt">—</span>`;
@@ -853,6 +863,50 @@ function renderCasinoLiveFeed() {
   listEl.appendChild(frag);
 }
 
+function renderCasinoLeaderboard() {
+  const listEl = document.getElementById("casinoLeaderboardList");
+  const countEl = document.getElementById("casinoLeaderboardCount");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  const liveDataEnabled = isCasinoLiveDataEnabled();
+  if (countEl) countEl.textContent = liveDataEnabled ? String(casinoLeaderboardEntries.length) : "—";
+  if (!liveDataEnabled) {
+    const offline = document.createElement("li");
+    offline.innerHTML = `<span class="rank">—</span><span class="name">Offline (disabled)</span><span class="amt">—</span>`;
+    listEl.appendChild(offline);
+    return;
+  }
+  if (casinoLeaderboardEntries.length === 0) {
+    const empty = document.createElement("li");
+    empty.innerHTML = `<span class="rank">—</span><span class="name">No players yet</span><span class="amt">—</span>`;
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const currentUsernameKey = normalizeUsername(playerUsername).toLowerCase();
+  const frag = document.createDocumentFragment();
+  casinoLeaderboardEntries.forEach((entry, index) => {
+    const li = document.createElement("li");
+    const entryNameKey = String(entry?.username || "").toLowerCase();
+    const isYou = Boolean(currentUsernameKey && entryNameKey && currentUsernameKey === entryNameKey);
+    if (isYou) li.classList.add("is-you");
+    li.innerHTML = `
+      <span class="rank">#${index + 1}</span>
+      <span class="name">${escapeHtml(entry.username || "Player")}${entry.lastSeenAt > 0 ? `<span class="last-seen"> · ${escapeHtml(formatLiveDataLastSeen(entry.lastSeenAt))}</span>` : ""}</span>
+      <span class="amt">${formatCurrency(entry.balance)}</span>
+    `;
+    frag.appendChild(li);
+  });
+  listEl.appendChild(frag);
+}
+
+function syncCasinoLiveDataNotice() {
+  const notice = document.getElementById("casinoLiveDataNotice");
+  if (!notice) return;
+  const inLobby = activeCasinoGameKey === "lobby";
+  notice.hidden = isCasinoLiveDataEnabled() || !inLobby;
+}
+
 function normalizeCasinoLiveFeedEntry(entry) {
   const amount = roundCurrency(Number(entry?.amount));
   if (!Number.isFinite(amount) || amount <= 0) return null;
@@ -867,14 +921,50 @@ function normalizeCasinoLiveFeedEntry(entry) {
   };
 }
 
+function normalizeCasinoLeaderboardEntry(entry) {
+  const username = normalizeUsername(entry?.username) || "Player";
+  const balance = roundCurrency(Number(entry?.balance));
+  if (!Number.isFinite(balance) || balance < 0) return null;
+  return {
+    playerId: String(entry?.playerId || ""),
+    username,
+    balance,
+    lastSeenAt: Number(entry?.lastSeenAt) || 0
+  };
+}
+
 function setCasinoLiveFeedEntries(entries) {
   casinoLiveFeedEntries.length = 0;
   entries.slice(0, CASINO_LIVE_FEED_LIMIT).forEach((entry) => casinoLiveFeedEntries.push(entry));
   renderCasinoLiveFeed();
 }
 
+function setCasinoLeaderboardEntries(entries) {
+  casinoLeaderboardEntries.length = 0;
+  entries.slice(0, CASINO_LEADERBOARD_LIMIT).forEach((entry) => casinoLeaderboardEntries.push(entry));
+  renderCasinoLeaderboard();
+}
+
+function isCasinoLiveDataEnabled() {
+  return typeof navigator === "undefined" ? true : navigator.onLine !== false;
+}
+
+function formatLiveDataLastSeen(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "seen recently";
+  const delta = Math.max(0, Date.now() - value);
+  if (delta < 60 * 1000) return "active now";
+  if (delta < 60 * 60 * 1000) return `${Math.floor(delta / (60 * 1000))}m ago`;
+  if (delta < 24 * 60 * 60 * 1000) return `${Math.floor(delta / (60 * 60 * 1000))}h ago`;
+  return `${Math.floor(delta / (24 * 60 * 60 * 1000))}d ago`;
+}
+
 async function refreshCasinoLiveFeedFromServer() {
   if (casinoLiveFeedRequestInFlight || IS_PHONE_EMBED_MODE) return false;
+  if (!isCasinoLiveDataEnabled()) {
+    renderCasinoLiveFeed();
+    return false;
+  }
   casinoLiveFeedRequestInFlight = true;
   try {
     const payload = await venmoApiRequest(`/api/live-wins?limit=${CASINO_LIVE_FEED_LIMIT}`);
@@ -892,7 +982,31 @@ async function refreshCasinoLiveFeedFromServer() {
   }
 }
 
+async function refreshCasinoLeaderboardFromServer() {
+  if (casinoLeaderboardRequestInFlight || IS_PHONE_EMBED_MODE) return false;
+  if (!isCasinoLiveDataEnabled()) {
+    renderCasinoLeaderboard();
+    return false;
+  }
+  casinoLeaderboardRequestInFlight = true;
+  try {
+    const payload = await venmoApiRequest(`/api/leaderboard?limit=${CASINO_LEADERBOARD_LIMIT}`);
+    const players = Array.isArray(payload?.players) ? payload.players : [];
+    const entries = players
+      .map(normalizeCasinoLeaderboardEntry)
+      .filter(Boolean)
+      .sort((a, b) => (b.balance || 0) - (a.balance || 0) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+    setCasinoLeaderboardEntries(entries);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    casinoLeaderboardRequestInFlight = false;
+  }
+}
+
 function pushCasinoLiveWin(amount, multiplier = null, gameKey = activeCasinoGameKey) {
+  if (!isCasinoLiveDataEnabled()) return;
   const value = roundCurrency(Number(amount));
   if (!Number.isFinite(value) || value <= 0) return;
   const displayName = playerUsername || "Player";
@@ -927,12 +1041,28 @@ function pushCasinoLiveWin(amount, multiplier = null, gameKey = activeCasinoGame
 
 function startCasinoLiveFeedTicker() {
   if (casinoLiveFeedTimer || IS_PHONE_EMBED_MODE) return;
-  void refreshCasinoLiveFeedFromServer();
+  syncCasinoLiveDataNotice();
+  renderCasinoLiveFeed();
+  renderCasinoLeaderboard();
+  if (isCasinoLiveDataEnabled()) {
+    void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
+  }
   casinoLiveFeedTimer = window.setInterval(() => {
     const casinoRoot = document.getElementById("casino-section");
     if (!casinoRoot || casinoRoot.style.display === "none") return;
-    void refreshCasinoLiveFeedFromServer();
+    syncCasinoLiveDataNotice();
+    if (!isCasinoLiveDataEnabled()) return;
+    void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
   }, 4200);
+}
+
+function handleCasinoLiveDataConnectionChange() {
+  syncCasinoLiveDataNotice();
+  renderCasinoLiveFeed();
+  renderCasinoLeaderboard();
+  if (isCasinoLiveDataEnabled()) {
+    void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
+  }
 }
 
 let pokerLastSessionProfit = 0;
@@ -954,9 +1084,12 @@ function refreshPokerSessionMeta() {
 
 function syncCasinoLiveFeedVisibility() {
   const liveFeed = document.getElementById("casinoLiveFeed");
-  if (!liveFeed) return;
+  const leaderboard = document.getElementById("casinoLeaderboard");
+  const notice = document.getElementById("casinoLiveDataNotice");
   const showInLobby = activeCasinoGameKey === "lobby";
-  liveFeed.style.display = showInLobby ? "" : "none";
+  if (liveFeed) liveFeed.style.display = showInLobby ? "" : "none";
+  if (leaderboard) leaderboard.style.display = showInLobby ? "" : "none";
+  if (notice) notice.hidden = !showInLobby || isCasinoLiveDataEnabled();
 }
 
 function updateTradingUsernameBadge() {
@@ -5691,6 +5824,7 @@ function renderVenmoAdminClaims() {
     .map((claim) => {
       const amount = formatCurrency(getVenmoPackFunds(claim.packId));
       const source = escapeHtml(claim.source || "venmo");
+      const txnId = escapeHtml(String(claim.txnId || "—").trim() || "—");
       const submitted = formatDateTime(claim.submittedAt);
       const username = escapeHtml(claim.username || "—");
       const email = escapeHtml(claim.email || "—");
@@ -5701,6 +5835,7 @@ function renderVenmoAdminClaims() {
           <td>${email}</td>
           <td>${amount}</td>
           <td>${source}</td>
+          <td class="admin-txn-id">${txnId}</td>
           <td>${submitted}</td>
           <td>
             <button type="button" data-action="approve" data-claim-id="${claimId}">Approve</button>
@@ -5718,6 +5853,7 @@ function renderVenmoAdminClaims() {
           <th>Email</th>
           <th>Amount</th>
           <th>Source</th>
+          <th>Transaction ID</th>
           <th>Submitted</th>
           <th>Actions</th>
         </tr>
@@ -10021,6 +10157,8 @@ bindPersistenceFlushHandlers();
 initFirstLaunchUsernameSetup();
 initHiddenAdminTrigger();
 initCasinoSecretUnlockButton();
+window.addEventListener("online", handleCasinoLiveDataConnectionChange);
+window.addEventListener("offline", handleCasinoLiveDataConnectionChange);
 startCasinoLiveFeedTicker();
 if (!IS_PHONE_EMBED_MODE) {
   startMarketInterval();
