@@ -69,6 +69,11 @@ const PACKAGE_ALIASES = Object.freeze({
   trader: "medium"
 });
 const LEADERBOARD_STREAM_LIMIT = 12;
+const BIG_WIN_ACTIVITY_MIN_AMOUNT = 500;
+const MAX_ADMIN_ACTIVITY_EVENTS = 3000;
+const MAX_SYSTEM_RUNTIME_EVENTS = 6000;
+const MAX_BALANCE_AUDIT_EVENTS = 10000;
+const MAX_ADMIN_BACKUPS = 15;
 const leaderboardStreamClients = new Set();
 let leaderboardBroadcastTimer = null;
 
@@ -418,6 +423,142 @@ function queueLeaderboardUpdate(reason = "update") {
   }, 120);
 }
 
+function sanitizeActivityEventType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .slice(0, 64);
+}
+
+function mapAdminActivityRow(row) {
+  return {
+    id: String(row.id || ""),
+    eventType: sanitizeActivityEventType(row.event_type) || "event",
+    playerId: String(row.player_id || ""),
+    username: sanitizeUsername(row.username) || "Unknown",
+    actorPlayerId: String(row.actor_player_id || ""),
+    details: row.details_json && typeof row.details_json === "object" ? row.details_json : {},
+    createdAt: Number(row.created_at) || 0
+  };
+}
+
+function mapAdminBackupRow(row) {
+  return {
+    id: String(row.id || ""),
+    createdAt: Number(row.created_at) || 0,
+    createdBy: String(row.created_by || ""),
+    summary: row.summary_json && typeof row.summary_json === "object" ? row.summary_json : {}
+  };
+}
+
+function safeDetailsObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value;
+}
+
+async function trimTableById({ tableName, maxRows }) {
+  const safeMax = Math.max(1, Math.floor(Number(maxRows) || 1));
+  await db.query(
+    `
+      DELETE FROM ${tableName}
+      WHERE id IN (
+        SELECT id
+        FROM ${tableName}
+        ORDER BY created_at DESC, id DESC
+        OFFSET $1
+      )
+    `,
+    [safeMax]
+  );
+}
+
+function recordAdminActivity({
+  eventType,
+  playerId = "",
+  username = "",
+  actorPlayerId = "",
+  details = {}
+} = {}) {
+  const safeEventType = sanitizeActivityEventType(eventType) || "event";
+  const safePlayerId = sanitizePlayerId(playerId);
+  const safeUsername = sanitizeUsername(username) || "";
+  const safeActorPlayerId = sanitizePlayerId(actorPlayerId);
+  const detailsJson = JSON.stringify(safeDetailsObject(details));
+  const createdAt = Date.now();
+  void db
+    .query(
+      `
+        INSERT INTO admin_activity_events (event_type, player_id, username, actor_player_id, details_json, created_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      `,
+      [safeEventType, safePlayerId, safeUsername, safeActorPlayerId, detailsJson, createdAt]
+    )
+    .then(() => trimTableById({ tableName: "admin_activity_events", maxRows: MAX_ADMIN_ACTIVITY_EVENTS }))
+    .catch((error) => {
+      console.error("Failed to record admin activity", error);
+    });
+}
+
+function recordSystemRuntimeEvent({
+  kind,
+  path = "",
+  statusCode = 0,
+  playerId = "",
+  message = "",
+  details = {}
+} = {}) {
+  const safeKind = sanitizeActivityEventType(kind) || "event";
+  const safePath = String(path || "").trim().slice(0, 180);
+  const safeStatusCode = Number.isFinite(Number(statusCode)) ? Math.max(0, Math.floor(Number(statusCode))) : 0;
+  const safePlayerId = sanitizePlayerId(playerId);
+  const safeMessage = String(message || "").slice(0, 240);
+  const detailsJson = JSON.stringify(safeDetailsObject(details));
+  const createdAt = Date.now();
+  void db
+    .query(
+      `
+        INSERT INTO system_runtime_events (kind, path, status_code, player_id, message, details_json, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+      `,
+      [safeKind, safePath, safeStatusCode, safePlayerId, safeMessage, detailsJson, createdAt]
+    )
+    .then(() => trimTableById({ tableName: "system_runtime_events", maxRows: MAX_SYSTEM_RUNTIME_EVENTS }))
+    .catch((error) => {
+      console.error("Failed to record system runtime event", error);
+    });
+}
+
+function recordBalanceAuditEvent({
+  playerId,
+  username = "",
+  source = "unknown",
+  beforeBalance = 0,
+  afterBalance = 0
+} = {}) {
+  const safePlayerId = sanitizePlayerId(playerId);
+  if (!safePlayerId) return;
+  const beforeValue = Math.round(toNumber(beforeBalance) * 100) / 100;
+  const afterValue = Math.round(toNumber(afterBalance) * 100) / 100;
+  const delta = Math.round((afterValue - beforeValue) * 100) / 100;
+  if (!Number.isFinite(delta) || Math.abs(delta) < 0.01) return;
+  const safeUsername = sanitizeUsername(username) || "";
+  const safeSource = String(source || "unknown").trim().slice(0, 60);
+  const createdAt = Date.now();
+  void db
+    .query(
+      `
+        INSERT INTO balance_audit_events (player_id, username, source, before_balance, after_balance, delta, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [safePlayerId, safeUsername, safeSource, beforeValue, afterValue, delta, createdAt]
+    )
+    .then(() => trimTableById({ tableName: "balance_audit_events", maxRows: MAX_BALANCE_AUDIT_EVENTS }))
+    .catch((error) => {
+      console.error("Failed to record balance audit event", error);
+    });
+}
+
 function mapAdminUserRow(row) {
   const base = mapUserRow(row);
   return {
@@ -426,6 +567,8 @@ function mapAdminUserRow(row) {
     hasPassword: row.has_password === true,
     bannedAt: Number(row.banned_at) || 0,
     bannedReason: String(row.banned_reason || ""),
+    mutedUntil: Number(row.muted_until) || 0,
+    mutedReason: String(row.muted_reason || ""),
     totalClaims: Number(row.total_claims) || 0,
     pendingClaims: Number(row.pending_claims) || 0,
     approvedClaims: Number(row.approved_claims) || 0,
@@ -562,7 +705,7 @@ function mapAdminDeviceRow(row) {
 async function getUserBanStateByPlayerId(playerId) {
   const result = await db.query(
     `
-      SELECT player_id, banned_at, banned_reason
+      SELECT player_id, banned_at, banned_reason, muted_until, muted_reason
       FROM users
       WHERE player_id = $1
       LIMIT 1
@@ -574,7 +717,9 @@ async function getUserBanStateByPlayerId(playerId) {
   return {
     playerId: String(row.player_id || ""),
     bannedAt: Number(row.banned_at) || 0,
-    bannedReason: String(row.banned_reason || "")
+    bannedReason: String(row.banned_reason || ""),
+    mutedUntil: Number(row.muted_until) || 0,
+    mutedReason: String(row.muted_reason || "")
   };
 }
 
@@ -584,6 +729,22 @@ async function assertUserNotBannedByPlayerId(playerId, res) {
   if (!isBannedTimestamp(banState.bannedAt)) return true;
   const reasonSuffix = banState.bannedReason ? ` (${banState.bannedReason})` : "";
   res.status(403).json({ ok: false, error: `Account is banned${reasonSuffix}.` });
+  return false;
+}
+
+async function assertUserNotMutedByPlayerId(playerId, res) {
+  const moderationState = await getUserBanStateByPlayerId(playerId);
+  if (!moderationState) return true;
+  const mutedUntil = Number(moderationState.mutedUntil) || 0;
+  const now = Date.now();
+  if (!mutedUntil || mutedUntil <= now) return true;
+  const retryAfterSeconds = Math.max(1, Math.ceil((mutedUntil - now) / 1000));
+  const reasonSuffix = moderationState.mutedReason ? ` (${moderationState.mutedReason})` : "";
+  res.status(403).json({
+    ok: false,
+    error: `Account is temporarily muted${reasonSuffix}. Try again in ${retryAfterSeconds} seconds.`,
+    retryAfterSeconds
+  });
   return false;
 }
 
@@ -798,7 +959,7 @@ const RATE_LIMIT_RULES = Object.freeze([
   {
     id: "admin-read",
     methods: new Set(["GET"]),
-    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback)$/i,
+    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback|activity|health|fraud-flags|backups)$/i,
     scope: "sessionOrIp",
     max: 360,
     windowMs: 60 * 1000,
@@ -966,6 +1127,18 @@ function apiRateLimitMiddleware(req, res, next) {
   res.setHeader("X-RateLimit-Reset", String(Math.ceil(result.resetAt / 1000)));
 
   if (!result.allowed) {
+    recordSystemRuntimeEvent({
+      kind: "rate_limit",
+      path: apiPath,
+      statusCode: 429,
+      playerId: getSessionPlayerId(req),
+      message: rule.id,
+      details: {
+        ruleId: rule.id,
+        scope: rule.scope,
+        retryAfterSeconds: result.retryAfterSeconds
+      }
+    });
     res.setHeader("Retry-After", String(result.retryAfterSeconds));
     res.status(429).json({
       ok: false,
@@ -1015,6 +1188,24 @@ app.use(
     }
   })
 );
+app.use((req, res, next) => {
+  const requestPath = getApiPath(req);
+  if (!requestPath.startsWith("/api/")) {
+    next();
+    return;
+  }
+  res.on("finish", () => {
+    if (res.statusCode < 500) return;
+    recordSystemRuntimeEvent({
+      kind: "error",
+      path: requestPath,
+      statusCode: res.statusCode,
+      playerId: sanitizePlayerId(req.session?.playerId),
+      message: "api_response_5xx"
+    });
+  });
+  next();
+});
 app.use(express.static(__dirname));
 app.use("/api", apiRateLimitMiddleware);
 
@@ -1110,6 +1301,13 @@ app.post("/api/auth/register", async (req, res) => {
         );
         req.session.playerId = sanitizePlayerId(updated.rows[0]?.player_id || existing.player_id);
         queueLeaderboardUpdate("register");
+        recordBalanceAuditEvent({
+          playerId: String(updated.rows[0]?.player_id || existing.player_id),
+          username: sanitizeUsername(updated.rows[0]?.username || existing.username) || username,
+          source: "auth-register-recovery",
+          beforeBalance: Number(existing.balance) || INITIAL_ACCOUNT_BALANCE,
+          afterBalance: Number(updated.rows[0]?.balance ?? existing.balance ?? INITIAL_ACCOUNT_BALANCE)
+        });
         res.json({ ok: true, user: normalizeUserForClient(updated.rows[0] || existing) });
         return;
       }
@@ -1132,6 +1330,13 @@ app.post("/api/auth/register", async (req, res) => {
     );
     req.session.playerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
     queueLeaderboardUpdate("register");
+    recordBalanceAuditEvent({
+      playerId: String(upsert.rows[0]?.player_id || playerId),
+      username,
+      source: "auth-register",
+      beforeBalance: 0,
+      afterBalance: Number(upsert.rows[0]?.balance) || INITIAL_ACCOUNT_BALANCE
+    });
     res.json({ ok: true, user: normalizeUserForClient(upsert.rows[0]) });
   } catch (error) {
     if (error?.code === "23505") {
@@ -1191,6 +1396,14 @@ app.post("/api/auth/login", async (req, res) => {
     );
     req.session.playerId = sanitizePlayerId(user.player_id);
     queueLeaderboardUpdate("login");
+    recordAdminActivity({
+      eventType: "login",
+      playerId: user.player_id,
+      username: sanitizeUsername(user.username) || username,
+      details: {
+        ip: getRequestIp(req)
+      }
+    });
     res.json({ ok: true, user: normalizeUserForClient(user) });
   } catch (error) {
     console.error("Failed to login", error);
@@ -1263,7 +1476,7 @@ app.post("/api/feedback", async (req, res) => {
     }
     const userLookup = await db.query(
       `
-        SELECT player_id, username, banned_at, banned_reason
+        SELECT player_id, username, banned_at, banned_reason, muted_until, muted_reason
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1279,6 +1492,19 @@ app.post("/api/feedback", async (req, res) => {
     if (isBannedTimestamp(user.banned_at)) {
       const reason = sanitizeBanReason(user.banned_reason);
       res.status(403).json({ ok: false, error: reason ? `Account is banned (${reason}).` : "Account is banned." });
+      return;
+    }
+    const mutedUntil = Number(user.muted_until) || 0;
+    if (mutedUntil > Date.now()) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((mutedUntil - Date.now()) / 1000));
+      const reason = sanitizeBanReason(user.muted_reason);
+      res.status(403).json({
+        ok: false,
+        error: reason
+          ? `Account is temporarily muted (${reason}). Try again in ${retryAfterSeconds} seconds.`
+          : `Account is temporarily muted. Try again in ${retryAfterSeconds} seconds.`,
+        retryAfterSeconds
+      });
       return;
     }
     const inserted = await db.query(
@@ -1330,6 +1556,7 @@ app.post("/api/live-wins", async (req, res) => {
       return;
     }
     if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
+    if (!(await assertUserNotMutedByPlayerId(playerId, res))) return;
     const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0
       ? Math.round(multiplierRaw * 100) / 100
       : null;
@@ -1354,6 +1581,18 @@ app.post("/api/live-wins", async (req, res) => {
       `
     );
     const win = mapWinRow(insertResult.rows[0]);
+    if (Number(amount) >= BIG_WIN_ACTIVITY_MIN_AMOUNT || (Number.isFinite(multiplier) && Number(multiplier) >= 10)) {
+      recordAdminActivity({
+        eventType: "big_win",
+        playerId,
+        username,
+        details: {
+          game,
+          amount: Math.round(Number(amount) * 100) / 100,
+          multiplier: Number.isFinite(multiplier) ? Number(multiplier) : null
+        }
+      });
+    }
     res.json({ ok: true, win });
   } catch (error) {
     console.error("Failed to submit live win", error);
@@ -1435,6 +1674,7 @@ app.post("/api/claims", async (req, res) => {
       return;
     }
     if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
+    if (!(await assertUserNotMutedByPlayerId(playerId, res))) return;
     if (!pack) {
       res.status(400).json({ ok: false, error: "Invalid package." });
       return;
@@ -1452,6 +1692,16 @@ app.post("/api/claims", async (req, res) => {
       `,
       [playerId, username || playerId, source, packageId, txnId, txnNorm, submittedAt]
     );
+    recordAdminActivity({
+      eventType: "claim_submitted",
+      playerId,
+      username: username || playerId,
+      details: {
+        source,
+        packageId,
+        txnId: String(txnId || "").slice(0, 64)
+      }
+    });
     res.json({ ok: true, claim: mapClaimRow(insertResult.rows[0]) });
   } catch (error) {
     if (error?.code === "23505") {
@@ -1517,48 +1767,127 @@ app.get("/api/claims/credits", async (req, res) => {
 });
 
 app.post("/api/claims/credits/:id/ack", async (req, res) => {
+  const client = await db.connect();
   try {
-    const claimId = String(req.params?.id || "");
+    const claimId = String(req.params?.id || "").trim();
     const playerId = sanitizePlayerId(req.body?.playerId);
     if (!claimId || !playerId) {
       res.status(400).json({ ok: false, error: "Missing claim id or player id." });
       return;
     }
-    const lookup = await db.query(
+    await client.query("BEGIN");
+    const lookup = await client.query(
       `
         SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
         FROM claims
         WHERE id = $1 AND player_id = $2
         LIMIT 1
+        FOR UPDATE
       `,
       [claimId, playerId]
     );
     if (!lookup.rowCount) {
+      await client.query("ROLLBACK");
       res.status(404).json({ ok: false, error: "Claim not found." });
       return;
     }
     const claim = lookup.rows[0];
     if (claim.status !== "approved") {
+      await client.query("ROLLBACK");
       res.status(409).json({ ok: false, error: "Claim is not approved." });
       return;
     }
+    const normalizedPackId = normalizePackageId(claim.pack_id);
+    const pack = STORE_PACKAGES[normalizedPackId];
+    if (!pack || !Number.isFinite(Number(pack.funds)) || Number(pack.funds) <= 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ ok: false, error: "Claim package is invalid." });
+      return;
+    }
+
+    const now = Date.now();
+    let claimRow = claim;
+    let creditedNow = false;
+    let creditedAmount = 0;
+    let userRow = null;
+
     if (!Number(claim.credited_at)) {
-      const updated = await db.query(
+      const updatedClaim = await client.query(
         `
           UPDATE claims
           SET credited_at = $1
           WHERE id = $2
+            AND credited_at = 0
           RETURNING id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
         `,
-        [Date.now(), claimId]
+        [now, claimId]
       );
-      res.json({ ok: true, claim: mapClaimRow(updated.rows[0]) });
-      return;
+      if (updatedClaim.rowCount) {
+        claimRow = updatedClaim.rows[0];
+        creditedNow = true;
+        creditedAmount = Math.round(Number(pack.funds) * 100) / 100;
+        const updatedUser = await client.query(
+          `
+            UPDATE users
+            SET savings_balance = LEAST($1, COALESCE(savings_balance, 0) + $2),
+                balance_updated_at = $3
+            WHERE player_id = $4
+            RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+          `,
+          [MAX_ACCOUNT_SAVINGS, creditedAmount, now, playerId]
+        );
+        if (!updatedUser.rowCount) {
+          await client.query("ROLLBACK");
+          res.status(404).json({ ok: false, error: "User not found for claim credit." });
+          return;
+        }
+        userRow = updatedUser.rows[0];
+      }
     }
-    res.json({ ok: true, claim: mapClaimRow(claim) });
+
+    if (!userRow) {
+      const userLookup = await client.query(
+        `
+          SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+          FROM users
+          WHERE player_id = $1
+          LIMIT 1
+        `,
+        [playerId]
+      );
+      if (userLookup.rowCount) {
+        userRow = userLookup.rows[0];
+      }
+    }
+
+    await client.query("COMMIT");
+    if (creditedNow) {
+      recordAdminActivity({
+        eventType: "claim_credited",
+        playerId,
+        username: sanitizeUsername(claim.username) || "",
+        details: {
+          claimId: String(claim.id || claimId),
+          packId: normalizedPackId,
+          creditedAmount
+        }
+      });
+    }
+    res.json({
+      ok: true,
+      claim: mapClaimRow(claimRow),
+      creditedNow,
+      creditedAmount,
+      user: userRow ? mapUserRow(userRow) : null
+    });
   } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
     console.error("Failed to ack credit", error);
     res.status(500).json({ ok: false, error: "Could not acknowledge credit." });
+  } finally {
+    client.release();
   }
 });
 
@@ -1685,6 +2014,15 @@ app.post("/api/users/sync", async (req, res) => {
       res.status(404).json({ ok: false, error: "Session account not found." });
       return;
     }
+    if (hasPortfolioPayload) {
+      recordBalanceAuditEvent({
+        playerId,
+        username,
+        source: "user-sync",
+        beforeBalance: toNumber(current.balance),
+        afterBalance: nextBalance
+      });
+    }
     const user = mapUserRow(updated.rows[0]);
     if (hasPortfolioPayload) {
       queueLeaderboardUpdate("sync-balance");
@@ -1754,6 +2092,8 @@ app.get("/api/admin/users", async (req, res) => {
           u.is_admin,
           u.banned_at,
           u.banned_reason,
+          u.muted_until,
+          u.muted_reason,
           (u.password_hash IS NOT NULL AND u.password_hash <> '') AS has_password,
           COALESCE(claims.total_claims, 0) AS total_claims,
           COALESCE(claims.pending_claims, 0) AS pending_claims,
@@ -1824,6 +2164,575 @@ app.get("/api/admin/feedback", async (req, res) => {
   }
 });
 
+app.get("/api/admin/activity", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(250, Math.floor(rawLimit))) : 120;
+    const result = await db.query(
+      `
+        SELECT id, event_type, player_id, username, actor_player_id, details_json, created_at
+        FROM admin_activity_events
+        ORDER BY created_at DESC, id DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    res.json({
+      ok: true,
+      events: result.rows.map(mapAdminActivityRow),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load admin activity", error);
+    res.status(500).json({ ok: false, error: "Could not load admin activity." });
+  }
+});
+
+app.get("/api/admin/health", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+    const dbPing = await db.query("SELECT 1 AS ok");
+    const totals = await db.query(
+      `
+        SELECT
+          COUNT(*) FILTER (WHERE kind = 'error')::int AS errors_24h,
+          COUNT(*) FILTER (WHERE kind = 'rate_limit')::int AS rate_limits_24h
+        FROM system_runtime_events
+        WHERE created_at >= $1
+      `,
+      [dayAgo]
+    );
+    const latestBackup = await db.query(
+      `
+        SELECT id, created_at, created_by, summary_json
+        FROM admin_backups
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `
+    );
+    const row = totals.rows[0] || {};
+    const backupRow = latestBackup.rows[0] || null;
+    res.json({
+      ok: true,
+      health: {
+        apiStatus: "ok",
+        dbStatus: dbPing.rowCount > 0 ? "ok" : "down",
+        uptimeSeconds: Math.max(0, Math.floor(process.uptime())),
+        errors24h: Number(row.errors_24h) || 0,
+        rateLimitHits24h: Number(row.rate_limits_24h) || 0,
+        rateLimitBuckets: rateLimitStore.size,
+        lastBackup: backupRow
+          ? {
+              id: String(backupRow.id || ""),
+              createdAt: Number(backupRow.created_at) || 0,
+              createdBy: String(backupRow.created_by || ""),
+              summary: backupRow.summary_json && typeof backupRow.summary_json === "object" ? backupRow.summary_json : {}
+            }
+          : null
+      },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load admin health", error);
+    res.status(500).json({ ok: false, error: "Could not load system health." });
+  }
+});
+
+app.get("/api/admin/fraud-flags", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+    const tenMinutesAgo = now - 10 * 60 * 1000;
+    const flags = [];
+
+    const claimSpam = await db.query(
+      `
+        SELECT player_id, username, COUNT(*)::int AS claim_count, MAX(submitted_at)::bigint AS last_at
+        FROM claims
+        WHERE submitted_at >= $1
+        GROUP BY player_id, username
+        HAVING COUNT(*) >= 5
+        ORDER BY claim_count DESC, last_at DESC
+        LIMIT 25
+      `,
+      [dayAgo]
+    );
+    for (const row of claimSpam.rows) {
+      flags.push({
+        type: "claims_spam",
+        severity: "high",
+        playerId: String(row.player_id || ""),
+        username: sanitizeUsername(row.username) || "Unknown",
+        value: Number(row.claim_count) || 0,
+        note: "High claim volume in the last 24h",
+        createdAt: Number(row.last_at) || 0
+      });
+    }
+
+    const feedbackSpam = await db.query(
+      `
+        SELECT player_id, username, COUNT(*)::int AS feedback_count, MAX(submitted_at)::bigint AS last_at
+        FROM feedback_submissions
+        WHERE submitted_at >= $1
+        GROUP BY player_id, username
+        HAVING COUNT(*) >= 6
+        ORDER BY feedback_count DESC, last_at DESC
+        LIMIT 25
+      `,
+      [tenMinutesAgo]
+    );
+    for (const row of feedbackSpam.rows) {
+      flags.push({
+        type: "feedback_spam",
+        severity: "medium",
+        playerId: String(row.player_id || ""),
+        username: sanitizeUsername(row.username) || "Unknown",
+        value: Number(row.feedback_count) || 0,
+        note: "High feedback volume in the last 10 minutes",
+        createdAt: Number(row.last_at) || 0
+      });
+    }
+
+    const rapidBalanceJumps = await db.query(
+      `
+        SELECT player_id, username, source, before_balance, after_balance, delta, created_at
+        FROM balance_audit_events
+        WHERE created_at >= $1
+          AND ABS(delta) >= 10000
+        ORDER BY created_at DESC, id DESC
+        LIMIT 30
+      `,
+      [dayAgo]
+    );
+    for (const row of rapidBalanceJumps.rows) {
+      flags.push({
+        type: "rapid_balance_jump",
+        severity: "high",
+        playerId: String(row.player_id || ""),
+        username: sanitizeUsername(row.username) || "Unknown",
+        value: Math.round(toNumber(row.delta) * 100) / 100,
+        note: `Balance changed by ${Math.round(toNumber(row.delta) * 100) / 100} via ${String(row.source || "unknown")}`,
+        createdAt: Number(row.created_at) || 0
+      });
+    }
+
+    const balanceBurst = await db.query(
+      `
+        SELECT player_id, username, COUNT(*)::int AS event_count, MAX(created_at)::bigint AS last_at
+        FROM balance_audit_events
+        WHERE created_at >= $1
+        GROUP BY player_id, username
+        HAVING COUNT(*) >= 12
+        ORDER BY event_count DESC, last_at DESC
+        LIMIT 25
+      `,
+      [tenMinutesAgo]
+    );
+    for (const row of balanceBurst.rows) {
+      flags.push({
+        type: "balance_burst",
+        severity: "medium",
+        playerId: String(row.player_id || ""),
+        username: sanitizeUsername(row.username) || "Unknown",
+        value: Number(row.event_count) || 0,
+        note: "Very frequent balance updates in 10 minutes",
+        createdAt: Number(row.last_at) || 0
+      });
+    }
+
+    flags.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    res.json({
+      ok: true,
+      flags,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load fraud flags", error);
+    res.status(500).json({ ok: false, error: "Could not load fraud flags." });
+  }
+});
+
+app.get("/api/admin/backups", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.floor(rawLimit))) : 15;
+    const result = await db.query(
+      `
+        SELECT id, created_at, created_by, summary_json
+        FROM admin_backups
+        ORDER BY created_at DESC, id DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    res.json({
+      ok: true,
+      backups: result.rows.map(mapAdminBackupRow),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load admin backups", error);
+    res.status(500).json({ ok: false, error: "Could not load backups." });
+  }
+});
+
+app.post("/api/admin/backups/create", async (req, res) => {
+  const client = await db.connect();
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const now = Date.now();
+    await client.query("BEGIN");
+    const usersResult = await client.query(
+      `
+        SELECT player_id, username, username_key, email, password_hash, email_verified_at, is_admin, balance, shares, avg_cost,
+               savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason
+        FROM users
+        ORDER BY player_id ASC
+      `
+    );
+    const claimsResult = await client.query(
+      `
+        SELECT id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at
+        FROM claims
+        ORDER BY id ASC
+      `
+    );
+    const winsResult = await client.query(
+      `
+        SELECT id, player_id, username, vip, game, amount, multiplier, submitted_at
+        FROM live_wins
+        ORDER BY id ASC
+      `
+    );
+    const feedbackResult = await client.query(
+      `
+        SELECT id, player_id, username, category, message, status, submitted_at, reviewed_at
+        FROM feedback_submissions
+        ORDER BY id ASC
+      `
+    );
+    const devicesResult = await client.query(
+      `
+        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        FROM admin_trusted_devices
+        ORDER BY id ASC
+      `
+    );
+    const summary = {
+      users: usersResult.rowCount,
+      claims: claimsResult.rowCount,
+      liveWins: winsResult.rowCount,
+      feedback: feedbackResult.rowCount,
+      trustedDevices: devicesResult.rowCount
+    };
+    const data = {
+      users: usersResult.rows,
+      claims: claimsResult.rows,
+      liveWins: winsResult.rows,
+      feedback: feedbackResult.rows,
+      trustedDevices: devicesResult.rows
+    };
+    const inserted = await client.query(
+      `
+        INSERT INTO admin_backups (created_by, summary_json, data_json, created_at)
+        VALUES ($1, $2::jsonb, $3::jsonb, $4)
+        RETURNING id, created_at, created_by, summary_json
+      `,
+      [adminAccess.playerId, JSON.stringify(summary), JSON.stringify(data), now]
+    );
+    await client.query(
+      `
+        DELETE FROM admin_backups
+        WHERE id IN (
+          SELECT id
+          FROM admin_backups
+          ORDER BY created_at DESC, id DESC
+          OFFSET $1
+        )
+      `,
+      [MAX_ADMIN_BACKUPS]
+    );
+    await client.query("COMMIT");
+    recordAdminActivity({
+      eventType: "backup_created",
+      actorPlayerId: adminAccess.playerId,
+      details: { backupId: String(inserted.rows[0]?.id || ""), ...summary }
+    });
+    res.json({
+      ok: true,
+      backup: mapAdminBackupRow(inserted.rows[0]),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("Failed to create admin backup", error);
+    res.status(500).json({ ok: false, error: "Could not create backup." });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/admin/backups/:id/restore", async (req, res) => {
+  const client = await db.connect();
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const backupId = String(req.params?.id || "").trim();
+    if (!/^\d{1,18}$/.test(backupId)) {
+      res.status(400).json({ ok: false, error: "Invalid backup id." });
+      return;
+    }
+    const adminCode = normalizeAdminCode(getAdminCode(req));
+    const expectedCode = normalizeAdminCode(ADMIN_CODE);
+    if (!adminCode || adminCode !== expectedCode) {
+      res.status(401).json({ ok: false, error: "Admin code is required for restore." });
+      return;
+    }
+    const confirmText = String(req.body?.confirmText || "").trim();
+    if (confirmText !== "RESTORE BACKUP") {
+      res.status(400).json({ ok: false, error: "Confirmation text must be RESTORE BACKUP." });
+      return;
+    }
+
+    const backupLookup = await client.query(
+      `
+        SELECT id, created_at, created_by, summary_json, data_json
+        FROM admin_backups
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [backupId]
+    );
+    if (!backupLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Backup not found." });
+      return;
+    }
+    const backupRow = backupLookup.rows[0];
+    const data = backupRow.data_json && typeof backupRow.data_json === "object" ? backupRow.data_json : {};
+    const users = Array.isArray(data.users) ? data.users : [];
+    const claims = Array.isArray(data.claims) ? data.claims : [];
+    const liveWins = Array.isArray(data.liveWins) ? data.liveWins : [];
+    const feedback = Array.isArray(data.feedback) ? data.feedback : [];
+    const trustedDevices = Array.isArray(data.trustedDevices) ? data.trustedDevices : [];
+    const adminInBackup = users.some((user) => sanitizePlayerId(user?.player_id) === sanitizePlayerId(adminAccess.playerId));
+    if (!adminInBackup) {
+      res.status(409).json({
+        ok: false,
+        error: "Restore blocked: current admin account is missing from that backup."
+      });
+      return;
+    }
+    const currentSessionId = String(req.sessionID || "").trim();
+
+    await client.query("BEGIN");
+    if (currentSessionId) {
+      await client.query("DELETE FROM user_sessions WHERE sid <> $1", [currentSessionId]);
+    } else {
+      await client.query("DELETE FROM user_sessions");
+    }
+    await client.query("DELETE FROM claims");
+    await client.query("DELETE FROM live_wins");
+    await client.query("DELETE FROM feedback_submissions");
+    await client.query("DELETE FROM admin_trusted_devices");
+    await client.query("DELETE FROM users");
+
+    for (const user of users) {
+      const safePlayerId = sanitizePlayerId(user?.player_id);
+      if (!safePlayerId) continue;
+      const safeUsername = sanitizeUsername(user?.username) || "Player";
+      const safeUsernameKey =
+        normalizeUsernameKey(user?.username_key || safeUsername) ||
+        normalizeUsernameKey(`${safeUsername}_${safePlayerId.slice(-6)}`) ||
+        safePlayerId.toLowerCase();
+      await client.query(
+        `
+          INSERT INTO users (
+            player_id, username, username_key, email, password_hash, email_verified_at, is_admin, balance, shares, avg_cost,
+            savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        `,
+        [
+          safePlayerId,
+          safeUsername,
+          safeUsernameKey,
+          sanitizeEmail(user?.email),
+          String(user?.password_hash || ""),
+          Number(user?.email_verified_at) || 0,
+          user?.is_admin === true,
+          Math.round(toNumber(user?.balance) * 100) / 100,
+          Math.max(0, Math.floor(toNumber(user?.shares))),
+          Math.round(toNumber(user?.avg_cost) * 10000) / 10000,
+          Math.round(toNumber(user?.savings_balance) * 100) / 100,
+          Math.round(toNumber(user?.auto_savings_percent) * 1000) / 1000,
+          Number(user?.balance_updated_at) || 0,
+          Number(user?.last_seen_at) || 0,
+          Number(user?.banned_at) || 0,
+          sanitizeBanReason(user?.banned_reason),
+          Number(user?.muted_until) || 0,
+          sanitizeBanReason(user?.muted_reason)
+        ]
+      );
+    }
+
+    for (const claim of claims) {
+      await client.query(
+        `
+          INSERT INTO claims (id, player_id, username, source, pack_id, txn_id, txn_norm, status, submitted_at, reviewed_at, credited_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `,
+        [
+          Number(claim?.id) || null,
+          sanitizePlayerId(claim?.player_id),
+          sanitizeUsername(claim?.username) || "Player",
+          sanitizeClaimSource(claim?.source),
+          normalizePackageId(claim?.pack_id || claim?.packId) || "",
+          String(claim?.txn_id || ""),
+          normalizeTxn(claim?.txn_norm || claim?.txn_id),
+          String(claim?.status || "pending"),
+          Number(claim?.submitted_at) || 0,
+          Number(claim?.reviewed_at) || 0,
+          Number(claim?.credited_at) || 0
+        ]
+      );
+    }
+
+    for (const win of liveWins) {
+      await client.query(
+        `
+          INSERT INTO live_wins (id, player_id, username, vip, game, amount, multiplier, submitted_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          Number(win?.id) || null,
+          sanitizePlayerId(win?.player_id),
+          sanitizeUsername(win?.username) || "Player",
+          win?.vip === true,
+          sanitizeGameLabel(win?.game),
+          Math.round(toNumber(win?.amount) * 100) / 100,
+          win?.multiplier === null || win?.multiplier === undefined
+            ? null
+            : Math.round(toNumber(win?.multiplier) * 100) / 100,
+          Number(win?.submitted_at) || 0
+        ]
+      );
+    }
+
+    for (const item of feedback) {
+      await client.query(
+        `
+          INSERT INTO feedback_submissions (id, player_id, username, category, message, status, submitted_at, reviewed_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          Number(item?.id) || null,
+          sanitizePlayerId(item?.player_id),
+          sanitizeUsername(item?.username) || "Player",
+          sanitizeFeedbackCategory(item?.category),
+          sanitizeFeedbackMessage(item?.message),
+          String(item?.status || "open"),
+          Number(item?.submitted_at) || 0,
+          Number(item?.reviewed_at) || 0
+        ]
+      );
+    }
+
+    for (const device of trustedDevices) {
+      await client.query(
+        `
+          INSERT INTO admin_trusted_devices (id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          Number(device?.id) || null,
+          sanitizePlayerId(device?.player_id),
+          String(device?.token_hash || "").trim(),
+          sanitizeAdminDeviceLabel(device?.label),
+          Number(device?.created_at) || 0,
+          Number(device?.last_seen_at) || 0,
+          String(device?.last_ip || "").slice(0, 128),
+          String(device?.last_user_agent || "").slice(0, 255),
+          Number(device?.revoked_at) || 0
+        ]
+      );
+    }
+
+    await client.query(
+      `
+        SELECT setval(pg_get_serial_sequence('claims', 'id'), COALESCE((SELECT MAX(id) FROM claims), 1), true)
+      `
+    );
+    await client.query(
+      `
+        SELECT setval(pg_get_serial_sequence('live_wins', 'id'), COALESCE((SELECT MAX(id) FROM live_wins), 1), true)
+      `
+    );
+    await client.query(
+      `
+        SELECT setval(pg_get_serial_sequence('feedback_submissions', 'id'), COALESCE((SELECT MAX(id) FROM feedback_submissions), 1), true)
+      `
+    );
+    await client.query(
+      `
+        SELECT setval(pg_get_serial_sequence('admin_trusted_devices', 'id'), COALESCE((SELECT MAX(id) FROM admin_trusted_devices), 1), true)
+      `
+    );
+
+    await client.query(
+      `
+        UPDATE users
+        SET is_admin = true, banned_at = 0, banned_reason = ''
+        WHERE player_id = $1
+      `,
+      [adminAccess.playerId]
+    );
+    await client.query("COMMIT");
+    queueLeaderboardUpdate("backup-restore");
+    recordAdminActivity({
+      eventType: "backup_restored",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        backupId: String(backupRow.id || backupId),
+        users: users.length,
+        claims: claims.length,
+        liveWins: liveWins.length,
+        feedback: feedback.length
+      }
+    });
+    res.json({
+      ok: true,
+      restored: {
+        backupId: String(backupRow.id || backupId),
+        users: users.length,
+        claims: claims.length,
+        liveWins: liveWins.length,
+        feedback: feedback.length
+      },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("Failed to restore backup", error);
+    res.status(500).json({ ok: false, error: "Could not restore backup." });
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/admin/claims/:id/decision", async (req, res) => {
   try {
     const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
@@ -1853,6 +2762,16 @@ app.post("/api/admin/claims/:id/decision", async (req, res) => {
       res.status(409).json({ ok: false, error: "Claim is already reviewed." });
       return;
     }
+    recordAdminActivity({
+      eventType: decision === "approve" ? "claim_approved" : "claim_rejected",
+      playerId: updated.rows[0]?.player_id || "",
+      username: updated.rows[0]?.username || "",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        claimId,
+        decision
+      }
+    });
     res.json({ ok: true, claim: mapClaimRow(updated.rows[0]), trustedDevice: adminAccess.device || null });
   } catch (error) {
     console.error("Failed to update claim decision", error);
@@ -1888,6 +2807,11 @@ app.post("/api/admin/device/trust", async (req, res) => {
       `,
       [adminAccess.playerId, tokenHash, label, now, getRequestIp(req), getRequestUserAgent(req)]
     );
+    recordAdminActivity({
+      eventType: "device_trusted",
+      actorPlayerId: adminAccess.playerId,
+      details: { deviceId: String(upsert.rows[0]?.id || "") }
+    });
     res.json({
       ok: true,
       bootstrap: adminAccess.bootstrap === true,
@@ -1957,6 +2881,11 @@ app.post("/api/admin/devices/:id/ban", async (req, res) => {
       res.status(409).json({ ok: false, error: "Device is already banned." });
       return;
     }
+    recordAdminActivity({
+      eventType: "device_banned",
+      actorPlayerId: adminAccess.playerId,
+      details: { deviceId }
+    });
     res.json({ ok: true, device: mapAdminDeviceRow(updated.rows[0]) });
   } catch (error) {
     console.error("Failed to ban trusted device", error);
@@ -1993,6 +2922,11 @@ app.post("/api/admin/devices/:id/unban", async (req, res) => {
       res.status(409).json({ ok: false, error: "Device is not banned." });
       return;
     }
+    recordAdminActivity({
+      eventType: "device_unbanned",
+      actorPlayerId: adminAccess.playerId,
+      details: { deviceId }
+    });
     res.json({ ok: true, device: mapAdminDeviceRow(updated.rows[0]) });
   } catch (error) {
     console.error("Failed to unban trusted device", error);
@@ -2022,6 +2956,11 @@ app.post("/api/admin/devices/:id/remove", async (req, res) => {
       res.status(404).json({ ok: false, error: "Device not found." });
       return;
     }
+    recordAdminActivity({
+      eventType: "device_removed",
+      actorPlayerId: adminAccess.playerId,
+      details: { deviceId }
+    });
     res.json({ ok: true, device: mapAdminDeviceRow(removed.rows[0]) });
   } catch (error) {
     console.error("Failed to remove trusted device", error);
@@ -2061,6 +3000,15 @@ app.post("/api/admin/users/:playerId/ban", async (req, res) => {
       return;
     }
     queueLeaderboardUpdate("ban");
+    recordAdminActivity({
+      eventType: "user_banned",
+      playerId,
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        reason,
+        bannedAt: now
+      }
+    });
     res.json({ ok: true, playerId, bannedAt: now, bannedReason: reason });
   } catch (error) {
     console.error("Failed to ban user", error);
@@ -2098,6 +3046,11 @@ app.post("/api/admin/users/:playerId/unban", async (req, res) => {
       return;
     }
     queueLeaderboardUpdate("unban");
+    recordAdminActivity({
+      eventType: "user_unbanned",
+      playerId,
+      actorPlayerId: adminAccess.playerId
+    });
     res.json({ ok: true, playerId });
   } catch (error) {
     console.error("Failed to unban user", error);
@@ -2140,6 +3093,12 @@ app.post("/api/admin/users/:playerId/remove", async (req, res) => {
     }
     await client.query("COMMIT");
     queueLeaderboardUpdate("remove");
+    recordAdminActivity({
+      eventType: "user_removed",
+      playerId,
+      username: sanitizeUsername(removedUser.rows[0]?.username) || "",
+      actorPlayerId: adminAccess.playerId
+    });
     res.json({
       ok: true,
       removed: {
@@ -2156,6 +3115,205 @@ app.post("/api/admin/users/:playerId/remove", async (req, res) => {
     res.status(500).json({ ok: false, error: "Could not remove user." });
   } finally {
     client.release();
+  }
+});
+
+app.post("/api/admin/users/:playerId/force-logout", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const removedSessions = await db.query(
+      `
+        DELETE FROM user_sessions
+        WHERE sess::text LIKE $1
+      `,
+      [`%\"playerId\":\"${playerId}\"%`]
+    );
+    recordAdminActivity({
+      eventType: "force_logout",
+      playerId,
+      actorPlayerId: adminAccess.playerId,
+      details: { sessionsCleared: removedSessions.rowCount }
+    });
+    res.json({
+      ok: true,
+      playerId,
+      sessionsCleared: removedSessions.rowCount || 0,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to force logout user", error);
+    res.status(500).json({ ok: false, error: "Could not force logout user." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
+  const client = await db.connect();
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const userLookup = await client.query(
+      `
+        SELECT player_id, username, balance
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [playerId]
+    );
+    if (!userLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    const user = userLookup.rows[0];
+    const now = Date.now();
+    await client.query("BEGIN");
+    await client.query("DELETE FROM claims WHERE player_id = $1", [playerId]);
+    await client.query("DELETE FROM live_wins WHERE player_id = $1", [playerId]);
+    const updated = await client.query(
+      `
+        UPDATE users
+        SET balance = $2,
+            shares = 0,
+            avg_cost = 0,
+            savings_balance = 0,
+            auto_savings_percent = 0,
+            balance_updated_at = $3
+        WHERE player_id = $1
+        RETURNING player_id, username, email, username_key, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+      `,
+      [playerId, INITIAL_ACCOUNT_BALANCE, now]
+    );
+    await client.query("COMMIT");
+    queueLeaderboardUpdate("reset-progress");
+    recordBalanceAuditEvent({
+      playerId,
+      username: sanitizeUsername(user.username) || "",
+      source: "admin-reset-progress",
+      beforeBalance: toNumber(user.balance),
+      afterBalance: INITIAL_ACCOUNT_BALANCE
+    });
+    recordAdminActivity({
+      eventType: "user_progress_reset",
+      playerId,
+      username: sanitizeUsername(user.username) || "",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        fromBalance: Math.round(toNumber(user.balance) * 100) / 100,
+        toBalance: INITIAL_ACCOUNT_BALANCE
+      }
+    });
+    res.json({
+      ok: true,
+      user: mapUserRow(updated.rows[0]),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("Failed to reset user progress", error);
+    res.status(500).json({ ok: false, error: "Could not reset user progress." });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/admin/users/:playerId/mute", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const minutesValue = Number(req.body?.minutes);
+    const minutes = Number.isFinite(minutesValue) ? Math.max(1, Math.min(10080, Math.floor(minutesValue))) : 60;
+    const reason = sanitizeBanReason(req.body?.reason || "Temporary cooldown");
+    const mutedUntil = Date.now() + minutes * 60 * 1000;
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET muted_until = $1,
+            muted_reason = $2
+        WHERE player_id = $3
+        RETURNING player_id, username, muted_until, muted_reason
+      `,
+      [mutedUntil, reason, playerId]
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    const user = updated.rows[0];
+    recordAdminActivity({
+      eventType: "user_muted",
+      playerId,
+      username: sanitizeUsername(user.username) || "",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        minutes,
+        mutedUntil,
+        reason
+      }
+    });
+    res.json({
+      ok: true,
+      playerId,
+      mutedUntil: Number(user.muted_until) || mutedUntil,
+      mutedReason: String(user.muted_reason || reason),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to mute user", error);
+    res.status(500).json({ ok: false, error: "Could not mute user." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/unmute", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET muted_until = 0,
+            muted_reason = ''
+        WHERE player_id = $1
+        RETURNING player_id, username
+      `,
+      [playerId]
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    recordAdminActivity({
+      eventType: "user_unmuted",
+      playerId,
+      username: sanitizeUsername(updated.rows[0]?.username) || "",
+      actorPlayerId: adminAccess.playerId
+    });
+    res.json({ ok: true, playerId, trustedDevice: adminAccess.device || null });
+  } catch (error) {
+    console.error("Failed to unmute user", error);
+    res.status(500).json({ ok: false, error: "Could not unmute user." });
   }
 });
 
@@ -2179,6 +3337,20 @@ app.post("/api/admin/users/:playerId/balance", async (req, res) => {
       });
       return;
     }
+    const existing = await db.query(
+      `
+        SELECT player_id, username, balance
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [playerId]
+    );
+    if (!existing.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    const previous = existing.rows[0];
     const now = Date.now();
     const updated = await db.query(
       `
@@ -2195,6 +3367,23 @@ app.post("/api/admin/users/:playerId/balance", async (req, res) => {
       return;
     }
     queueLeaderboardUpdate("admin-balance");
+    recordBalanceAuditEvent({
+      playerId,
+      username: sanitizeUsername(previous.username) || "",
+      source: "admin-set-balance",
+      beforeBalance: toNumber(previous.balance),
+      afterBalance: nextBalance
+    });
+    recordAdminActivity({
+      eventType: "balance_set",
+      playerId,
+      username: sanitizeUsername(previous.username) || "",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        beforeBalance: Math.round(toNumber(previous.balance) * 100) / 100,
+        afterBalance: nextBalance
+      }
+    });
     res.json({
       ok: true,
       user: mapUserRow(updated.rows[0]),
@@ -2227,6 +3416,11 @@ app.post("/api/admin/feedback/:id/remove", async (req, res) => {
       res.status(404).json({ ok: false, error: "Feedback not found." });
       return;
     }
+    recordAdminActivity({
+      eventType: "feedback_removed",
+      actorPlayerId: adminAccess.playerId,
+      details: { feedbackId: String(removed.rows[0].id || feedbackId) }
+    });
     res.json({
       ok: true,
       removed: { id: String(removed.rows[0].id || feedbackId) },
@@ -2322,6 +3516,16 @@ app.post("/api/admin/system/reset", async (req, res) => {
     }
     await client.query("COMMIT");
     queueLeaderboardUpdate("reset");
+    recordAdminActivity({
+      eventType: "full_reset",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        usersDeleted: usersDeleted.rowCount,
+        claimsDeleted: claimsDeleted.rowCount,
+        feedbackDeleted: feedbackDeleted.rowCount,
+        liveWinsDeleted: winsDeleted.rowCount
+      }
+    });
     res.json({
       ok: true,
       reset: {
@@ -2446,7 +3650,9 @@ async function ensureSchema() {
       balance_updated_at BIGINT NOT NULL DEFAULT 0,
       last_seen_at BIGINT NOT NULL DEFAULT 0,
       banned_at BIGINT NOT NULL DEFAULT 0,
-      banned_reason TEXT NOT NULL DEFAULT ''
+      banned_reason TEXT NOT NULL DEFAULT '',
+      muted_until BIGINT NOT NULL DEFAULT 0,
+      muted_reason TEXT NOT NULL DEFAULT ''
     )
   `);
   await db.query(`
@@ -2503,6 +3709,14 @@ async function ensureSchema() {
   `);
   await db.query(`
     ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS muted_until BIGINT NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS muted_reason TEXT NOT NULL DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE users
     ADD COLUMN IF NOT EXISTS is_admin BOOLEAN
   `);
   await db.query(`
@@ -2516,6 +3730,8 @@ async function ensureSchema() {
         balance_updated_at = COALESCE(balance_updated_at, 0),
         banned_at = COALESCE(banned_at, 0),
         banned_reason = COALESCE(banned_reason, ''),
+        muted_until = COALESCE(muted_until, 0),
+        muted_reason = COALESCE(muted_reason, ''),
         is_admin = COALESCE(is_admin, false)
     WHERE username_key IS NULL OR username_key = ''
        OR email_verified_at IS NULL
@@ -2526,6 +3742,8 @@ async function ensureSchema() {
        OR balance_updated_at IS NULL
        OR banned_at IS NULL
        OR banned_reason IS NULL
+       OR muted_until IS NULL
+       OR muted_reason IS NULL
        OR is_admin IS NULL
   `);
   await db.query(`
@@ -2863,6 +4081,78 @@ async function ensureSchema() {
         game = COALESCE(NULLIF(game, ''), 'Casino'),
         amount = COALESCE(amount, 0),
         submitted_at = COALESCE(submitted_at, 0)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_activity_events (
+      id BIGSERIAL PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      player_id TEXT NOT NULL DEFAULT '',
+      username TEXT NOT NULL DEFAULT '',
+      actor_player_id TEXT NOT NULL DEFAULT '',
+      details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_activity_events_created_idx
+    ON admin_activity_events (created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_activity_events_player_idx
+    ON admin_activity_events (player_id, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS system_runtime_events (
+      id BIGSERIAL PRIMARY KEY,
+      kind TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      status_code INTEGER NOT NULL DEFAULT 0,
+      player_id TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS system_runtime_events_kind_created_idx
+    ON system_runtime_events (kind, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS system_runtime_events_created_idx
+    ON system_runtime_events (created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS balance_audit_events (
+      id BIGSERIAL PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      username TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'unknown',
+      before_balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      after_balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      delta NUMERIC(14,2) NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS balance_audit_events_player_created_idx
+    ON balance_audit_events (player_id, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS balance_audit_events_created_idx
+    ON balance_audit_events (created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_backups (
+      id BIGSERIAL PRIMARY KEY,
+      created_by TEXT NOT NULL DEFAULT '',
+      summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      data_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_backups_created_idx
+    ON admin_backups (created_at DESC, id DESC)
   `);
 }
 
