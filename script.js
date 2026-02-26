@@ -109,6 +109,7 @@ let antiTamperDetectedStreak = 0;
 let antiTamperClearStreak = 0;
 let antiTamperOverlayEl = null;
 let antiTamperPresentationReady = false;
+let antiTamperScanArmedUntil = 0;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -500,9 +501,14 @@ function isBlockedDevtoolsShortcut(event) {
 }
 
 function detectLikelyDevtoolsOpen() {
+  if (!document.hasFocus()) return false;
+  const minViewport = Math.min(window.innerWidth || 0, window.innerHeight || 0);
+  if (minViewport < 700) return false;
   const widthGap = Math.abs(window.outerWidth - window.innerWidth);
   const heightGap = Math.abs(window.outerHeight - window.innerHeight);
-  return widthGap > 140 || heightGap > 140;
+  const widthRatio = widthGap / Math.max(1, window.outerWidth || 1);
+  const heightRatio = heightGap / Math.max(1, window.outerHeight || 1);
+  return (widthGap > 280 && widthRatio > 0.22) || (heightGap > 220 && heightRatio > 0.2);
 }
 
 function initAntiTamperGuards() {
@@ -515,6 +521,7 @@ function initAntiTamperGuards() {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    antiTamperScanArmedUntil = Date.now() + 45000;
     pushAntiTamperNotice("Developer shortcut blocked.");
   };
   window.addEventListener("keydown", blockShortcut, true);
@@ -529,6 +536,15 @@ function initAntiTamperGuards() {
   document.addEventListener("contextmenu", blockContextMenu, true);
 
   antiTamperDevtoolsTimer = window.setInterval(() => {
+    if (Date.now() > antiTamperScanArmedUntil) {
+      antiTamperDetectedStreak = 0;
+      antiTamperClearStreak += 1;
+      if (antiTamperClearStreak >= 2 && antiTamperDevtoolsOpen) {
+        antiTamperDevtoolsOpen = false;
+        setAntiTamperLock(false);
+      }
+      return;
+    }
     if (detectLikelyDevtoolsOpen()) {
       antiTamperDetectedStreak += 1;
       antiTamperClearStreak = 0;
@@ -536,7 +552,7 @@ function initAntiTamperGuards() {
       antiTamperDetectedStreak = 0;
       antiTamperClearStreak += 1;
     }
-    if (antiTamperDetectedStreak >= 2 && !antiTamperDevtoolsOpen) {
+    if (antiTamperDetectedStreak >= 3 && !antiTamperDevtoolsOpen) {
       antiTamperDevtoolsOpen = true;
       if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
       if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
