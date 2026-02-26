@@ -859,6 +859,9 @@ function isTutorialTargetVisible(target) {
 }
 
 function clearFirstPlayTutorialHighlight() {
+  document.querySelectorAll(".tutorial-target-highlight").forEach((element) => {
+    element.classList.remove("tutorial-target-highlight");
+  });
   if (!firstPlayTutorialHighlightedTarget) return;
   firstPlayTutorialHighlightedTarget.classList.remove("tutorial-target-highlight");
   firstPlayTutorialHighlightedTarget = null;
@@ -868,8 +871,7 @@ function setFirstPlayTutorialHighlightTarget(target) {
   if (firstPlayTutorialHighlightedTarget === target) return;
   clearFirstPlayTutorialHighlight();
   if (!target) return;
-  target.classList.add("tutorial-target-highlight");
-  firstPlayTutorialHighlightedTarget = target;
+  firstPlayTutorialHighlightedTarget = null;
 }
 
 function ensureFirstPlayTutorialDom() {
