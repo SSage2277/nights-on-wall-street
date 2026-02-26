@@ -72,7 +72,8 @@ const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
   "username_setup_done"
 ]);
 const GUEST_MODE_STORAGE_KEY = "nows_guest_mode_v1";
-const FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY = "nows_first_play_tutorial_seen_v1";
+const FIRST_PLAY_TUTORIAL_VERSION = 2;
+const FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY = `nows_first_play_tutorial_seen_v${FIRST_PLAY_TUTORIAL_VERSION}`;
 const ADMIN_DEVICE_TOKEN_STORAGE_KEY = "nows_admin_device_token_v1";
 const ADMIN_DEVICE_LABEL_STORAGE_KEY = "nows_admin_device_label_v1";
 const LOANS_ENABLED = false;
