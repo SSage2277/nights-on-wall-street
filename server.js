@@ -191,6 +191,15 @@ function mapUserRow(row) {
   };
 }
 
+function mapLeaderboardRow(row) {
+  return {
+    playerId: String(row.player_id || ""),
+    username: sanitizeUsername(row.username) || "Unknown",
+    balance: Math.round(toNumber(row.balance) * 100) / 100,
+    lastSeenAt: Number(row.last_seen_at) || 0
+  };
+}
+
 function mapAdminUserRow(row) {
   const base = mapUserRow(row);
   return {
@@ -1022,6 +1031,28 @@ app.post("/api/live-wins", async (req, res) => {
   } catch (error) {
     console.error("Failed to submit live win", error);
     res.status(500).json({ ok: false, error: "Could not submit live win." });
+  }
+});
+
+app.get("/api/leaderboard", async (req, res) => {
+  try {
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(3, Math.min(50, Math.floor(rawLimit))) : 12;
+    const result = await db.query(
+      `
+        SELECT player_id, username, balance, last_seen_at
+        FROM users
+        WHERE COALESCE(banned_at, 0) = 0
+        ORDER BY balance DESC, last_seen_at DESC, player_id ASC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    const players = result.rows.map(mapLeaderboardRow);
+    res.json({ ok: true, players });
+  } catch (error) {
+    console.error("Failed to load leaderboard", error);
+    res.status(500).json({ ok: false, error: "Could not load leaderboard." });
   }
 });
 
