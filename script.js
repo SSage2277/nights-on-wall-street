@@ -891,8 +891,8 @@ function renderCasinoLeaderboard() {
     const isYou = Boolean(currentUsernameKey && entryNameKey && currentUsernameKey === entryNameKey);
     if (isYou) li.classList.add("is-you");
     li.innerHTML = `
-      <span class="rank">#${index + 1}</span>
-      <span class="name">${escapeHtml(entry.username || "Player")}${entry.lastSeenAt > 0 ? `<span class="last-seen"> · ${escapeHtml(formatLiveDataLastSeen(entry.lastSeenAt))}</span>` : ""}</span>
+      <span class="rank">${formatLeaderboardRank(index + 1)}</span>
+      <span class="name">${escapeHtml(entry.username || "Player")}</span>
       <span class="amt">${formatCurrency(entry.balance)}</span>
     `;
     frag.appendChild(li);
@@ -949,14 +949,15 @@ function isCasinoLiveDataEnabled() {
   return typeof navigator === "undefined" ? true : navigator.onLine !== false;
 }
 
-function formatLiveDataLastSeen(timestamp) {
-  const value = Number(timestamp);
-  if (!Number.isFinite(value) || value <= 0) return "seen recently";
-  const delta = Math.max(0, Date.now() - value);
-  if (delta < 60 * 1000) return "active now";
-  if (delta < 60 * 60 * 1000) return `${Math.floor(delta / (60 * 1000))}m ago`;
-  if (delta < 24 * 60 * 60 * 1000) return `${Math.floor(delta / (60 * 60 * 1000))}h ago`;
-  return `${Math.floor(delta / (24 * 60 * 60 * 1000))}d ago`;
+function formatLeaderboardRank(rank) {
+  const value = Math.max(1, Math.floor(Number(rank) || 1));
+  const mod100 = value % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${value}th`;
+  const mod10 = value % 10;
+  if (mod10 === 1) return `${value}st`;
+  if (mod10 === 2) return `${value}nd`;
+  if (mod10 === 3) return `${value}rd`;
+  return `${value}th`;
 }
 
 async function refreshCasinoLiveFeedFromServer() {

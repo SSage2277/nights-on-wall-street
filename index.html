@@ -158,8 +158,21 @@
     </div>
     <ul id="casinoLiveFeedList"></ul>
   </section>
+  <div id="casinoLobbyLayout">
+    <aside id="casinoLobbySidebar">
+      <section id="casinoLeaderboard" class="casino-live-feed casino-leaderboard">
+        <div class="feed-header">
+          <strong>Live Leaderboard</strong>
+          <span id="casinoLeaderboardCount">0</span>
+        </div>
+        <ul id="casinoLeaderboardList"></ul>
+      </section>
+      <p id="casinoLiveDataNotice" class="casino-live-data-notice" hidden>
+        Offline: Live Wins and Live Leaderboard are disabled until you reconnect.
+      </p>
+    </aside>
 
-  <div id="casino-games">
+    <div id="casino-games">
     <button class="casino-game-btn" data-game="blackjack" type="button">
       <span class="game-icon" aria-hidden="true">
         <svg viewBox="0 0 100 100">
@@ -322,6 +335,7 @@
       </span>
       <span class="game-title">Horse Racing</span>
     </button>
+    </div>
   </div>
 
   <div id="casino-container"></div>

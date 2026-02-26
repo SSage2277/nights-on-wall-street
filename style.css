@@ -3250,11 +3250,25 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 }
 
 #casino-games {
-  max-width: 980px;
-  margin: 10px auto 0;
+  max-width: none;
+  margin: 0;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
+}
+
+#casinoLobbyLayout {
+  max-width: 1260px;
+  margin: 10px auto 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+#casinoLobbySidebar {
+  display: grid;
+  gap: 10px;
 }
 
 #casino-games .casino-game-btn {
@@ -3488,7 +3502,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 }
 
 #casinoLiveFeed {
-  max-width: 980px;
+  max-width: 1260px;
   margin: 8px auto 0;
   padding: 10px 12px;
   border: 1px solid #2f4659;
@@ -3558,7 +3572,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 }
 
 #casinoLeaderboard {
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 #casinoLeaderboardList {
@@ -3585,6 +3599,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 #casinoLeaderboardList li .rank {
   color: #9ec7ff;
   font-weight: 800;
+  min-width: 38px;
 }
 
 #casinoLeaderboardList li .name {
@@ -3599,19 +3614,14 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
   font-weight: 800;
 }
 
-#casinoLeaderboardList li .last-seen {
-  color: #9db5c9;
-  font-size: 0.7rem;
-}
-
 #casinoLeaderboardList li.is-you {
   border-color: rgba(136, 255, 185, 0.7);
   box-shadow: 0 0 0 1px rgba(136, 255, 185, 0.35) inset;
 }
 
 .casino-live-data-notice {
-  max-width: 980px;
-  margin: 8px auto 0;
+  max-width: none;
+  margin: 0;
   padding: 8px 10px;
   border: 1px solid rgba(255, 194, 88, 0.5);
   border-radius: 8px;
@@ -4007,12 +4017,20 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
 
+  #casinoLobbyLayout {
+    grid-template-columns: 1fr;
+  }
+
   #casino-games {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 700px) {
+  #casinoLobbyLayout {
+    gap: 10px;
+  }
+
   #casino-games {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
@@ -7429,7 +7447,8 @@ body.game-fullscreen #casino-section {
 
 body.game-fullscreen #casino-section > h2,
 body.game-fullscreen #casino-section > p,
-body.game-fullscreen #casino-games,
+body.game-fullscreen #casinoLiveFeed,
+body.game-fullscreen #casinoLobbyLayout,
 body.game-fullscreen #backToTrading {
   display: none !important;
 }
@@ -7509,7 +7528,8 @@ body.phone-embedded-mini-mode #casino-section {
 
 body.phone-embedded-mini-mode #casino-section > h2,
 body.phone-embedded-mini-mode #casino-section > p,
-body.phone-embedded-mini-mode #casino-games,
+body.phone-embedded-mini-mode #casinoLiveFeed,
+body.phone-embedded-mini-mode #casinoLobbyLayout,
 body.phone-embedded-mini-mode #backToTrading,
 body.phone-embedded-mini-mode #game-exit-bar {
   display: none !important;
