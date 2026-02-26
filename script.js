@@ -99,6 +99,7 @@ let firstLaunchAuthMode = "register";
 let firstLaunchAuthBusy = false;
 let firstPlayTutorialCurrentKey = "";
 let firstPlayTutorialStepIndex = 0;
+let firstPlayTutorialHighlightedTarget = null;
 let tradingLogoutBusy = false;
 let authSessionLikelyAuthenticated = false;
 let authSessionWatchdogTimer = null;
@@ -119,20 +120,39 @@ const VIP_WEEKLY_BONUS = 100;
 const VIP_WEEKLY_MS = 7 * 24 * 60 * 60 * 1000;
 const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
   {
-    title: "Trading Floor",
-    body: "Buy low, sell high, and watch your cash in the top right. Your balance now saves to your account."
+    title: "Welcome to Nights on Wall Street",
+    body: "This guide points at the main controls. Click Next to follow the highlights.",
+    selector: "#nav"
+  },
+  {
+    title: "Live Cash",
+    body: "Watch this cash stat while you trade and play. It updates from your saved account.",
+    selector: "#cash"
+  },
+  {
+    title: "Trading Buttons",
+    body: "Use Buy/Sell controls to open and close positions. Your net worth updates in real time.",
+    selector: "#controls"
   },
   {
     title: "Phone Apps",
-    body: "Use the phone for Banking, Casino games, and Claims. Casino and leaderboard data are live only when online."
+    body: "Open the Phone here for Banking, Portfolio, Casino quick launch, Missions, and Feedback.",
+    selector: "#phoneBtn"
   },
   {
-    title: "Account Safety",
-    body: "Use a strong password and log out from the username badge when done on shared devices."
+    title: "Bank & Savings",
+    body: "Use Bank to move money to savings, set auto-save %, and manage purchases/claims.",
+    selector: "#bankToggleBtn"
   },
   {
-    title: "You're Ready",
-    body: "That’s it. Build your balance, track your rank, and have fun."
+    title: "Casino Unlock Rule",
+    body: "Important: you must reach at least S$1,500 total on trading before you can enter Casino.",
+    selector: "#casinoBtn"
+  },
+  {
+    title: "Done",
+    body: "You’re ready. Trade up to S$1,500, then start casino games. Good luck.",
+    selector: "#tradingBtn"
   }
 ]);
 
@@ -828,13 +848,94 @@ function hideFirstLaunchUsernameOverlay() {
   if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
 }
 
+function isTutorialTargetVisible(target) {
+  if (!target) return false;
+  const rect = target.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) return false;
+  const style = window.getComputedStyle(target);
+  if (!style || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+  return true;
+}
+
+function clearFirstPlayTutorialHighlight() {
+  if (!firstPlayTutorialHighlightedTarget) return;
+  firstPlayTutorialHighlightedTarget.classList.remove("tutorial-target-highlight");
+  firstPlayTutorialHighlightedTarget = null;
+}
+
+function setFirstPlayTutorialHighlightTarget(target) {
+  if (firstPlayTutorialHighlightedTarget === target) return;
+  clearFirstPlayTutorialHighlight();
+  if (!target) return;
+  target.classList.add("tutorial-target-highlight");
+  firstPlayTutorialHighlightedTarget = target;
+}
+
+function positionFirstPlayTutorialUi() {
+  const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const card = overlay?.querySelector(".first-play-tutorial-card");
+  const spotlight = document.getElementById("firstPlayTutorialSpotlight");
+  if (!overlay || !card || !spotlight || overlay.classList.contains("hidden")) return;
+  const step = FIRST_PLAY_TUTORIAL_STEPS[firstPlayTutorialStepIndex] || FIRST_PLAY_TUTORIAL_STEPS[0];
+  const selector = typeof step?.selector === "string" ? step.selector : "";
+  const target = selector ? document.querySelector(selector) : null;
+  const canHighlight = isTutorialTargetVisible(target);
+  setFirstPlayTutorialHighlightTarget(canHighlight ? target : null);
+
+  if (canHighlight) {
+    const rect = target.getBoundingClientRect();
+    const padX = Math.min(14, Math.max(8, rect.width * 0.08));
+    const padY = Math.min(10, Math.max(6, rect.height * 0.14));
+    spotlight.classList.remove("hidden");
+    spotlight.style.left = `${Math.round(rect.left - padX)}px`;
+    spotlight.style.top = `${Math.round(rect.top - padY)}px`;
+    spotlight.style.width = `${Math.round(rect.width + padX * 2)}px`;
+    spotlight.style.height = `${Math.round(rect.height + padY * 2)}px`;
+  } else {
+    spotlight.classList.add("hidden");
+  }
+
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
+  const margin = 12;
+  const gap = 16;
+
+  card.style.left = "50%";
+  card.style.top = "50%";
+  card.style.transform = "translate(-50%, -50%)";
+  const cardRect = card.getBoundingClientRect();
+  const cardWidth = Math.max(280, Math.min(cardRect.width || 520, viewportWidth - margin * 2));
+  const cardHeight = Math.max(220, Math.min(cardRect.height || 300, viewportHeight - margin * 2));
+
+  if (!canHighlight) return;
+
+  const rect = target.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const left = Math.max(margin, Math.min(Math.round(centerX - cardWidth / 2), viewportWidth - cardWidth - margin));
+
+  let top = Math.round(rect.bottom + gap);
+  if (top + cardHeight > viewportHeight - margin) {
+    const above = Math.round(rect.top - cardHeight - gap);
+    if (above >= margin) {
+      top = above;
+    } else {
+      top = Math.max(margin, Math.min(Math.round(viewportHeight * 0.5 - cardHeight * 0.5), viewportHeight - cardHeight - margin));
+    }
+  }
+
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  card.style.transform = "none";
+}
+
 function renderFirstPlayTutorialStep() {
   const titleEl = document.getElementById("firstPlayTutorialStepTitle");
   const bodyEl = document.getElementById("firstPlayTutorialStepBody");
   const metaEl = document.getElementById("firstPlayTutorialStepMeta");
+  const skipBtn = document.getElementById("firstPlayTutorialSkipBtn");
   const backBtn = document.getElementById("firstPlayTutorialBackBtn");
   const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
-  if (!titleEl || !bodyEl || !metaEl || !backBtn || !nextBtn) return;
+  if (!titleEl || !bodyEl || !metaEl || !backBtn || !nextBtn || !skipBtn) return;
   const lastIndex = FIRST_PLAY_TUTORIAL_STEPS.length - 1;
   const safeIndex = Math.max(0, Math.min(firstPlayTutorialStepIndex, lastIndex));
   firstPlayTutorialStepIndex = safeIndex;
@@ -842,15 +943,32 @@ function renderFirstPlayTutorialStep() {
   titleEl.textContent = step?.title || "Tutorial";
   bodyEl.textContent = step?.body || "";
   metaEl.textContent = `Step ${safeIndex + 1} of ${FIRST_PLAY_TUTORIAL_STEPS.length}`;
+  skipBtn.disabled = safeIndex >= lastIndex;
   backBtn.disabled = safeIndex === 0;
   nextBtn.textContent = safeIndex >= lastIndex ? "Start Playing" : "Next";
+  positionFirstPlayTutorialUi();
 }
 
 function hideFirstPlayTutorialOverlay({ markSeen = true } = {}) {
   const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const spotlight = document.getElementById("firstPlayTutorialSpotlight");
   if (!overlay) return;
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
+  if (spotlight) {
+    spotlight.classList.add("hidden");
+    spotlight.style.left = "";
+    spotlight.style.top = "";
+    spotlight.style.width = "";
+    spotlight.style.height = "";
+  }
+  const card = overlay.querySelector(".first-play-tutorial-card");
+  if (card) {
+    card.style.left = "";
+    card.style.top = "";
+    card.style.transform = "";
+  }
+  clearFirstPlayTutorialHighlight();
   if (markSeen && firstPlayTutorialCurrentKey) {
     markFirstPlayTutorialSeen(firstPlayTutorialCurrentKey);
   }
@@ -860,6 +978,15 @@ function hideFirstPlayTutorialOverlay({ markSeen = true } = {}) {
 
 function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}) {
   if (IS_PHONE_EMBED_MODE) return;
+  if (typeof closePhone === "function") closePhone();
+  const tradingRoot = document.getElementById("trading-section");
+  const casinoRoot = document.getElementById("casino-section");
+  if (tradingRoot && casinoRoot && casinoRoot.style.display !== "none") {
+    casinoRoot.style.display = "none";
+    tradingRoot.style.display = "block";
+    if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
+    if (typeof updateTradingUsernameBadge === "function") updateTradingUsernameBadge();
+  }
   const overlay = document.getElementById("firstPlayTutorialOverlay");
   const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
   if (!overlay || !nextBtn) return;
@@ -871,15 +998,26 @@ function showFirstPlayTutorialIfNeeded({ playerId = "", scope = "account" } = {}
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
   setTimeout(() => {
+    positionFirstPlayTutorialUi();
     nextBtn.focus();
   }, 0);
 }
 
 function initFirstPlayTutorial() {
   const overlay = document.getElementById("firstPlayTutorialOverlay");
+  const skipBtn = document.getElementById("firstPlayTutorialSkipBtn");
   const backBtn = document.getElementById("firstPlayTutorialBackBtn");
   const nextBtn = document.getElementById("firstPlayTutorialNextBtn");
-  if (!overlay || !backBtn || !nextBtn) return;
+  if (!overlay || !skipBtn || !backBtn || !nextBtn) return;
+  window.addEventListener("resize", () => {
+    positionFirstPlayTutorialUi();
+  });
+  window.addEventListener("scroll", () => {
+    positionFirstPlayTutorialUi();
+  }, true);
+  skipBtn.addEventListener("click", () => {
+    hideFirstPlayTutorialOverlay({ markSeen: true });
+  });
   backBtn.addEventListener("click", () => {
     firstPlayTutorialStepIndex = Math.max(0, firstPlayTutorialStepIndex - 1);
     renderFirstPlayTutorialStep();
