@@ -2159,6 +2159,85 @@ app.post("/api/admin/users/:playerId/remove", async (req, res) => {
   }
 });
 
+app.post("/api/admin/users/:playerId/balance", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const nextBalance = sanitizeSyncNumber(req.body?.balance, {
+      max: MAX_ACCOUNT_BALANCE,
+      decimals: 2
+    });
+    if (nextBalance === null) {
+      res.status(400).json({
+        ok: false,
+        error: `Balance must be between 0 and ${MAX_ACCOUNT_BALANCE.toLocaleString()}.`
+      });
+      return;
+    }
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET balance = $1,
+            balance_updated_at = $2
+        WHERE player_id = $3
+        RETURNING player_id, username, email, username_key, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+      `,
+      [nextBalance, now, playerId]
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    queueLeaderboardUpdate("admin-balance");
+    res.json({
+      ok: true,
+      user: mapUserRow(updated.rows[0]),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to set user balance", error);
+    res.status(500).json({ ok: false, error: "Could not update user balance." });
+  }
+});
+
+app.post("/api/admin/feedback/:id/remove", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const feedbackId = String(req.params?.id || "").trim();
+    if (!/^\d{1,18}$/.test(feedbackId)) {
+      res.status(400).json({ ok: false, error: "Invalid feedback id." });
+      return;
+    }
+    const removed = await db.query(
+      `
+        DELETE FROM feedback_submissions
+        WHERE id = $1
+        RETURNING id
+      `,
+      [feedbackId]
+    );
+    if (!removed.rowCount) {
+      res.status(404).json({ ok: false, error: "Feedback not found." });
+      return;
+    }
+    res.json({
+      ok: true,
+      removed: { id: String(removed.rows[0].id || feedbackId) },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to remove feedback", error);
+    res.status(500).json({ ok: false, error: "Could not remove feedback." });
+  }
+});
+
 app.post("/api/admin/system/reset", async (req, res) => {
   const client = await db.connect();
   try {

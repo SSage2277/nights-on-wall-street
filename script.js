@@ -6416,6 +6416,7 @@ function renderHiddenAdminUsers() {
           <td>${wins}</td>
           <td>${lastSeen}</td>
           <td>
+            <button type="button" data-user-action="set-balance" data-player-id="${playerId}" data-current-balance="${(Number(user.balance) || 0).toFixed(2)}">Set Balance</button>
             ${
               isBanned
                 ? `<button type="button" data-user-action="unban" data-player-id="${playerId}">Unban</button>`
@@ -6567,6 +6568,7 @@ function renderHiddenAdminFeedback() {
           <td>${status}</td>
           <td>${submittedAt}</td>
           <td class="admin-txn-id">${feedbackId}</td>
+          <td><button type="button" data-feedback-action="remove" data-feedback-id="${feedbackId}">Remove</button></td>
         </tr>
       `;
     })
@@ -6583,6 +6585,7 @@ function renderHiddenAdminFeedback() {
           <th>Status</th>
           <th>Submitted</th>
           <th>Feedback ID</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -6800,6 +6803,58 @@ async function removeAdminUser(playerId) {
   }
 }
 
+async function setAdminUserBalance(playerId, currentBalance = "") {
+  if (!venmoAdminUnlocked || !playerId) return false;
+  const typedValue = window.prompt(
+    "Set new balance (0 - 10,000,000):",
+    String(currentBalance || "")
+  );
+  if (typedValue === null) return false;
+  const normalized = String(typedValue).replace(/,/g, "").trim();
+  const parsed = Number(normalized);
+  if (!normalized || !Number.isFinite(parsed) || parsed < 0 || parsed > 10_000_000) {
+    setHiddenAdminStatus("Enter a valid balance between 0 and 10,000,000.", true);
+    return false;
+  }
+  const nextBalance = Math.round(parsed * 100) / 100;
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/balance`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { balance: nextBalance }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    setHiddenAdminStatus(`Balance updated to ${formatCurrency(nextBalance)}.`);
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not update balance: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function removeAdminFeedback(feedbackId) {
+  if (!venmoAdminUnlocked || !feedbackId) return false;
+  const confirmed = window.confirm("Remove this feedback message?");
+  if (!confirmed) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/feedback/${encodeURIComponent(feedbackId)}/remove`,
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    await refreshHiddenAdminFeedbackFromServer({ silent: true });
+    setHiddenAdminStatus("Feedback removed.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not remove feedback: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function runFullAdminReset() {
   if (!venmoAdminUnlocked) {
     setHiddenAdminStatus("Unlock admin first.", true);
@@ -6964,9 +7019,25 @@ function initHiddenAdminTrigger() {
       const action = String(target.getAttribute("data-user-action") || "");
       const playerId = String(target.getAttribute("data-player-id") || "");
       if (!action || !playerId) return;
+      if (action === "set-balance") {
+        const currentBalance = String(target.getAttribute("data-current-balance") || "");
+        setAdminUserBalance(playerId, currentBalance);
+      }
       if (action === "ban") banAdminUser(playerId);
       if (action === "unban") unbanAdminUser(playerId);
       if (action === "remove") removeAdminUser(playerId);
+    });
+  }
+  if (hiddenAdminFeedbackEl) {
+    hiddenAdminFeedbackEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("button[data-feedback-action][data-feedback-id]")
+        : null;
+      if (!target) return;
+      const action = String(target.getAttribute("data-feedback-action") || "");
+      const feedbackId = String(target.getAttribute("data-feedback-id") || "");
+      if (!action || !feedbackId) return;
+      if (action === "remove") removeAdminFeedback(feedbackId);
     });
   }
   if (hiddenAdminDevicesEl) {
