@@ -1280,6 +1280,45 @@ body {
   font-size: 0.92rem;
 }
 
+.hidden-admin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.hidden-admin-section-head h4 {
+  margin: 0;
+}
+
+.hidden-admin-inline-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hidden-admin-inline-actions button {
+  border: 1px solid #3f617a;
+  background: #0f2637;
+  color: #dceeff;
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 0.76rem;
+}
+
+.hidden-admin-inline-actions .hidden-admin-danger-btn {
+  border-color: #7f2f3c;
+  background: #3c1119;
+  color: #ffd8df;
+}
+
+.hidden-admin-inline-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .hidden-admin-table-wrap {
   border: 1px solid #284159;
   border-radius: 10px;

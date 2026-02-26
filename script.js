@@ -6095,6 +6095,8 @@ const hiddenAdminUsersEl = document.getElementById("hiddenAdminUsers");
 const hiddenAdminDevicesEl = document.getElementById("hiddenAdminDevices");
 const hiddenAdminFeedbackEl = document.getElementById("hiddenAdminFeedback");
 const hiddenAdminActivityEl = document.getElementById("hiddenAdminActivity");
+const hiddenAdminActivityCollapseBtn = document.getElementById("hiddenAdminActivityCollapseBtn");
+const hiddenAdminActivityClearBtn = document.getElementById("hiddenAdminActivityClearBtn");
 const hiddenAdminFraudEl = document.getElementById("hiddenAdminFraud");
 const hiddenAdminBackupsEl = document.getElementById("hiddenAdminBackups");
 const venmoAdminCodeInputEl = document.getElementById("venmoAdminCodeInput");
@@ -6141,6 +6143,7 @@ let userProfileSyncLatestStartedSequence = 0;
 let hiddenAdminPanelOpen = false;
 let hiddenAdminLivePollTimer = null;
 let hiddenAdminLivePollTick = 0;
+let hiddenAdminActivityCollapsed = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -6863,12 +6866,35 @@ function getAdminEventLabel(eventType) {
     .join(" ");
 }
 
+function syncHiddenAdminActivityControls() {
+  const eventCount = Array.isArray(venmoClaimState.adminActivity) ? venmoClaimState.adminActivity.length : 0;
+  if (hiddenAdminActivityCollapseBtn) {
+    hiddenAdminActivityCollapseBtn.textContent = hiddenAdminActivityCollapsed
+      ? `Expand (${eventCount})`
+      : `Collapse (${eventCount})`;
+    hiddenAdminActivityCollapseBtn.disabled = !venmoAdminUnlocked;
+  }
+  if (hiddenAdminActivityClearBtn) {
+    hiddenAdminActivityClearBtn.disabled = !venmoAdminUnlocked || eventCount <= 0;
+  }
+  if (hiddenAdminActivityEl) {
+    hiddenAdminActivityEl.style.display = hiddenAdminActivityCollapsed ? "none" : "";
+  }
+}
+
+function setHiddenAdminActivityCollapsed(collapsed) {
+  hiddenAdminActivityCollapsed = Boolean(collapsed);
+  syncHiddenAdminActivityControls();
+}
+
 function renderHiddenAdminActivity() {
   if (!hiddenAdminActivityEl) return;
+  syncHiddenAdminActivityControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminActivityEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
     return;
   }
+  if (hiddenAdminActivityCollapsed) return;
   const events = Array.isArray(venmoClaimState.adminActivity) ? venmoClaimState.adminActivity : [];
   if (!events.length) {
     hiddenAdminActivityEl.innerHTML = `<div class="hidden-admin-empty">No recent activity yet.</div>`;
@@ -7618,6 +7644,36 @@ async function removeAdminFeedback(feedbackId) {
   }
 }
 
+async function clearHiddenAdminActivityFeed() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  const eventCount = Array.isArray(venmoClaimState.adminActivity) ? venmoClaimState.adminActivity.length : 0;
+  if (eventCount <= 0) {
+    setHiddenAdminStatus("Activity feed is already empty.");
+    return true;
+  }
+  const confirmed = window.confirm("Clear all events in the Live Activity Feed?");
+  if (!confirmed) return false;
+  try {
+    const payload = await venmoApiRequest(
+      "/api/admin/activity/clear",
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    const clearedCount = Number(payload?.cleared?.count) || 0;
+    venmoClaimState.adminActivity = [];
+    renderHiddenAdminActivity();
+    setHiddenAdminStatus(`Live Activity Feed cleared (${clearedCount} removed).`);
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not clear activity feed: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function runFullAdminReset() {
   if (!venmoAdminUnlocked) {
     setHiddenAdminStatus("Unlock admin first.", true);
@@ -7796,6 +7852,17 @@ function initHiddenAdminTrigger() {
   if (hiddenAdminFullResetBtn) {
     hiddenAdminFullResetBtn.addEventListener("click", () => {
       runFullAdminReset();
+    });
+  }
+  if (hiddenAdminActivityCollapseBtn) {
+    hiddenAdminActivityCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminActivityCollapsed(!hiddenAdminActivityCollapsed);
+      if (!hiddenAdminActivityCollapsed) renderHiddenAdminActivity();
+    });
+  }
+  if (hiddenAdminActivityClearBtn) {
+    hiddenAdminActivityClearBtn.addEventListener("click", () => {
+      clearHiddenAdminActivityFeed();
     });
   }
   if (hiddenAdminOverlayEl) {

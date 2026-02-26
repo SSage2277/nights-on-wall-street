@@ -2190,6 +2190,22 @@ app.get("/api/admin/activity", async (req, res) => {
   }
 });
 
+app.post("/api/admin/activity/clear", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const removed = await db.query("DELETE FROM admin_activity_events");
+    res.json({
+      ok: true,
+      cleared: { count: Number(removed.rowCount) || 0 },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to clear admin activity", error);
+    res.status(500).json({ ok: false, error: "Could not clear admin activity." });
+  }
+});
+
 app.get("/api/admin/health", async (req, res) => {
   try {
     const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
