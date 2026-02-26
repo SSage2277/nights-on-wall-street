@@ -21,6 +21,7 @@ const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
 const RATE_LIMIT_ENABLED = String(process.env.RATE_LIMIT_ENABLED || "1").trim() !== "0";
 const ALLOW_WEAK_ADMIN_CODE = String(process.env.ALLOW_WEAK_ADMIN_CODE || "0").trim() === "1";
+const INITIAL_ACCOUNT_BALANCE = 1000;
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -199,25 +200,67 @@ function mapLeaderboardRow(row) {
     playerId: String(row.player_id || ""),
     username: sanitizeUsername(row.username) || "Unknown",
     balance: Math.round(toNumber(row.balance) * 100) / 100,
-    lastSeenAt: Number(row.last_seen_at) || 0
+    lastSeenAt: Number(row.last_seen_at) || 0,
+    rank: Number(row.rank) || 0
   };
 }
 
-async function fetchLeaderboardPlayers(limit = LEADERBOARD_STREAM_LIMIT) {
+async function fetchLeaderboardPlayers({ limit = LEADERBOARD_STREAM_LIMIT, playerId = "", username = "" } = {}) {
   const safeLimit = Number.isFinite(Number(limit))
     ? Math.max(3, Math.min(50, Math.floor(Number(limit))))
     : LEADERBOARD_STREAM_LIMIT;
+  const safePlayerId = sanitizePlayerId(playerId);
+  const safeUsernameKey = normalizeUsernameKey(username);
   const result = await db.query(
     `
-      SELECT player_id, username, balance, last_seen_at
-      FROM users
-      WHERE COALESCE(banned_at, 0) = 0
-      ORDER BY balance DESC, last_seen_at DESC, player_id ASC
-      LIMIT $1
+      WITH ranked AS (
+        SELECT
+          player_id,
+          username,
+          username_key,
+          balance,
+          last_seen_at,
+          ROW_NUMBER() OVER (ORDER BY balance DESC, last_seen_at DESC, player_id ASC) AS rank
+        FROM users
+        WHERE COALESCE(banned_at, 0) = 0
+      )
+      SELECT player_id, username, balance, last_seen_at, rank
+      FROM ranked
+      WHERE rank <= $1
+      ORDER BY rank ASC
     `,
     [safeLimit]
   );
-  return result.rows.map(mapLeaderboardRow);
+  const players = result.rows.map(mapLeaderboardRow);
+
+  let you = null;
+  if (safePlayerId || safeUsernameKey) {
+    const youResult = await db.query(
+      `
+        WITH ranked AS (
+          SELECT
+            player_id,
+            username,
+            username_key,
+            balance,
+            last_seen_at,
+            ROW_NUMBER() OVER (ORDER BY balance DESC, last_seen_at DESC, player_id ASC) AS rank
+          FROM users
+          WHERE COALESCE(banned_at, 0) = 0
+        )
+        SELECT player_id, username, balance, last_seen_at, rank
+        FROM ranked
+        WHERE ($1 <> '' AND player_id = $1)
+           OR ($2 <> '' AND username_key = $2)
+        ORDER BY CASE WHEN player_id = $1 THEN 0 ELSE 1 END, rank ASC
+        LIMIT 1
+      `,
+      [safePlayerId, safeUsernameKey]
+    );
+    you = youResult.rowCount ? mapLeaderboardRow(youResult.rows[0]) : null;
+  }
+
+  return { players, you };
 }
 
 function removeLeaderboardStreamClient(client) {
@@ -249,8 +292,8 @@ function broadcastLeaderboardPlayers(players, reason = "update") {
 async function publishLeaderboardUpdate(reason = "update") {
   if (!leaderboardStreamClients.size) return;
   try {
-    const players = await fetchLeaderboardPlayers(LEADERBOARD_STREAM_LIMIT);
-    broadcastLeaderboardPlayers(players, reason);
+    const snapshot = await fetchLeaderboardPlayers({ limit: LEADERBOARD_STREAM_LIMIT });
+    broadcastLeaderboardPlayers(snapshot.players, reason);
   } catch (error) {
     console.error("Failed to publish leaderboard update", error);
   }
@@ -295,8 +338,7 @@ function normalizeUserForClient(row) {
 
 function getAdminCode(req) {
   return String(
-    req.query?.adminCode ||
-      req.body?.adminCode ||
+    req.body?.adminCode ||
       req.headers?.["x-admin-code"] ||
       req.headers?.["x-admincode"] ||
       ""
@@ -481,6 +523,10 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
     if (!isAdmin) {
       if (allowBootstrap && codeMatches) {
         const activeAdminCount = await getActiveAdminUserCount();
+        if (activeAdminCount > 0) {
+          res.status(403).json({ ok: false, error: "Admin role required." });
+          return null;
+        }
         await db.query(
           `
             UPDATE users
@@ -491,7 +537,7 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
           [sessionPlayerId, Date.now()]
         );
         isAdmin = true;
-        bootstrap = activeAdminCount <= 0;
+        bootstrap = true;
       } else {
         res.status(403).json({ ok: false, error: "Admin role required." });
         return null;
@@ -634,6 +680,15 @@ const RATE_LIMIT_RULES = Object.freeze([
     max: 80,
     windowMs: 10 * 60 * 1000,
     blockMs: 15 * 60 * 1000
+  },
+  {
+    id: "user-sync",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/users\/sync$/i,
+    scope: "sessionOrIp",
+    max: 180,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
   },
   {
     id: "api-default",
@@ -881,7 +936,6 @@ app.post("/api/auth/register", async (req, res) => {
     const password = sanitizePassword(req.body?.password);
     const username = sanitizeUsername(req.body?.username);
     const usernameKey = normalizeUsernameKey(username);
-    const balance = Number(req.body?.balance);
     if (!password) {
       res.status(400).json({ ok: false, error: "Password must be 8-72 characters." });
       return;
@@ -890,7 +944,6 @@ app.post("/api/auth/register", async (req, res) => {
       res.status(400).json({ ok: false, error: "Invalid username." });
       return;
     }
-    const safeBalance = Number.isFinite(balance) && balance >= 0 ? Math.round(balance * 100) / 100 : 0;
     const existingByUsername = await db.query(
       `
         SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at, banned_at, banned_reason, is_admin
@@ -917,15 +970,11 @@ app.post("/api/auth/register", async (req, res) => {
                 username_key = $2,
                 password_hash = $3,
                 email = NULL,
-                balance = CASE
-                  WHEN users.balance > $4 THEN users.balance
-                  ELSE $4
-                END,
-                last_seen_at = $5
-            WHERE player_id = $6
+                last_seen_at = $4
+            WHERE player_id = $5
             RETURNING player_id, username, username_key, email, password_hash, balance, last_seen_at, is_admin
           `,
-          [username, usernameKey, replacementHash, safeBalance, Date.now(), existing.player_id]
+          [username, usernameKey, replacementHash, Date.now(), existing.player_id]
         );
         req.session.playerId = sanitizePlayerId(updated.rows[0]?.player_id || existing.player_id);
         queueLeaderboardUpdate("register");
@@ -947,7 +996,7 @@ app.post("/api/auth/register", async (req, res) => {
         VALUES ($1, $2, $3, NULL, $4, $5, $6)
         RETURNING player_id, username, username_key, email, password_hash, balance, last_seen_at, is_admin
       `,
-      [playerId, username, usernameKey, passwordHash, safeBalance, Date.now()]
+      [playerId, username, usernameKey, passwordHash, INITIAL_ACCOUNT_BALANCE, Date.now()]
     );
     req.session.playerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
     queueLeaderboardUpdate("register");
@@ -1104,8 +1153,12 @@ app.post("/api/live-wins", async (req, res) => {
 
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const players = await fetchLeaderboardPlayers(req.query?.limit);
-    res.json({ ok: true, players });
+    const snapshot = await fetchLeaderboardPlayers({
+      limit: req.query?.limit,
+      playerId: req.query?.playerId,
+      username: req.query?.username
+    });
+    res.json({ ok: true, players: snapshot.players, you: snapshot.you });
   } catch (error) {
     console.error("Failed to load leaderboard", error);
     res.status(500).json({ ok: false, error: "Could not load leaderboard." });
@@ -1139,8 +1192,8 @@ app.get("/api/leaderboard/stream", async (req, res) => {
     req.on("close", () => removeLeaderboardStreamClient(client));
     req.on("aborted", () => removeLeaderboardStreamClient(client));
 
-    const players = await fetchLeaderboardPlayers(LEADERBOARD_STREAM_LIMIT);
-    broadcastLeaderboardPlayers(players, "initial");
+    const snapshot = await fetchLeaderboardPlayers({ limit: LEADERBOARD_STREAM_LIMIT });
+    broadcastLeaderboardPlayers(snapshot.players, "initial");
   } catch (error) {
     console.error("Failed to open leaderboard stream", error);
     if (!res.headersSent) {
@@ -1301,17 +1354,20 @@ app.post("/api/claims/credits/:id/ack", async (req, res) => {
 
 app.post("/api/users/sync", async (req, res) => {
   try {
-    const playerId = sanitizePlayerId(req.body?.playerId);
     const sessionPlayerId = getSessionPlayerId(req);
+    if (!sessionPlayerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    const playerId = sanitizePlayerId(req.body?.playerId);
     const username = sanitizeUsername(req.body?.username);
     const usernameKey = normalizeUsernameKey(username);
-    const balance = Number(req.body?.balance);
-    if (!playerId || !username || !usernameKey || !Number.isFinite(balance) || balance < 0) {
+    if (!playerId || !username || !usernameKey) {
       res.status(400).json({ ok: false, error: "Invalid user sync payload." });
       return;
     }
     if (!(await assertUserNotBannedByPlayerId(playerId, res))) return;
-    if (sessionPlayerId && sessionPlayerId !== playerId) {
+    if (sessionPlayerId !== playerId) {
       res.status(403).json({ ok: false, error: "Session does not match this player." });
       return;
     }
@@ -1329,21 +1385,22 @@ app.post("/api/users/sync", async (req, res) => {
       res.status(409).json({ ok: false, error: "Username already taken." });
       return;
     }
-    const upsert = await db.query(
+    const updated = await db.query(
       `
-        INSERT INTO users (player_id, username, username_key, balance, last_seen_at, email, password_hash)
-        VALUES ($1, $2, $3, $4, $5, NULL, NULL)
-        ON CONFLICT (player_id)
-        DO UPDATE SET
-          username = EXCLUDED.username,
-          username_key = EXCLUDED.username_key,
-          balance = EXCLUDED.balance,
-          last_seen_at = EXCLUDED.last_seen_at
+        UPDATE users
+        SET username = $2,
+            username_key = $3,
+            last_seen_at = $4
+        WHERE player_id = $1
         RETURNING player_id, username, username_key, email, balance, last_seen_at, is_admin
       `,
-      [playerId, username, usernameKey, Math.round(balance * 100) / 100, Date.now()]
+      [playerId, username, usernameKey, Date.now()]
     );
-    const user = mapUserRow(upsert.rows[0]);
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "Session account not found." });
+      return;
+    }
+    const user = mapUserRow(updated.rows[0]);
     queueLeaderboardUpdate("sync");
     res.json({ ok: true, user });
   } catch (error) {

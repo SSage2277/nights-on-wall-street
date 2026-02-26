@@ -81,10 +81,11 @@ const CASINO_EARLY_UNLOCK_STORAGE_KEY = "casino_early_unlock_v1";
 let casinoEarlyUnlockOverride = false;
 let activeCasinoGameKey = "lobby";
 const CASINO_LIVE_FEED_LIMIT = 40;
-const CASINO_LEADERBOARD_LIMIT = 12;
+const CASINO_LEADERBOARD_LIMIT = 10;
 const CASINO_LEADERBOARD_POLL_MS = 1000;
 const casinoLiveFeedEntries = [];
 const casinoLeaderboardEntries = [];
+let casinoLeaderboardCurrentUser = null;
 let casinoLiveFeedTimer = null;
 let casinoLeaderboardTimer = null;
 let casinoLiveFeedRequestInFlight = false;
@@ -618,7 +619,7 @@ async function submitFirstLaunchUsername() {
       if (!sessionReady) {
         throw new Error("Login session was not saved. Open the live site and try again.");
       }
-      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true });
+      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: true });
       if (!ok) {
         setFirstLaunchUsernameError("Login succeeded but profile data was invalid.");
         return false;
@@ -726,7 +727,6 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminStats = null;
     venmoClaimState.adminDevices = [];
     venmoAdminUnlocked = false;
-    venmoAdminAuthCode = "";
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
@@ -873,34 +873,63 @@ function renderCasinoLeaderboard() {
   if (!listEl) return;
   listEl.innerHTML = "";
   const liveDataEnabled = isCasinoLiveDataEnabled();
-  if (countEl) countEl.textContent = liveDataEnabled ? String(casinoLeaderboardEntries.length) : "—";
+  const topEntries = casinoLeaderboardEntries.slice(0, CASINO_LEADERBOARD_LIMIT);
+  if (countEl) countEl.textContent = liveDataEnabled ? String(topEntries.length) : "—";
   if (!liveDataEnabled) {
     const offline = document.createElement("li");
     offline.innerHTML = `<span class="rank">—</span><span class="name">Offline (disabled)</span><span class="amt">—</span>`;
     listEl.appendChild(offline);
     return;
   }
-  if (casinoLeaderboardEntries.length === 0) {
+  if (topEntries.length === 0) {
     const empty = document.createElement("li");
     empty.innerHTML = `<span class="rank">—</span><span class="name">No players yet</span><span class="amt">—</span>`;
     listEl.appendChild(empty);
     return;
   }
 
-  const currentUsernameKey = normalizeUsername(playerUsername).toLowerCase();
+  const currentIdentity = getLeaderboardIdentity({
+    playerId: venmoClaimPlayerId,
+    username: playerUsername
+  });
+  const currentEntry = casinoLeaderboardCurrentUser;
   const frag = document.createDocumentFragment();
-  casinoLeaderboardEntries.forEach((entry, index) => {
+  topEntries.forEach((entry, index) => {
     const li = document.createElement("li");
-    const entryNameKey = String(entry?.username || "").toLowerCase();
-    const isYou = Boolean(currentUsernameKey && entryNameKey && currentUsernameKey === entryNameKey);
+    const entryIdentity = getLeaderboardIdentity(entry);
+    const isYou = Boolean(currentIdentity && entryIdentity && currentIdentity === entryIdentity);
     if (isYou) li.classList.add("is-you");
+    const rankNumber = Number(entry?.rank) > 0 ? Number(entry.rank) : index + 1;
     li.innerHTML = `
-      <span class="rank">${formatLeaderboardRank(index + 1)}</span>
+      <span class="rank">${formatLeaderboardRank(rankNumber)}</span>
       <span class="name">${escapeHtml(entry.username || "Player")}</span>
       <span class="amt">${formatCurrency(entry.balance)}</span>
     `;
     frag.appendChild(li);
   });
+
+  const currentIdentityEntry = currentEntry ? getLeaderboardIdentity(currentEntry) : "";
+  const isCurrentInTop = Boolean(
+    currentIdentityEntry &&
+      topEntries.some((entry) => getLeaderboardIdentity(entry) === currentIdentityEntry)
+  );
+  const shouldShowCurrentBelowTop = Boolean(currentEntry && currentEntry.rank > CASINO_LEADERBOARD_LIMIT && !isCurrentInTop);
+  if (shouldShowCurrentBelowTop) {
+    const divider = document.createElement("li");
+    divider.className = "leaderboard-divider";
+    divider.innerHTML = `<span class="rank">...</span><span class="name">Your place</span><span class="amt">...</span>`;
+    frag.appendChild(divider);
+
+    const currentRow = document.createElement("li");
+    currentRow.className = "is-you is-you-outside-top";
+    currentRow.innerHTML = `
+      <span class="rank">${formatLeaderboardRank(Number(currentEntry.rank) || CASINO_LEADERBOARD_LIMIT + 1)}</span>
+      <span class="name">${escapeHtml(currentEntry.username || "You")}</span>
+      <span class="amt">${formatCurrency(currentEntry.balance)}</span>
+    `;
+    frag.appendChild(currentRow);
+  }
+
   listEl.appendChild(frag);
 }
 
@@ -929,11 +958,13 @@ function normalizeCasinoLeaderboardEntry(entry) {
   const username = normalizeUsername(entry?.username) || "Player";
   const balance = roundCurrency(Number(entry?.balance));
   if (!Number.isFinite(balance) || balance < 0) return null;
+  const rankRaw = Number(entry?.rank);
   return {
     playerId: String(entry?.playerId || ""),
     username,
     balance,
-    lastSeenAt: Number(entry?.lastSeenAt) || 0
+    lastSeenAt: Number(entry?.lastSeenAt) || 0,
+    rank: Number.isFinite(rankRaw) && rankRaw > 0 ? Math.floor(rankRaw) : 0
   };
 }
 
@@ -943,10 +974,21 @@ function setCasinoLiveFeedEntries(entries) {
   renderCasinoLiveFeed();
 }
 
-function setCasinoLeaderboardEntries(entries) {
+function setCasinoLeaderboardEntries(entries, currentUserEntry = undefined) {
   casinoLeaderboardEntries.length = 0;
   entries.slice(0, CASINO_LEADERBOARD_LIMIT).forEach((entry) => casinoLeaderboardEntries.push(entry));
+  if (currentUserEntry !== undefined) {
+    casinoLeaderboardCurrentUser = currentUserEntry;
+  }
   renderCasinoLeaderboard();
+}
+
+function getLeaderboardIdentity(entry) {
+  const playerId = String(entry?.playerId || "").trim();
+  if (playerId) return `player:${playerId}`;
+  const usernameKey = normalizeUsername(entry?.username).toLowerCase();
+  if (usernameKey) return `user:${usernameKey}`;
+  return "";
 }
 
 function isCasinoLiveDataEnabled() {
@@ -995,7 +1037,12 @@ async function refreshCasinoLeaderboardFromServer() {
   }
   casinoLeaderboardRequestInFlight = true;
   try {
-    const payload = await venmoApiRequest(`/api/leaderboard?limit=${CASINO_LEADERBOARD_LIMIT}`);
+    const query = new URLSearchParams({ limit: String(CASINO_LEADERBOARD_LIMIT) });
+    const playerId = String(venmoClaimPlayerId || getVenmoClaimPlayerId() || "").trim();
+    const username = String(playerUsername || "").trim();
+    if (playerId) query.set("playerId", playerId);
+    if (username) query.set("username", username);
+    const payload = await venmoApiRequest(`/api/leaderboard?${query.toString()}`);
     applyCasinoLeaderboardPayload(payload);
     return true;
   } catch {
@@ -1011,7 +1058,9 @@ function applyCasinoLeaderboardPayload(payload) {
     .map(normalizeCasinoLeaderboardEntry)
     .filter(Boolean)
     .sort((a, b) => (b.balance || 0) - (a.balance || 0) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
-  setCasinoLeaderboardEntries(entries);
+  const hasYouEntry = Object.prototype.hasOwnProperty.call(payload || {}, "you");
+  const currentUserEntry = hasYouEntry ? normalizeCasinoLeaderboardEntry(payload?.you) : undefined;
+  setCasinoLeaderboardEntries(entries, currentUserEntry);
 }
 
 function stopCasinoLeaderboardStream() {
@@ -1190,7 +1239,6 @@ async function logoutFromTradingBadge() {
       await venmoApiRequest("/api/auth/logout", { method: "POST" });
     } catch {}
     venmoAdminUnlocked = false;
-    venmoAdminAuthCode = "";
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
@@ -5406,7 +5454,6 @@ const venmoClaimState = {
   adminDevices: []
 };
 let venmoAdminUnlocked = false;
-let venmoAdminAuthCode = "";
 let venmoAdminDeviceToken = "";
 let venmoClaimPlayerId = "";
 let venmoClaimPollTimer = null;
@@ -5626,6 +5673,7 @@ function saveVenmoLocalCreditedClaimIds() {
 
 async function syncCurrentUserProfileToServer({ force = false } = {}) {
   if (!playerUsername || IS_PHONE_EMBED_MODE) return false;
+  if (!authSessionLikelyAuthenticated) return false;
   if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
   if (!venmoClaimPlayerId) return false;
   const now = Date.now();
@@ -5636,8 +5684,7 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
       method: "POST",
       body: {
         playerId: venmoClaimPlayerId,
-        username: playerUsername,
-        balance: roundCurrency(cash)
+        username: playerUsername
       }
     });
     if (isCasinoLiveDataEnabled() && !casinoLeaderboardStream) {
@@ -5737,12 +5784,10 @@ function getAdminDeviceToken() {
 
 function getAdminRequestOptions(options = {}) {
   const token = getAdminDeviceToken();
-  const adminCode = String(venmoAdminAuthCode || "").trim();
   const headers = {
     ...(options.headers || {}),
     "X-Admin-Device-Token": token
   };
-  if (adminCode) headers["X-Admin-Code"] = adminCode;
   return {
     ...options,
     headers
@@ -5773,13 +5818,14 @@ function handleAdminLoginRequired(error) {
   return true;
 }
 
-async function trustCurrentAdminDevice({ silent = false } = {}) {
-  if (!venmoAdminAuthCode) return false;
+async function trustCurrentAdminDevice({ silent = false, code = "" } = {}) {
+  const adminCode = String(code || "").trim();
+  if (!adminCode) return false;
   try {
     const payload = await venmoApiRequest("/api/admin/device/trust", getAdminRequestOptions({
       method: "POST",
       body: {
-        adminCode: venmoAdminAuthCode,
+        adminCode,
         label: loadOrCreateAdminDeviceLabel()
       }
     }));
@@ -5787,6 +5833,7 @@ async function trustCurrentAdminDevice({ silent = false } = {}) {
       venmoClaimState.adminDevices = [payload.trustedDevice, ...venmoClaimState.adminDevices];
       renderHiddenAdminDevices();
     }
+    if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
     return true;
   } catch (error) {
     const handledLoginRequired = handleAdminLoginRequired(error);
@@ -6290,7 +6337,7 @@ async function runFullAdminReset() {
     setHiddenAdminStatus("Unlock admin first.", true);
     return false;
   }
-  const code = String(venmoAdminCodeInputEl?.value || venmoAdminAuthCode || "").trim();
+  const code = String(venmoAdminCodeInputEl?.value || "").trim();
   if (!code) {
     setHiddenAdminStatus("Enter admin code before full reset.", true);
     if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.focus();
@@ -6305,14 +6352,12 @@ async function runFullAdminReset() {
     setHiddenAdminStatus("Full reset cancelled: confirmation text did not match.", true);
     return false;
   }
-  venmoAdminAuthCode = code;
-  if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = code;
   try {
     const payload = await venmoApiRequest(
       "/api/admin/system/reset",
       getAdminRequestOptions({
         method: "POST",
-        body: { confirmText: typed }
+        body: { confirmText: typed, adminCode: code }
       })
     );
     venmoClaimState.adminClaims = [];
@@ -6415,11 +6460,12 @@ function initHiddenAdminTrigger() {
   }
   if (venmoAdminTrustDeviceBtn) {
     venmoAdminTrustDeviceBtn.addEventListener("click", async () => {
-      if (!venmoAdminAuthCode) {
+      const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
+      if (!typedCode) {
         setHiddenAdminStatus("Enter admin code first.", true);
         return;
       }
-      const ok = await trustCurrentAdminDevice();
+      const ok = await trustCurrentAdminDevice({ code: typedCode });
       if (!ok) return;
       await refreshHiddenAdminDevicesFromServer({ silent: true });
       setHiddenAdminStatus("This device is trusted for admin access.");
@@ -6602,7 +6648,7 @@ function initVenmoClaimWorkflow() {
 
 async function promptVenmoAdminUnlock(forcePrompt = false) {
   const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
-  let code = typedCode || venmoAdminAuthCode;
+  let code = typedCode;
   if (forcePrompt && !typedCode) code = "";
   if (!code) {
     const autoUnlocked = await tryAutoUnlockAdminFromTrustedDevice();
@@ -6610,9 +6656,7 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
     setHiddenAdminStatus("Enter admin code to unlock this device.", true);
     return false;
   }
-  venmoAdminAuthCode = code;
-  if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = code;
-  const trusted = await trustCurrentAdminDevice({ silent: false });
+  const trusted = await trustCurrentAdminDevice({ silent: false, code });
   if (!trusted) {
     venmoAdminUnlocked = false;
     setBankMessage("Admin unlock failed.");
@@ -6622,7 +6666,6 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   const ok = await refreshVenmoAdminClaimsFromServer({ silent: true });
   if (!ok) {
     venmoAdminUnlocked = false;
-    venmoAdminAuthCode = "";
     if (hiddenAdminLivePollTimer) {
       clearInterval(hiddenAdminLivePollTimer);
       hiddenAdminLivePollTimer = null;
@@ -6637,6 +6680,7 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   await refreshHiddenAdminStatsFromServer({ silent: true });
   await refreshHiddenAdminUsersFromServer({ silent: true });
   await refreshHiddenAdminDevicesFromServer({ silent: true });
+  if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
   setHiddenAdminStatus("Admin unlocked. Device verified.");
   if (hiddenAdminPanelOpen) startHiddenAdminLivePolling();
   setBankMessage("Admin claim panel unlocked.");
