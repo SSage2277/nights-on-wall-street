@@ -604,12 +604,6 @@ async function pollAuthSessionWatchdog() {
     }
     if (response.ok && payload?.authenticated === true) {
       authSessionLikelyAuthenticated = true;
-      if (payload?.user) {
-        const beforeSig = getPersistProfileSignature();
-        applyServerPortfolioSnapshot(payload.user, { useServerBalance: true });
-        const afterSig = getPersistProfileSignature();
-        if (afterSig !== beforeSig) updateUI();
-      }
       return;
     }
     if (response.ok && payload?.authenticated === false) {
