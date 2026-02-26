@@ -604,6 +604,12 @@ async function pollAuthSessionWatchdog() {
     }
     if (response.ok && payload?.authenticated === true) {
       authSessionLikelyAuthenticated = true;
+      if (payload?.user) {
+        const beforeSig = getPersistProfileSignature();
+        applyServerPortfolioSnapshot(payload.user, { useServerBalance: true });
+        const afterSig = getPersistProfileSignature();
+        if (afterSig !== beforeSig) updateUI();
+      }
       return;
     }
     if (response.ok && payload?.authenticated === false) {
@@ -644,23 +650,17 @@ function getPersistedBalanceForUser({ username = "", playerId = "" } = {}) {
   return roundCurrency(savedCash);
 }
 
-function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalBalance = false } = {}) {
-  const username = normalizeUsername(user?.username);
-  const playerId = String(user?.playerId || "").trim();
+function applyServerPortfolioSnapshot(user, { useServerBalance = true, allowLocalBalanceFallback = false } = {}) {
   const serverBalance = Number(user?.balance);
-  if (!username || !playerId) return false;
-  if (!saveUsername(username)) return false;
-  setGuestModeEnabled(false);
-  venmoClaimPlayerId = playerId;
-  try {
-    localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
-  } catch {}
   let resolvedBalance = null;
   if (useServerBalance && Number.isFinite(serverBalance) && serverBalance >= 0) {
     resolvedBalance = roundCurrency(serverBalance);
   }
-  if (preferLocalBalance) {
-    const localBalance = getPersistedBalanceForUser({ username, playerId });
+  if (allowLocalBalanceFallback) {
+    const localBalance = getPersistedBalanceForUser({
+      username: user?.username || "",
+      playerId: user?.playerId || ""
+    });
     if (Number.isFinite(localBalance) && localBalance >= 0) {
       resolvedBalance = roundCurrency(localBalance);
     }
@@ -668,6 +668,45 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
   if (Number.isFinite(resolvedBalance) && resolvedBalance >= 0) {
     cash = roundCurrency(resolvedBalance);
   }
+
+  const nextShares = Number(user?.shares);
+  if (Number.isFinite(nextShares) && nextShares >= 0) {
+    shares = Math.max(0, Math.floor(nextShares));
+  }
+  const nextAvgCost = Number(user?.avgCost);
+  if (Number.isFinite(nextAvgCost) && nextAvgCost >= 0) {
+    avgCost = Math.round(nextAvgCost * 10000) / 10000;
+  }
+  const nextSavings = Number(user?.savingsBalance);
+  if (Number.isFinite(nextSavings) && nextSavings >= 0) {
+    savingsBalance = roundCurrency(nextSavings);
+  }
+  const nextAutoSave = Number(user?.autoSavingsPercent);
+  if (Number.isFinite(nextAutoSave) && nextAutoSave >= 0) {
+    autoSavingsPercent = roundCurrency(clampPercent(nextAutoSave));
+  }
+
+  phoneState.cash = roundCurrency(cash);
+  phoneState.shares = Math.max(0, Math.floor(Number(shares) || 0));
+  phoneState.avgCost = roundCurrency(avgCost);
+  phoneState.savingsBalance = roundCurrency(savingsBalance);
+  phoneState.autoSavingsPercent = roundCurrency(clampPercent(autoSavingsPercent));
+}
+
+function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalBalance = false } = {}) {
+  const username = normalizeUsername(user?.username);
+  const playerId = String(user?.playerId || "").trim();
+  if (!username || !playerId) return false;
+  if (!saveUsername(username)) return false;
+  setGuestModeEnabled(false);
+  venmoClaimPlayerId = playerId;
+  try {
+    localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
+  } catch {}
+  applyServerPortfolioSnapshot(user, {
+    useServerBalance,
+    allowLocalBalanceFallback: preferLocalBalance
+  });
   authSessionLikelyAuthenticated = true;
   hideBannedOverlay();
   startAuthSessionWatchdog();
@@ -689,7 +728,7 @@ async function hydrateAuthSessionIfPresent() {
       stopAuthSessionWatchdog();
       return false;
     }
-    return applyAuthenticatedProfile(payload.user, { useServerBalance: true, preferLocalBalance: true });
+    return applyAuthenticatedProfile(payload.user, { useServerBalance: true, preferLocalBalance: false });
   } catch {
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
@@ -793,7 +832,7 @@ async function submitFirstLaunchUsername() {
       if (!sessionReady) {
         throw new Error("Login session was not saved. Open the live site and try again.");
       }
-      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: true });
+      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: false });
       if (!ok) {
         setFirstLaunchUsernameError("Login succeeded but profile data was invalid.");
         return false;
@@ -836,7 +875,7 @@ async function submitFirstLaunchUsername() {
     if (!sessionReady) {
       throw new Error("Account created, but login session was not saved. Open the live site and login.");
     }
-    const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: false });
+    const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: false });
     if (!ok) {
       setFirstLaunchUsernameError("Account created but profile data was invalid.");
       return false;
@@ -2825,7 +2864,11 @@ function syncCurrentUserProfileOnExit() {
   const payload = JSON.stringify({
     playerId: venmoClaimPlayerId,
     username: playerUsername,
-    balance: roundCurrency(cash)
+    balance: roundCurrency(cash),
+    shares: Math.max(0, Math.floor(Number(shares) || 0)),
+    avgCost: Math.max(0, Number(avgCost) || 0),
+    savingsBalance: roundCurrency(savingsBalance),
+    autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
   });
   let sentWithBeacon = false;
   try {
@@ -6005,18 +6048,37 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
   if (!force && now - lastUserProfileSyncAt < USER_PROFILE_SYNC_INTERVAL_MS) return false;
   lastUserProfileSyncAt = now;
   try {
-    await venmoApiRequest("/api/users/sync", {
+    const payload = await venmoApiRequest("/api/users/sync", {
       method: "POST",
       body: {
         playerId: venmoClaimPlayerId,
-        username: playerUsername
+        username: playerUsername,
+        balance: roundCurrency(cash),
+        shares: Math.max(0, Math.floor(Number(shares) || 0)),
+        avgCost: Math.max(0, Number(avgCost) || 0),
+        savingsBalance: roundCurrency(savingsBalance),
+        autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
       }
     });
+    if (payload?.user) {
+      const beforeSig = getPersistProfileSignature();
+      applyServerPortfolioSnapshot(payload.user, { useServerBalance: true });
+      const afterSig = getPersistProfileSignature();
+      if (afterSig !== beforeSig) updateUI();
+    }
     if (isCasinoLiveDataEnabled() && !casinoLeaderboardStream) {
       void refreshCasinoLeaderboardFromServer();
     }
     return true;
-  } catch {
+  } catch (error) {
+    const serverUser = error?.details?.user;
+    if (serverUser) {
+      const beforeSig = getPersistProfileSignature();
+      applyServerPortfolioSnapshot(serverUser, { useServerBalance: true });
+      const afterSig = getPersistProfileSignature();
+      if (afterSig !== beforeSig) updateUI();
+      setBankMessage(String(error?.message || "Server rejected local balance update."));
+    }
     return false;
   }
 }

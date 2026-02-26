@@ -22,6 +22,14 @@ const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
 const RATE_LIMIT_ENABLED = String(process.env.RATE_LIMIT_ENABLED || "1").trim() !== "0";
 const ALLOW_WEAK_ADMIN_CODE = String(process.env.ALLOW_WEAK_ADMIN_CODE || "0").trim() === "1";
 const INITIAL_ACCOUNT_BALANCE = 1000;
+const MAX_ACCOUNT_BALANCE = 10_000_000;
+const MAX_ACCOUNT_SAVINGS = 10_000_000;
+const MAX_ACCOUNT_AVG_COST = 1_000_000;
+const MAX_ACCOUNT_SHARES = 2_000_000;
+const BALANCE_SYNC_BURST_UP = 25_000;
+const BALANCE_SYNC_UP_PER_MIN = 50_000;
+const SHARES_SYNC_BURST_UP = 5_000;
+const SHARES_SYNC_UP_PER_MIN = 10_000;
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -110,6 +118,30 @@ function sanitizePassword(value) {
   if (!password) return "";
   if (password.length < 8 || password.length > 72) return "";
   return password;
+}
+
+function hasOwnField(obj, key) {
+  return Boolean(obj && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, key));
+}
+
+function sanitizeSyncNumber(value, { max = Number.MAX_SAFE_INTEGER, decimals = 2 } = {}) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0 || parsed > max) return null;
+  const factor = 10 ** Math.max(0, Math.floor(decimals));
+  return Math.round(parsed * factor) / factor;
+}
+
+function sanitizeSyncShares(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0 || parsed > MAX_ACCOUNT_SHARES) return null;
+  return Math.floor(parsed);
+}
+
+function getSyncAllowedIncrease(elapsedMs, burst, perMinute) {
+  const elapsed = Math.max(0, Number(elapsedMs) || 0);
+  return burst + (elapsed / 60000) * perMinute;
 }
 
 function sanitizeClaimSource(value) {
@@ -251,6 +283,10 @@ function mapUserRow(row) {
     email: sanitizeEmail(row.email) || "",
     usernameKey: String(row.username_key || ""),
     balance: Math.round(toNumber(row.balance) * 100) / 100,
+    shares: Math.max(0, Math.floor(toNumber(row.shares))),
+    avgCost: Math.round(toNumber(row.avg_cost) * 10000) / 10000,
+    savingsBalance: Math.round(toNumber(row.savings_balance) * 100) / 100,
+    autoSavingsPercent: Math.round(toNumber(row.auto_savings_percent) * 1000) / 1000,
     lastSeenAt: Number(row.last_seen_at) || 0,
     isAdmin: row.is_admin === true
   };
@@ -405,6 +441,10 @@ function normalizeUserForClient(row) {
     username: mapped.username,
     email: mapped.email,
     balance: mapped.balance,
+    shares: mapped.shares,
+    avgCost: mapped.avgCost,
+    savingsBalance: mapped.savingsBalance,
+    autoSavingsPercent: mapped.autoSavingsPercent,
     lastSeenAt: mapped.lastSeenAt,
     isAdmin: mapped.isAdmin === true
   };
@@ -995,7 +1035,7 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1038,7 +1078,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
     const existingByUsername = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1064,7 +1104,7 @@ app.post("/api/auth/register", async (req, res) => {
                 email = NULL,
                 last_seen_at = $4
             WHERE player_id = $5
-            RETURNING player_id, username, username_key, email, password_hash, balance, last_seen_at, is_admin
+            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
           `,
           [username, usernameKey, replacementHash, Date.now(), existing.player_id]
         );
@@ -1084,9 +1124,9 @@ app.post("/api/auth/register", async (req, res) => {
     const playerId = `u_${crypto.randomUUID().replace(/-/g, "")}`;
     const upsert = await db.query(
       `
-        INSERT INTO users (player_id, username, username_key, email, password_hash, balance, last_seen_at)
-        VALUES ($1, $2, $3, NULL, $4, $5, $6)
-        RETURNING player_id, username, username_key, email, password_hash, balance, last_seen_at, is_admin
+        INSERT INTO users (player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, balance_updated_at)
+        VALUES ($1, $2, $3, NULL, $4, $5, 0, 0, 0, 0, $6, $6)
+        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
       `,
       [playerId, username, usernameKey, passwordHash, INITIAL_ACCOUNT_BALANCE, Date.now()]
     );
@@ -1114,7 +1154,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1555,23 +1595,102 @@ app.post("/api/users/sync", async (req, res) => {
       res.status(409).json({ ok: false, error: "Username already taken." });
       return;
     }
+    const currentLookup = await db.query(
+      `
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [playerId]
+    );
+    if (!currentLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Session account not found." });
+      return;
+    }
+    const current = currentLookup.rows[0];
+    const now = Date.now();
+    const hasBalance = hasOwnField(req.body, "balance");
+    const hasShares = hasOwnField(req.body, "shares");
+    const hasAvgCost = hasOwnField(req.body, "avgCost");
+    const hasSavingsBalance = hasOwnField(req.body, "savingsBalance");
+    const hasAutoSavingsPercent = hasOwnField(req.body, "autoSavingsPercent");
+    const hasPortfolioPayload = hasBalance || hasShares || hasAvgCost || hasSavingsBalance || hasAutoSavingsPercent;
+
+    const nextBalance = hasBalance
+      ? sanitizeSyncNumber(req.body?.balance, { max: MAX_ACCOUNT_BALANCE, decimals: 2 })
+      : Math.round(toNumber(current.balance) * 100) / 100;
+    const nextShares = hasShares
+      ? sanitizeSyncShares(req.body?.shares)
+      : Math.max(0, Math.floor(toNumber(current.shares)));
+    const nextAvgCost = hasAvgCost
+      ? sanitizeSyncNumber(req.body?.avgCost, { max: MAX_ACCOUNT_AVG_COST, decimals: 4 })
+      : Math.round(toNumber(current.avg_cost) * 10000) / 10000;
+    const nextSavingsBalance = hasSavingsBalance
+      ? sanitizeSyncNumber(req.body?.savingsBalance, { max: MAX_ACCOUNT_SAVINGS, decimals: 2 })
+      : Math.round(toNumber(current.savings_balance) * 100) / 100;
+    const nextAutoSavingsPercent = hasAutoSavingsPercent
+      ? sanitizeSyncNumber(req.body?.autoSavingsPercent, { max: 100, decimals: 3 })
+      : Math.round(toNumber(current.auto_savings_percent) * 1000) / 1000;
+
+    if (nextBalance === null || nextShares === null || nextAvgCost === null || nextSavingsBalance === null || nextAutoSavingsPercent === null) {
+      res.status(400).json({ ok: false, error: "Invalid portfolio sync payload." });
+      return;
+    }
+
+    if (hasPortfolioPayload) {
+      const currentBalance = Math.round(toNumber(current.balance) * 100) / 100;
+      const currentShares = Math.max(0, Math.floor(toNumber(current.shares)));
+      const lastUpdatedAt = Number(current.balance_updated_at) || Number(current.last_seen_at) || 0;
+      const elapsedMs = Math.max(0, now - lastUpdatedAt);
+      const allowedBalanceIncrease = getSyncAllowedIncrease(elapsedMs, BALANCE_SYNC_BURST_UP, BALANCE_SYNC_UP_PER_MIN);
+      const allowedSharesIncrease = getSyncAllowedIncrease(elapsedMs, SHARES_SYNC_BURST_UP, SHARES_SYNC_UP_PER_MIN);
+
+      if (nextBalance > currentBalance + allowedBalanceIncrease) {
+        res.status(409).json({
+          ok: false,
+          error: "Balance update rejected by server guard.",
+          user: normalizeUserForClient(current)
+        });
+        return;
+      }
+      if (nextShares > currentShares + allowedSharesIncrease) {
+        res.status(409).json({
+          ok: false,
+          error: "Share update rejected by server guard.",
+          user: normalizeUserForClient(current)
+        });
+        return;
+      }
+    }
+
     const updated = await db.query(
       `
         UPDATE users
         SET username = $2,
             username_key = $3,
-            last_seen_at = $4
+            balance = $4,
+            shares = $5,
+            avg_cost = $6,
+            savings_balance = $7,
+            auto_savings_percent = $8,
+            last_seen_at = $9,
+            balance_updated_at = CASE WHEN $10 THEN $9 ELSE COALESCE(balance_updated_at, 0) END
         WHERE player_id = $1
-        RETURNING player_id, username, username_key, email, balance, last_seen_at, is_admin
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
       `,
-      [playerId, username, usernameKey, Date.now()]
+      [playerId, username, usernameKey, nextBalance, nextShares, nextAvgCost, nextSavingsBalance, nextAutoSavingsPercent, now, hasPortfolioPayload]
     );
     if (!updated.rowCount) {
       res.status(404).json({ ok: false, error: "Session account not found." });
       return;
     }
     const user = mapUserRow(updated.rows[0]);
-    queueLeaderboardUpdate("sync");
+    if (hasPortfolioPayload) {
+      queueLeaderboardUpdate("sync-balance");
+    } else {
+      queueLeaderboardUpdate("sync");
+    }
     res.json({ ok: true, user });
   } catch (error) {
     if (error?.code === "23505") {
@@ -1627,6 +1746,10 @@ app.get("/api/admin/users", async (req, res) => {
           u.username_key,
           u.email,
           u.balance,
+          u.shares,
+          u.avg_cost,
+          u.savings_balance,
+          u.auto_savings_percent,
           u.last_seen_at,
           u.is_admin,
           u.banned_at,
@@ -2086,6 +2209,11 @@ app.post("/api/admin/system/reset", async (req, res) => {
             banned_at = 0,
             banned_reason = '',
             balance = 1000,
+            shares = 0,
+            avg_cost = 0,
+            savings_balance = 0,
+            auto_savings_percent = 0,
+            balance_updated_at = $2,
             last_seen_at = $2
         WHERE player_id = $1
       `,
@@ -2232,6 +2360,11 @@ async function ensureSchema() {
       email_verified_at BIGINT NOT NULL DEFAULT 0,
       is_admin BOOLEAN NOT NULL DEFAULT false,
       balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      shares INTEGER NOT NULL DEFAULT 0,
+      avg_cost NUMERIC(14,4) NOT NULL DEFAULT 0,
+      savings_balance NUMERIC(14,2) NOT NULL DEFAULT 0,
+      auto_savings_percent NUMERIC(6,3) NOT NULL DEFAULT 0,
+      balance_updated_at BIGINT NOT NULL DEFAULT 0,
       last_seen_at BIGINT NOT NULL DEFAULT 0,
       banned_at BIGINT NOT NULL DEFAULT 0,
       banned_reason TEXT NOT NULL DEFAULT ''
@@ -2259,6 +2392,26 @@ async function ensureSchema() {
   `);
   await db.query(`
     ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS shares INTEGER NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS avg_cost NUMERIC(14,4) NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS savings_balance NUMERIC(14,2) NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS auto_savings_percent NUMERIC(6,3) NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS balance_updated_at BIGINT NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
     ADD COLUMN IF NOT EXISTS last_seen_at BIGINT NOT NULL DEFAULT 0
   `);
   await db.query(`
@@ -2277,11 +2430,21 @@ async function ensureSchema() {
     UPDATE users
     SET username_key = lower(username),
         email_verified_at = COALESCE(email_verified_at, 0),
+        shares = COALESCE(shares, 0),
+        avg_cost = COALESCE(avg_cost, 0),
+        savings_balance = COALESCE(savings_balance, 0),
+        auto_savings_percent = COALESCE(auto_savings_percent, 0),
+        balance_updated_at = COALESCE(balance_updated_at, 0),
         banned_at = COALESCE(banned_at, 0),
         banned_reason = COALESCE(banned_reason, ''),
         is_admin = COALESCE(is_admin, false)
     WHERE username_key IS NULL OR username_key = ''
        OR email_verified_at IS NULL
+       OR shares IS NULL
+       OR avg_cost IS NULL
+       OR savings_balance IS NULL
+       OR auto_savings_percent IS NULL
+       OR balance_updated_at IS NULL
        OR banned_at IS NULL
        OR banned_reason IS NULL
        OR is_admin IS NULL
