@@ -87,6 +87,8 @@ const casinoLeaderboardEntries = [];
 let casinoLiveFeedTimer = null;
 let casinoLiveFeedRequestInFlight = false;
 let casinoLeaderboardRequestInFlight = false;
+let casinoLeaderboardStream = null;
+let casinoLeaderboardStreamReconnectTimer = null;
 let playerUsername = "";
 let usernameGateActive = false;
 let firstLaunchAuthMode = "register";
@@ -992,17 +994,71 @@ async function refreshCasinoLeaderboardFromServer() {
   casinoLeaderboardRequestInFlight = true;
   try {
     const payload = await venmoApiRequest(`/api/leaderboard?limit=${CASINO_LEADERBOARD_LIMIT}`);
-    const players = Array.isArray(payload?.players) ? payload.players : [];
-    const entries = players
-      .map(normalizeCasinoLeaderboardEntry)
-      .filter(Boolean)
-      .sort((a, b) => (b.balance || 0) - (a.balance || 0) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
-    setCasinoLeaderboardEntries(entries);
+    applyCasinoLeaderboardPayload(payload);
     return true;
   } catch {
     return false;
   } finally {
     casinoLeaderboardRequestInFlight = false;
+  }
+}
+
+function applyCasinoLeaderboardPayload(payload) {
+  const players = Array.isArray(payload?.players) ? payload.players : [];
+  const entries = players
+    .map(normalizeCasinoLeaderboardEntry)
+    .filter(Boolean)
+    .sort((a, b) => (b.balance || 0) - (a.balance || 0) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+  setCasinoLeaderboardEntries(entries);
+}
+
+function stopCasinoLeaderboardStream() {
+  if (casinoLeaderboardStreamReconnectTimer) {
+    clearTimeout(casinoLeaderboardStreamReconnectTimer);
+    casinoLeaderboardStreamReconnectTimer = null;
+  }
+  if (!casinoLeaderboardStream) return;
+  try {
+    casinoLeaderboardStream.close();
+  } catch {}
+  casinoLeaderboardStream = null;
+}
+
+function scheduleCasinoLeaderboardStreamReconnect() {
+  if (casinoLeaderboardStreamReconnectTimer || IS_PHONE_EMBED_MODE) return;
+  if (!isCasinoLiveDataEnabled()) return;
+  casinoLeaderboardStreamReconnectTimer = setTimeout(() => {
+    casinoLeaderboardStreamReconnectTimer = null;
+    startCasinoLeaderboardStream();
+  }, 1200);
+}
+
+function startCasinoLeaderboardStream() {
+  if (IS_PHONE_EMBED_MODE) return;
+  if (!isCasinoLiveDataEnabled()) return;
+  if (typeof window.EventSource !== "function") return;
+  if (casinoLeaderboardStream) return;
+  try {
+    const stream = new EventSource("/api/leaderboard/stream", { withCredentials: true });
+    casinoLeaderboardStream = stream;
+    stream.addEventListener("leaderboard", (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || "{}"));
+        applyCasinoLeaderboardPayload(payload);
+      } catch {}
+    });
+    stream.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || "{}"));
+        applyCasinoLeaderboardPayload(payload);
+      } catch {}
+    };
+    stream.onerror = () => {
+      stopCasinoLeaderboardStream();
+      scheduleCasinoLeaderboardStreamReconnect();
+    };
+  } catch {
+    scheduleCasinoLeaderboardStreamReconnect();
   }
 }
 
@@ -1046,6 +1102,7 @@ function startCasinoLiveFeedTicker() {
   renderCasinoLiveFeed();
   renderCasinoLeaderboard();
   if (isCasinoLiveDataEnabled()) {
+    startCasinoLeaderboardStream();
     void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
   }
   casinoLiveFeedTimer = window.setInterval(() => {
@@ -1053,7 +1110,9 @@ function startCasinoLiveFeedTicker() {
     if (!casinoRoot || casinoRoot.style.display === "none") return;
     syncCasinoLiveDataNotice();
     if (!isCasinoLiveDataEnabled()) return;
-    void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
+    if (!casinoLeaderboardStream) startCasinoLeaderboardStream();
+    void refreshCasinoLiveFeedFromServer();
+    if (!casinoLeaderboardStream) void refreshCasinoLeaderboardFromServer();
   }, 4200);
 }
 
@@ -1061,9 +1120,12 @@ function handleCasinoLiveDataConnectionChange() {
   syncCasinoLiveDataNotice();
   renderCasinoLiveFeed();
   renderCasinoLeaderboard();
-  if (isCasinoLiveDataEnabled()) {
-    void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
+  if (!isCasinoLiveDataEnabled()) {
+    stopCasinoLeaderboardStream();
+    return;
   }
+  startCasinoLeaderboardStream();
+  void Promise.all([refreshCasinoLiveFeedFromServer(), refreshCasinoLeaderboardFromServer()]);
 }
 
 let pokerLastSessionProfit = 0;
@@ -5316,12 +5378,12 @@ const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
 const VENMO_LOCAL_CREDITED_STORAGE_KEY = "venmo_claim_credited_local_v1";
 const VENMO_CLAIM_POLL_MS = 10000;
 const HIDDEN_ADMIN_LIVE_POLL_MS = 1000;
-const USER_PROFILE_SYNC_INTERVAL_MS = 12000;
+const USER_PROFILE_SYNC_INTERVAL_MS = 1200;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
-  small: { funds: 1000, usd: 2, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=2&note=S%241000" },
-  medium: { funds: 5000, usd: 8, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=8&note=S%245000" },
-  xlarge: { funds: 10000, usd: 18, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=18&note=S%2410000" },
+  small: { funds: 1000, usd: 3, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=3&note=S%241000" },
+  medium: { funds: 5000, usd: 10, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=10&note=S%245000" },
+  xlarge: { funds: 10000, usd: 20, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=20&note=S%2410000" },
   large: { funds: 25000, usd: 40, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=40&note=S%2425000" }
 });
 const venmoClaimState = {
@@ -5566,6 +5628,9 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
         balance: roundCurrency(cash)
       }
     });
+    if (isCasinoLiveDataEnabled() && !casinoLeaderboardStream) {
+      void refreshCasinoLeaderboardFromServer();
+    }
     return true;
   } catch {
     return false;

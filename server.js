@@ -44,9 +44,9 @@ const db = new Pool({
 });
 
 const STORE_PACKAGES = Object.freeze({
-  small: { usd: 2, funds: 1000, label: "Starter Funds Pack" },
-  medium: { usd: 8, funds: 5000, label: "Trader Funds Pack" },
-  xlarge: { usd: 18, funds: 10000, label: "Pro Funds Pack" },
+  small: { usd: 3, funds: 1000, label: "Starter Funds Pack" },
+  medium: { usd: 10, funds: 5000, label: "Trader Funds Pack" },
+  xlarge: { usd: 20, funds: 10000, label: "Pro Funds Pack" },
   large: { usd: 40, funds: 25000, label: "Whale Funds Pack" }
 });
 const PgSessionStore = connectPgSimple(session);
@@ -59,6 +59,9 @@ const PACKAGE_ALIASES = Object.freeze({
   starter: "small",
   trader: "medium"
 });
+const LEADERBOARD_STREAM_LIMIT = 12;
+const leaderboardStreamClients = new Set();
+let leaderboardBroadcastTimer = null;
 
 function normalizeTxn(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
@@ -198,6 +201,68 @@ function mapLeaderboardRow(row) {
     balance: Math.round(toNumber(row.balance) * 100) / 100,
     lastSeenAt: Number(row.last_seen_at) || 0
   };
+}
+
+async function fetchLeaderboardPlayers(limit = LEADERBOARD_STREAM_LIMIT) {
+  const safeLimit = Number.isFinite(Number(limit))
+    ? Math.max(3, Math.min(50, Math.floor(Number(limit))))
+    : LEADERBOARD_STREAM_LIMIT;
+  const result = await db.query(
+    `
+      SELECT player_id, username, balance, last_seen_at
+      FROM users
+      WHERE COALESCE(banned_at, 0) = 0
+      ORDER BY balance DESC, last_seen_at DESC, player_id ASC
+      LIMIT $1
+    `,
+    [safeLimit]
+  );
+  return result.rows.map(mapLeaderboardRow);
+}
+
+function removeLeaderboardStreamClient(client) {
+  if (!client) return;
+  leaderboardStreamClients.delete(client);
+  if (client.heartbeat) {
+    clearInterval(client.heartbeat);
+    client.heartbeat = null;
+  }
+}
+
+function broadcastLeaderboardPlayers(players, reason = "update") {
+  if (!leaderboardStreamClients.size) return;
+  const payload = JSON.stringify({
+    ok: true,
+    reason: String(reason || "update"),
+    ts: Date.now(),
+    players: Array.isArray(players) ? players : []
+  });
+  for (const client of [...leaderboardStreamClients]) {
+    try {
+      client.res.write(`event: leaderboard\ndata: ${payload}\n\n`);
+    } catch {
+      removeLeaderboardStreamClient(client);
+    }
+  }
+}
+
+async function publishLeaderboardUpdate(reason = "update") {
+  if (!leaderboardStreamClients.size) return;
+  try {
+    const players = await fetchLeaderboardPlayers(LEADERBOARD_STREAM_LIMIT);
+    broadcastLeaderboardPlayers(players, reason);
+  } catch (error) {
+    console.error("Failed to publish leaderboard update", error);
+  }
+}
+
+function queueLeaderboardUpdate(reason = "update") {
+  if (!leaderboardStreamClients.size) return;
+  if (leaderboardBroadcastTimer) return;
+  leaderboardBroadcastTimer = setTimeout(() => {
+    leaderboardBroadcastTimer = null;
+    void publishLeaderboardUpdate(reason);
+  }, 120);
 }
 
 function mapAdminUserRow(row) {
@@ -863,6 +928,7 @@ app.post("/api/auth/register", async (req, res) => {
           [username, usernameKey, replacementHash, safeBalance, Date.now(), existing.player_id]
         );
         req.session.playerId = sanitizePlayerId(updated.rows[0]?.player_id || existing.player_id);
+        queueLeaderboardUpdate("register");
         res.json({ ok: true, user: normalizeUserForClient(updated.rows[0] || existing) });
         return;
       }
@@ -884,6 +950,7 @@ app.post("/api/auth/register", async (req, res) => {
       [playerId, username, usernameKey, passwordHash, safeBalance, Date.now()]
     );
     req.session.playerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
+    queueLeaderboardUpdate("register");
     res.json({ ok: true, user: normalizeUserForClient(upsert.rows[0]) });
   } catch (error) {
     if (error?.code === "23505") {
@@ -942,6 +1009,7 @@ app.post("/api/auth/login", async (req, res) => {
       [Date.now(), user.player_id]
     );
     req.session.playerId = sanitizePlayerId(user.player_id);
+    queueLeaderboardUpdate("login");
     res.json({ ok: true, user: normalizeUserForClient(user) });
   } catch (error) {
     console.error("Failed to login", error);
@@ -1036,23 +1104,52 @@ app.post("/api/live-wins", async (req, res) => {
 
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const rawLimit = Number(req.query?.limit);
-    const limit = Number.isFinite(rawLimit) ? Math.max(3, Math.min(50, Math.floor(rawLimit))) : 12;
-    const result = await db.query(
-      `
-        SELECT player_id, username, balance, last_seen_at
-        FROM users
-        WHERE COALESCE(banned_at, 0) = 0
-        ORDER BY balance DESC, last_seen_at DESC, player_id ASC
-        LIMIT $1
-      `,
-      [limit]
-    );
-    const players = result.rows.map(mapLeaderboardRow);
+    const players = await fetchLeaderboardPlayers(req.query?.limit);
     res.json({ ok: true, players });
   } catch (error) {
     console.error("Failed to load leaderboard", error);
     res.status(500).json({ ok: false, error: "Could not load leaderboard." });
+  }
+});
+
+app.get("/api/leaderboard/stream", async (req, res) => {
+  try {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+    const client = {
+      id: crypto.randomUUID(),
+      res,
+      heartbeat: null
+    };
+    leaderboardStreamClients.add(client);
+    client.heartbeat = setInterval(() => {
+      try {
+        client.res.write(": ping\n\n");
+      } catch {
+        removeLeaderboardStreamClient(client);
+      }
+    }, 25000);
+    if (typeof client.heartbeat.unref === "function") client.heartbeat.unref();
+
+    req.on("close", () => removeLeaderboardStreamClient(client));
+    req.on("aborted", () => removeLeaderboardStreamClient(client));
+
+    const players = await fetchLeaderboardPlayers(LEADERBOARD_STREAM_LIMIT);
+    broadcastLeaderboardPlayers(players, "initial");
+  } catch (error) {
+    console.error("Failed to open leaderboard stream", error);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Could not open leaderboard stream." });
+    } else {
+      try {
+        res.end();
+      } catch {}
+    }
   }
 });
 
@@ -1247,6 +1344,7 @@ app.post("/api/users/sync", async (req, res) => {
       [playerId, username, usernameKey, Math.round(balance * 100) / 100, Date.now()]
     );
     const user = mapUserRow(upsert.rows[0]);
+    queueLeaderboardUpdate("sync");
     res.json({ ok: true, user });
   } catch (error) {
     if (error?.code === "23505") {
@@ -1577,6 +1675,7 @@ app.post("/api/admin/users/:playerId/ban", async (req, res) => {
       res.status(409).json({ ok: false, error: "User is already banned." });
       return;
     }
+    queueLeaderboardUpdate("ban");
     res.json({ ok: true, playerId, bannedAt: now, bannedReason: reason });
   } catch (error) {
     console.error("Failed to ban user", error);
@@ -1613,6 +1712,7 @@ app.post("/api/admin/users/:playerId/unban", async (req, res) => {
       res.status(409).json({ ok: false, error: "User is not banned." });
       return;
     }
+    queueLeaderboardUpdate("unban");
     res.json({ ok: true, playerId });
   } catch (error) {
     console.error("Failed to unban user", error);
@@ -1654,6 +1754,7 @@ app.post("/api/admin/users/:playerId/remove", async (req, res) => {
       return;
     }
     await client.query("COMMIT");
+    queueLeaderboardUpdate("remove");
     res.json({
       ok: true,
       removed: {
@@ -1750,6 +1851,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
       );
     }
     await client.query("COMMIT");
+    queueLeaderboardUpdate("reset");
     res.json({
       ok: true,
       reset: {
