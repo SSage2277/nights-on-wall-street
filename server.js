@@ -274,7 +274,8 @@ function mapFeedbackRow(row) {
     category: sanitizeFeedbackCategory(row.category),
     message: String(row.message || ""),
     status: String(row.status || "open"),
-    submittedAt: Number(row.submitted_at) || 0
+    submittedAt: Number(row.submitted_at) || 0,
+    reviewedAt: Number(row.reviewed_at) || 0
   };
 }
 
@@ -757,7 +758,7 @@ const RATE_LIMIT_RULES = Object.freeze([
   {
     id: "admin-read",
     methods: new Set(["GET"]),
-    pattern: /^\/api\/admin\/(claims|users|stats|devices)$/i,
+    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback)$/i,
     scope: "sessionOrIp",
     max: 360,
     windowMs: 60 * 1000,
@@ -1662,6 +1663,41 @@ app.get("/api/admin/users", async (req, res) => {
   } catch (error) {
     console.error("Failed to load admin users", error);
     res.status(500).json({ ok: false, error: "Could not load users." });
+  }
+});
+
+app.get("/api/admin/feedback", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, Math.floor(rawLimit))) : 100;
+    const statusFilter = String(req.query?.status || "").trim().toLowerCase();
+    const result =
+      statusFilter && ["open", "reviewed", "closed"].includes(statusFilter)
+        ? await db.query(
+            `
+              SELECT id, player_id, username, category, message, status, submitted_at, reviewed_at
+              FROM feedback_submissions
+              WHERE status = $1
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT $2
+            `,
+            [statusFilter, limit]
+          )
+        : await db.query(
+            `
+              SELECT id, player_id, username, category, message, status, submitted_at, reviewed_at
+              FROM feedback_submissions
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT $1
+            `,
+            [limit]
+          );
+    res.json({ ok: true, feedback: result.rows.map(mapFeedbackRow), trustedDevice: adminAccess.device || null });
+  } catch (error) {
+    console.error("Failed to load admin feedback", error);
+    res.status(500).json({ ok: false, error: "Could not load feedback." });
   }
 });
 

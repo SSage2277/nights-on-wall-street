@@ -858,6 +858,7 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminUsers = [];
     venmoClaimState.adminStats = null;
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminFeedback = [];
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
@@ -876,6 +877,7 @@ async function clearLocalAccountOnDevice() {
     renderHiddenAdminStats();
     renderHiddenAdminUsers();
     renderHiddenAdminDevices();
+    renderHiddenAdminFeedback();
     setHiddenAdminStatus("");
     setFirstLaunchUsernameError("Cleared. Create a new account or login with a different one.");
     if (registerUsernameInput) registerUsernameInput.focus();
@@ -5706,6 +5708,7 @@ const hiddenAdminStatusEl = document.getElementById("hiddenAdminStatus");
 const hiddenAdminStatsEl = document.getElementById("hiddenAdminStats");
 const hiddenAdminUsersEl = document.getElementById("hiddenAdminUsers");
 const hiddenAdminDevicesEl = document.getElementById("hiddenAdminDevices");
+const hiddenAdminFeedbackEl = document.getElementById("hiddenAdminFeedback");
 const venmoAdminCodeInputEl = document.getElementById("venmoAdminCodeInput");
 const venmoAdminUnlockBtn = document.getElementById("venmoAdminUnlockBtn");
 const venmoAdminTrustDeviceBtn = document.getElementById("venmoAdminTrustDeviceBtn");
@@ -5730,7 +5733,8 @@ const venmoClaimState = {
   adminClaims: [],
   adminUsers: [],
   adminStats: null,
-  adminDevices: []
+  adminDevices: [],
+  adminFeedback: []
 };
 let venmoAdminUnlocked = false;
 let venmoAdminDeviceToken = "";
@@ -6171,11 +6175,13 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLock
     venmoClaimState.adminUsers = [];
     venmoClaimState.adminStats = null;
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminFeedback = [];
     venmoAdminUnlocked = false;
     renderVenmoAdminClaims();
     renderHiddenAdminUsers();
     renderHiddenAdminStats();
     renderHiddenAdminDevices();
+    renderHiddenAdminFeedback();
     const handledLoginRequired = handleAdminLoginRequired(error);
     if (!silent && !handledLoginRequired) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
@@ -6421,6 +6427,65 @@ function renderHiddenAdminDevices() {
   `;
 }
 
+function getAdminFeedbackStatusLabel(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "closed") return "Closed";
+  if (normalized === "reviewed") return "Reviewed";
+  return "Open";
+}
+
+function renderHiddenAdminFeedback() {
+  if (!hiddenAdminFeedbackEl) return;
+  if (!venmoAdminUnlocked) {
+    hiddenAdminFeedbackEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  const feedbackEntries = Array.isArray(venmoClaimState.adminFeedback) ? venmoClaimState.adminFeedback : [];
+  if (!feedbackEntries.length) {
+    hiddenAdminFeedbackEl.innerHTML = `<div class="hidden-admin-empty">No feedback submitted yet.</div>`;
+    return;
+  }
+  const rows = feedbackEntries
+    .map((entry) => {
+      const feedbackId = escapeHtml(String(entry?.id || ""));
+      const username = escapeHtml(String(entry?.username || "Unknown"));
+      const playerId = escapeHtml(String(entry?.playerId || "—"));
+      const category = escapeHtml(getPhoneFeedbackCategoryLabel(entry?.category));
+      const message = escapeHtml(String(entry?.message || ""));
+      const status = escapeHtml(getAdminFeedbackStatusLabel(entry?.status));
+      const submittedAt = escapeHtml(formatDateTime(entry?.submittedAt));
+      return `
+        <tr>
+          <td>${username}</td>
+          <td class="admin-txn-id">${playerId}</td>
+          <td>${category}</td>
+          <td>${message}</td>
+          <td>${status}</td>
+          <td>${submittedAt}</td>
+          <td class="admin-txn-id">${feedbackId}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  hiddenAdminFeedbackEl.innerHTML = `
+    <table class="hidden-admin-table">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Player ID</th>
+          <th>Category</th>
+          <th>Message</th>
+          <th>Status</th>
+          <th>Submitted</th>
+          <th>Feedback ID</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 async function refreshHiddenAdminUsersFromServer({ silent = false, allowWhenLocked = false } = {}) {
   if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
@@ -6478,6 +6543,25 @@ async function refreshHiddenAdminDevicesFromServer({ silent = false, allowWhenLo
   }
 }
 
+async function refreshHiddenAdminFeedbackFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
+  try {
+    const payload = await venmoApiRequest(
+      buildAdminApiUrl("/api/admin/feedback?limit=120"),
+      getAdminRequestOptions()
+    );
+    venmoClaimState.adminFeedback = Array.isArray(payload.feedback) ? payload.feedback : [];
+    venmoAdminUnlocked = true;
+    renderHiddenAdminFeedback();
+    return true;
+  } catch (error) {
+    venmoClaimState.adminFeedback = [];
+    renderHiddenAdminFeedback();
+    if (!silent) setHiddenAdminStatus(`Could not load feedback: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function tryAutoUnlockAdminFromTrustedDevice() {
   if (venmoAdminUnlocked) return true;
   try {
@@ -6490,6 +6574,7 @@ async function tryAutoUnlockAdminFromTrustedDevice() {
   await refreshHiddenAdminStatsFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminUsersFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminDevicesFromServer({ silent: true, allowWhenLocked: true });
+  await refreshHiddenAdminFeedbackFromServer({ silent: true, allowWhenLocked: true });
   setHiddenAdminStatus("Trusted device recognized. Admin unlocked.");
   return true;
 }
@@ -6642,13 +6727,16 @@ async function runFullAdminReset() {
     venmoClaimState.adminClaims = [];
     venmoClaimState.adminUsers = [];
     venmoClaimState.adminStats = null;
+    venmoClaimState.adminFeedback = [];
     venmoClaimState.claims = [];
     renderVenmoAdminClaims();
     renderHiddenAdminUsers();
     renderHiddenAdminStats();
+    renderHiddenAdminFeedback();
     await refreshHiddenAdminStatsFromServer({ silent: true });
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminFeedbackFromServer({ silent: true });
     const usersDeleted = Number(payload?.reset?.usersDeleted) || 0;
     const claimsDeleted = Number(payload?.reset?.claimsDeleted) || 0;
     setHiddenAdminStatus(`Full reset complete. Users removed: ${usersDeleted}, claims removed: ${claimsDeleted}. Reloading...`);
@@ -6690,6 +6778,7 @@ function startHiddenAdminLivePolling() {
     refreshHiddenAdminUsersFromServer({ silent: true });
     refreshHiddenAdminStatsFromServer({ silent: true });
     refreshHiddenAdminDevicesFromServer({ silent: true });
+    refreshHiddenAdminFeedbackFromServer({ silent: true });
   }, HIDDEN_ADMIN_LIVE_POLL_MS);
 }
 
@@ -6716,11 +6805,13 @@ async function openHiddenAdminPanel() {
   renderHiddenAdminStats();
   renderHiddenAdminUsers();
   renderHiddenAdminDevices();
+  renderHiddenAdminFeedback();
   if (venmoAdminUnlocked) {
     await refreshVenmoAdminClaimsFromServer({ silent: true });
     await refreshHiddenAdminStatsFromServer({ silent: true });
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminFeedbackFromServer({ silent: true });
     setHiddenAdminStatus("Admin unlocked. Device verified.");
   }
   startHiddenAdminLivePolling();
@@ -6906,6 +6997,7 @@ function initVenmoClaimWorkflow() {
   renderHiddenAdminStats();
   renderHiddenAdminUsers();
   renderHiddenAdminDevices();
+  renderHiddenAdminFeedback();
   setHiddenAdminStatus("");
   refreshVenmoClaimsFromServer({ silent: true });
   claimApprovedVenmoCredits({ silent: true });
@@ -6921,6 +7013,7 @@ function initVenmoClaimWorkflow() {
       refreshHiddenAdminStatsFromServer({ silent: true });
       refreshHiddenAdminUsersFromServer({ silent: true });
       refreshHiddenAdminDevicesFromServer({ silent: true });
+      refreshHiddenAdminFeedbackFromServer({ silent: true });
     }
   }, VENMO_CLAIM_POLL_MS);
 }
@@ -6954,11 +7047,13 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
     renderHiddenAdminStats();
     renderHiddenAdminUsers();
     renderHiddenAdminDevices();
+    renderHiddenAdminFeedback();
     return false;
   }
   await refreshHiddenAdminStatsFromServer({ silent: true });
   await refreshHiddenAdminUsersFromServer({ silent: true });
   await refreshHiddenAdminDevicesFromServer({ silent: true });
+  await refreshHiddenAdminFeedbackFromServer({ silent: true });
   if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
   setHiddenAdminStatus("Admin unlocked. Device verified.");
   if (hiddenAdminPanelOpen) startHiddenAdminLivePolling();
