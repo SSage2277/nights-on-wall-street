@@ -8171,6 +8171,18 @@ body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-hosted .pho
   padding-top: 0;
 }
 
+body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-hosted.phone-casino-shell-mines .phone-casino-content {
+  padding: 0 !important;
+}
+
+body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-mines .phone-casino-content > .mines-root {
+  margin-top: -10px;
+}
+
+body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-mines .phone-casino-content .mines-root .app {
+  padding-top: 0 !important;
+}
+
 body.phone-embedded-mini-mode .phone-casino-sheet-backdrop {
   position: absolute;
   inset: 0;
@@ -17942,6 +17954,10 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
     height: calc(100dvh - 58px);
     align-content: start;
     padding: 2px 6px 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root {
+    margin-top: -10px;
   }
 
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .game-area {
