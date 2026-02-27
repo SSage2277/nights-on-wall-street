@@ -5695,6 +5695,14 @@ function updateFullscreenCash() {
   if (el) el.textContent = cash.toFixed(2);
 }
 
+function setMobileGameOverlayVisibility(hidden) {
+  const shouldHide = Boolean(hidden) && !IS_PHONE_EMBED_MODE && window.innerWidth <= 980;
+  const legal = document.getElementById("siteLegalLinks");
+  const version = document.getElementById("appVersionTag");
+  if (legal) legal.classList.toggle("hidden-in-game-mobile", shouldHide);
+  if (version) version.classList.toggle("hidden-in-game-mobile", shouldHide);
+}
+
 function enterCasinoGameView(title) {
   const bankPanel = document.getElementById("loan-panel");
   if (bankPanel) bankPanel.classList.remove("open");
@@ -5704,10 +5712,12 @@ function enterCasinoGameView(title) {
     document.body.classList.remove("game-fullscreen");
     const existingEmbedBar = document.getElementById("game-exit-bar");
     if (existingEmbedBar) existingEmbedBar.remove();
+    setMobileGameOverlayVisibility(true);
     return;
   }
 
   document.body.classList.add("game-fullscreen");
+  setMobileGameOverlayVisibility(true);
 
   const container = document.getElementById("casino-container");
   if (!container) return;
@@ -5731,6 +5741,7 @@ function exitCasinoGameView() {
   activeCasinoGameKey = "lobby";
   cleanupActiveCasinoGame();
   document.body.classList.remove("game-fullscreen");
+  setMobileGameOverlayVisibility(false);
   const container = document.getElementById("casino-container");
   if (container) {
     container.classList.remove(
