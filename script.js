@@ -3117,6 +3117,7 @@ const PHONE_MINI_GAME_APPS = [
   { app: "keno", label: "Keno", short: "KN", game: "keno", gradient: "linear-gradient(155deg,#2272ff,#15c2ff 68%)" }
 ];
 const PHONE_MINI_GAME_MAP = Object.fromEntries(PHONE_MINI_GAME_APPS.map((item) => [item.app, item]));
+const PHONE_MINI_APP_BY_GAME = Object.fromEntries(PHONE_MINI_GAME_APPS.map((item) => [item.game, item.app]));
 const PHONE_MINI_GAME_ICON_FALLBACK = {
   roulette: `
     <svg viewBox="0 0 100 100">
@@ -3216,9 +3217,59 @@ function getPhoneMiniGameFrameUrl(gameKey) {
   return url.toString();
 }
 
+function shouldUseMobilePhoneCasinoMode(gameKey) {
+  if (IS_PHONE_EMBED_MODE) return false;
+  const normalized = String(gameKey || "").toLowerCase();
+  if (!PHONE_MINI_APP_BY_GAME[normalized]) return false;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  return viewportWidth > 0 && viewportWidth <= 980;
+}
+
+function loadCasinoGameInPhoneEmbedFrame(gameKey) {
+  const normalized = String(gameKey || "").toLowerCase();
+  if (!PHONE_MINI_APP_BY_GAME[normalized]) return false;
+  const container = document.getElementById("casino-container");
+  if (!container) return false;
+
+  container.classList.add("casino-fullbleed", "mobile-phone-app-fullbleed");
+  container.innerHTML = `
+    <div class="casino-phone-embed-shell">
+      <div class="casino-phone-embed-loading">Loading ${getPhoneEmbeddedGameTitle(normalized)}...</div>
+      <iframe
+        id="casinoPhoneGameFrame"
+        class="casino-phone-game-frame"
+        title="${getPhoneEmbeddedGameTitle(normalized)}"
+        loading="eager"
+        sandbox="allow-scripts allow-same-origin allow-forms"
+      ></iframe>
+    </div>
+  `;
+
+  const frame = document.getElementById("casinoPhoneGameFrame");
+  const loading = container.querySelector(".casino-phone-embed-loading");
+  if (!frame) return false;
+  frame.dataset.loaded = "loading";
+
+  frame.addEventListener("load", () => {
+    frame.dataset.loaded = "true";
+    if (loading) loading.classList.add("hidden");
+    try {
+      frame.contentWindow?.postMessage({ type: "phone-mini-init-cash", cash: roundCurrency(cash) }, "*");
+    } catch (error) {}
+  });
+
+  frame.addEventListener("error", () => {
+    frame.dataset.loaded = "";
+    if (loading) loading.textContent = `Could not load ${getPhoneEmbeddedGameTitle(normalized)}.`;
+  });
+
+  frame.src = getPhoneMiniGameFrameUrl(normalized);
+  return true;
+}
+
 function pushCashToPhoneMiniFrames({ exceptWindow = null } = {}) {
   if (IS_PHONE_EMBED_MODE) return;
-  document.querySelectorAll(".phone-mini-game-frame").forEach((frame) => {
+  document.querySelectorAll(".phone-mini-game-frame, #casinoPhoneGameFrame").forEach((frame) => {
     if (!(frame instanceof HTMLIFrameElement)) return;
     if (frame.dataset.loaded !== "true" || !frame.src) return;
     const frameWindow = frame.contentWindow;
@@ -9618,10 +9669,19 @@ function loadCasinoGame(game) {
       "diamond-fullbleed",
       "mines-fullbleed",
       "keno-fullbleed",
-      "horse-fullbleed"
+      "horse-fullbleed",
+      "mobile-phone-app-fullbleed"
     );
   }
   cleanupActiveCasinoGame();
+
+  if (shouldUseMobilePhoneCasinoMode(activeCasinoGameKey)) {
+    const loadedInFrame = loadCasinoGameInPhoneEmbedFrame(activeCasinoGameKey);
+    if (loadedInFrame) {
+      enterCasinoGameView(getPhoneEmbeddedGameTitle(activeCasinoGameKey));
+      return;
+    }
+  }
 
   if (game === "slots") {
     loadSlots();
