@@ -12110,8 +12110,7 @@ function endGame() {
       return;
     }
 
-    const riggedAgainstWin = shouldRigHighBet(wager, 1.15);
-    if (!riggedAgainstWin && (dealerScore > 21 || playerScore > dealerScore)) {
+    if (dealerScore > 21 || playerScore > dealerScore) {
       const payout = wager * 2;
       totalPayout += payout;
       winCount += 1;
