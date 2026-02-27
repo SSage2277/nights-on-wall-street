@@ -292,6 +292,7 @@ function mapUserRow(row) {
     avgCost: Math.round(toNumber(row.avg_cost) * 10000) / 10000,
     savingsBalance: Math.round(toNumber(row.savings_balance) * 100) / 100,
     autoSavingsPercent: Math.round(toNumber(row.auto_savings_percent) * 1000) / 1000,
+    balanceUpdatedAt: Number(row.balance_updated_at) || 0,
     lastSeenAt: Number(row.last_seen_at) || 0,
     isAdmin: row.is_admin === true
   };
@@ -588,6 +589,7 @@ function normalizeUserForClient(row) {
     avgCost: mapped.avgCost,
     savingsBalance: mapped.savingsBalance,
     autoSavingsPercent: mapped.autoSavingsPercent,
+    balanceUpdatedAt: mapped.balanceUpdatedAt,
     lastSeenAt: mapped.lastSeenAt,
     isAdmin: mapped.isAdmin === true
   };
@@ -1226,7 +1228,7 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1269,7 +1271,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
     const existingByUsername = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1295,7 +1297,7 @@ app.post("/api/auth/register", async (req, res) => {
                 email = NULL,
                 last_seen_at = $4
             WHERE player_id = $5
-            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
           `,
           [username, usernameKey, replacementHash, Date.now(), existing.player_id]
         );
@@ -1324,7 +1326,7 @@ app.post("/api/auth/register", async (req, res) => {
       `
         INSERT INTO users (player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, balance_updated_at)
         VALUES ($1, $2, $3, NULL, $4, $5, 0, 0, 0, 0, $6, $6)
-        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
       `,
       [playerId, username, usernameKey, passwordHash, INITIAL_ACCOUNT_BALANCE, Date.now()]
     );
@@ -1359,7 +1361,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1939,6 +1941,12 @@ app.post("/api/users/sync", async (req, res) => {
     }
     const current = currentLookup.rows[0];
     const now = Date.now();
+    const hasClientBalanceUpdatedAt = hasOwnField(req.body, "clientBalanceUpdatedAt");
+    const rawClientBalanceUpdatedAt = hasClientBalanceUpdatedAt ? Number(req.body?.clientBalanceUpdatedAt) : 0;
+    const clientBalanceUpdatedAt =
+      Number.isFinite(rawClientBalanceUpdatedAt) && rawClientBalanceUpdatedAt > 0
+        ? Math.floor(rawClientBalanceUpdatedAt)
+        : 0;
     const hasBalance = hasOwnField(req.body, "balance");
     const hasShares = hasOwnField(req.body, "shares");
     const hasAvgCost = hasOwnField(req.body, "avgCost");
@@ -1970,6 +1978,15 @@ app.post("/api/users/sync", async (req, res) => {
     if (hasPortfolioPayload) {
       const currentBalance = Math.round(toNumber(current.balance) * 100) / 100;
       const currentShares = Math.max(0, Math.floor(toNumber(current.shares)));
+      const serverBalanceUpdatedAt = Number(current.balance_updated_at) || 0;
+      if (clientBalanceUpdatedAt > 0 && serverBalanceUpdatedAt > 0 && clientBalanceUpdatedAt < serverBalanceUpdatedAt) {
+        res.status(409).json({
+          ok: false,
+          error: "Server has a newer portfolio snapshot.",
+          user: normalizeUserForClient(current)
+        });
+        return;
+      }
       const lastUpdatedAt = Number(current.balance_updated_at) || Number(current.last_seen_at) || 0;
       const elapsedMs = Math.max(0, now - lastUpdatedAt);
       const allowedBalanceIncrease = getSyncAllowedIncrease(elapsedMs, BALANCE_SYNC_BURST_UP, BALANCE_SYNC_UP_PER_MIN);
@@ -2006,7 +2023,7 @@ app.post("/api/users/sync", async (req, res) => {
             last_seen_at = $9,
             balance_updated_at = CASE WHEN $10 THEN $9 ELSE COALESCE(balance_updated_at, 0) END
         WHERE player_id = $1
-        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
       `,
       [playerId, username, usernameKey, nextBalance, nextShares, nextAvgCost, nextSavingsBalance, nextAutoSavingsPercent, now, hasPortfolioPayload]
     );
@@ -2266,6 +2283,17 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
     const now = Date.now();
     const dayAgo = now - 24 * 60 * 60 * 1000;
     const tenMinutesAgo = now - 10 * 60 * 1000;
+    const fraudStateResult = await db.query(
+      `
+        SELECT cleared_at
+        FROM admin_fraud_flags_state
+        WHERE id = 1
+        LIMIT 1
+      `
+    );
+    const clearedAt = Number(fraudStateResult.rows?.[0]?.cleared_at) || 0;
+    const dayWindowStart = Math.max(dayAgo, clearedAt);
+    const tenMinuteWindowStart = Math.max(tenMinutesAgo, clearedAt);
     const flags = [];
 
     const claimSpam = await db.query(
@@ -2278,7 +2306,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
         ORDER BY claim_count DESC, last_at DESC
         LIMIT 25
       `,
-      [dayAgo]
+      [dayWindowStart]
     );
     for (const row of claimSpam.rows) {
       flags.push({
@@ -2302,7 +2330,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
         ORDER BY feedback_count DESC, last_at DESC
         LIMIT 25
       `,
-      [tenMinutesAgo]
+      [tenMinuteWindowStart]
     );
     for (const row of feedbackSpam.rows) {
       flags.push({
@@ -2325,7 +2353,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
         ORDER BY created_at DESC, id DESC
         LIMIT 30
       `,
-      [dayAgo]
+      [dayWindowStart]
     );
     for (const row of rapidBalanceJumps.rows) {
       flags.push({
@@ -2349,7 +2377,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
         ORDER BY event_count DESC, last_at DESC
         LIMIT 25
       `,
-      [tenMinutesAgo]
+      [tenMinuteWindowStart]
     );
     for (const row of balanceBurst.rows) {
       flags.push({
@@ -2367,11 +2395,48 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
     res.json({
       ok: true,
       flags,
+      clearedAt,
       trustedDevice: adminAccess.device || null
     });
   } catch (error) {
     console.error("Failed to load fraud flags", error);
     res.status(500).json({ ok: false, error: "Could not load fraud flags." });
+  }
+});
+
+app.post("/api/admin/fraud-flags/clear", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const now = Date.now();
+    const actorPlayerId = sanitizePlayerId(adminAccess.playerId);
+    await db.query(
+      `
+        INSERT INTO admin_fraud_flags_state (id, cleared_at, cleared_by, updated_at)
+        VALUES (1, $1, $2, $1)
+        ON CONFLICT (id)
+        DO UPDATE
+        SET cleared_at = EXCLUDED.cleared_at,
+            cleared_by = EXCLUDED.cleared_by,
+            updated_at = EXCLUDED.updated_at
+      `,
+      [now, actorPlayerId]
+    );
+    recordAdminActivity({
+      eventType: "fraud_flags_cleared",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        clearedAt: now
+      }
+    });
+    res.json({
+      ok: true,
+      cleared: { at: now },
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to clear fraud flags", error);
+    res.status(500).json({ ok: false, error: "Could not clear fraud flags." });
   }
 });
 
@@ -3090,9 +3155,9 @@ app.post("/api/admin/users/:playerId/remove", async (req, res) => {
     await client.query(
       `
         DELETE FROM user_sessions
-        WHERE sess::text LIKE $1
+        WHERE COALESCE(sess::json->>'playerId', '') = $1
       `,
-      [`%\"playerId\":\"${playerId}\"%`]
+      [playerId]
     );
     const removedUser = await client.query(
       `
@@ -3146,9 +3211,9 @@ app.post("/api/admin/users/:playerId/force-logout", async (req, res) => {
     const removedSessions = await db.query(
       `
         DELETE FROM user_sessions
-        WHERE sess::text LIKE $1
+        WHERE COALESCE(sess::json->>'playerId', '') = $1
       `,
-      [`%\"playerId\":\"${playerId}\"%`]
+      [playerId]
     );
     recordAdminActivity({
       eventType: "force_logout",
@@ -3196,6 +3261,13 @@ app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
     await client.query("BEGIN");
     await client.query("DELETE FROM claims WHERE player_id = $1", [playerId]);
     await client.query("DELETE FROM live_wins WHERE player_id = $1", [playerId]);
+    const removedSessions = await client.query(
+      `
+        DELETE FROM user_sessions
+        WHERE COALESCE(sess::json->>'playerId', '') = $1
+      `,
+      [playerId]
+    );
     const updated = await client.query(
       `
         UPDATE users
@@ -3206,7 +3278,7 @@ app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
             auto_savings_percent = 0,
             balance_updated_at = $3
         WHERE player_id = $1
-        RETURNING player_id, username, email, username_key, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+        RETURNING player_id, username, email, username_key, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
       `,
       [playerId, INITIAL_ACCOUNT_BALANCE, now]
     );
@@ -3226,12 +3298,14 @@ app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
       actorPlayerId: adminAccess.playerId,
       details: {
         fromBalance: Math.round(toNumber(user.balance) * 100) / 100,
-        toBalance: INITIAL_ACCOUNT_BALANCE
+        toBalance: INITIAL_ACCOUNT_BALANCE,
+        sessionsCleared: removedSessions.rowCount || 0
       }
     });
     res.json({
       ok: true,
       user: mapUserRow(updated.rows[0]),
+      sessionsCleared: removedSessions.rowCount || 0,
       trustedDevice: adminAccess.device || null
     });
   } catch (error) {
@@ -3480,9 +3554,9 @@ app.post("/api/admin/system/reset", async (req, res) => {
     const sessionsDeleted = await client.query(
       `
         DELETE FROM user_sessions
-        WHERE sess::text NOT LIKE $1
+        WHERE COALESCE(sess::json->>'playerId', '') <> $1
       `,
-      [`%\"playerId\":\"${adminPlayerId}\"%`]
+      [adminPlayerId]
     );
     const usersDeleted = await client.query(
       `
@@ -4116,6 +4190,41 @@ async function ensureSchema() {
   await db.query(`
     CREATE INDEX IF NOT EXISTS admin_activity_events_player_idx
     ON admin_activity_events (player_id, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_fraud_flags_state (
+      id SMALLINT PRIMARY KEY,
+      cleared_at BIGINT NOT NULL DEFAULT 0,
+      cleared_by TEXT NOT NULL DEFAULT '',
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE admin_fraud_flags_state
+    ADD COLUMN IF NOT EXISTS id SMALLINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_fraud_flags_state
+    ADD COLUMN IF NOT EXISTS cleared_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_fraud_flags_state
+    ADD COLUMN IF NOT EXISTS cleared_by TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_fraud_flags_state
+    ADD COLUMN IF NOT EXISTS updated_at BIGINT
+  `);
+  await db.query(`
+    UPDATE admin_fraud_flags_state
+    SET cleared_at = COALESCE(cleared_at, 0),
+        cleared_by = COALESCE(cleared_by, ''),
+        updated_at = COALESCE(updated_at, 0)
+  `);
+  await db.query(`
+    INSERT INTO admin_fraud_flags_state (id, cleared_at, cleared_by, updated_at)
+    VALUES (1, 0, '', 0)
+    ON CONFLICT (id) DO NOTHING
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS system_runtime_events (

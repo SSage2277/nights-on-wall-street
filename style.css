@@ -10833,6 +10833,10 @@ body.game-fullscreen #casino-container.plinko-neon-fullbleed > .plinko-casino-ne
   filter: saturate(1.05);
 }
 
+.dragon-root .row.auto-pattern-row {
+  opacity: 0.95;
+}
+
 .dragon-root .row.revealing {
   animation: dt-row-reveal-glow 0.68s ease-out both;
 }
@@ -10939,6 +10943,15 @@ body.game-fullscreen #casino-container.plinko-neon-fullbleed > .plinko-casino-ne
   border-radius: 50% 50% 46% 46% / 58% 58% 42% 42%;
   background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.22), transparent 60%);
   opacity: 0.9;
+}
+
+.dragon-root .tile.auto-pattern-selected {
+  transform: translateY(-1px) scale(1.04);
+  filter: brightness(1.08) saturate(1.1);
+  box-shadow:
+    0 16px 24px rgba(0, 0, 0, 0.4),
+    0 0 0 3px rgba(48, 200, 255, 0.42) inset,
+    0 0 18px rgba(48, 200, 255, 0.35);
 }
 
 .dragon-root .row.active .tile:hover {

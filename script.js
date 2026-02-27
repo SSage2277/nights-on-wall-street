@@ -54,6 +54,9 @@ const PHONE_EMBED_GAME_TITLES = {
 const HIGH_BET_RIG_THRESHOLD = 2000;
 const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
+const QUICK_CASHOUT_STEP_LIMIT = 3;
+const QUICK_CASHOUT_WINDOW_MS = 10 * 60 * 1000;
+const QUICK_CASHOUT_RIG_MIN_CHAIN = 3;
 const CURRENCY_SYMBOL = "S$";
 const USERNAME_STORAGE_KEY = "nows_username_v1";
 const USERNAME_STORAGE_FALLBACK_KEYS = Object.freeze([
@@ -105,6 +108,7 @@ let tradingLogoutBusy = false;
 let authSessionLikelyAuthenticated = false;
 let authSessionWatchdogTimer = null;
 let authSessionWatchdogBusy = false;
+let lastServerBalanceUpdatedAt = 0;
 let bannedOverlayActive = false;
 let antiTamperGuardsInitialized = false;
 let antiTamperLastNoticeAt = 0;
@@ -115,6 +119,7 @@ let antiTamperClearStreak = 0;
 let antiTamperOverlayEl = null;
 let antiTamperPresentationReady = false;
 let antiTamperScanArmedUntil = 0;
+const quickCashoutSpamByGame = new Map();
 const ANTI_TAMPER_ARM_MS = 45000;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
@@ -328,6 +333,84 @@ function getHighBetRigChance(betAmount, intensity = 1) {
 
 function shouldRigHighBet(betAmount, intensity = 1) {
   return Math.random() < getHighBetRigChance(betAmount, intensity);
+}
+
+function normalizeQuickCashoutGameKey(gameKey) {
+  return String(gameKey || "")
+    .trim()
+    .toLowerCase();
+}
+
+function pruneQuickCashoutSpamState(state, nowMs = Date.now()) {
+  if (!state || !Array.isArray(state.cashouts)) return;
+  state.cashouts = state.cashouts.filter((timestamp) => nowMs - timestamp <= QUICK_CASHOUT_WINDOW_MS);
+}
+
+function registerQuickCashoutRound(gameKey, { outcome = "", steps = 0, durationMs = 0 } = {}) {
+  const key = normalizeQuickCashoutGameKey(gameKey);
+  if (!key) return;
+  const nowMs = Date.now();
+  let state = quickCashoutSpamByGame.get(key);
+  if (!state) {
+    state = { cashouts: [], score: 0 };
+    quickCashoutSpamByGame.set(key, state);
+  }
+  pruneQuickCashoutSpamState(state, nowMs);
+
+  const normalizedOutcome = String(outcome || "").trim().toLowerCase();
+  const moveCount = Math.max(0, Math.floor(Number(steps) || 0));
+  const elapsedMs = Math.max(0, Number(durationMs) || 0);
+  const isShortCashout =
+    normalizedOutcome === "cashout" &&
+    moveCount > 0 &&
+    moveCount <= QUICK_CASHOUT_STEP_LIMIT &&
+    (elapsedMs <= 0 || elapsedMs <= 90 * 1000);
+
+  if (isShortCashout) {
+    state.cashouts.push(nowMs);
+    state.score = Math.min(12, state.score + 1);
+  } else if (normalizedOutcome === "cashout") {
+    state.score = Math.max(0, state.score - 0.35);
+  } else {
+    state.score = Math.max(0, state.score - 0.9);
+  }
+
+  pruneQuickCashoutSpamState(state, nowMs);
+  if (state.cashouts.length === 0 && state.score < 0.01) {
+    quickCashoutSpamByGame.delete(key);
+  }
+}
+
+function getQuickCashoutRigChance(gameKey, betAmount = 0, intensity = 1) {
+  const key = normalizeQuickCashoutGameKey(gameKey);
+  if (!key) return 0;
+  const state = quickCashoutSpamByGame.get(key);
+  if (!state) return 0;
+
+  const nowMs = Date.now();
+  pruneQuickCashoutSpamState(state, nowMs);
+  const cashoutCount = state.cashouts.length;
+  const score = Number(state.score) || 0;
+
+  if (cashoutCount < QUICK_CASHOUT_RIG_MIN_CHAIN && score < QUICK_CASHOUT_RIG_MIN_CHAIN) {
+    return 0;
+  }
+
+  const pressure =
+    Math.max(0, cashoutCount - (QUICK_CASHOUT_RIG_MIN_CHAIN - 1)) +
+    Math.max(0, score - (QUICK_CASHOUT_RIG_MIN_CHAIN - 1)) * 0.6;
+
+  let chance = 0.08 + pressure * 0.11;
+  const bet = Number(betAmount);
+  if (Number.isFinite(bet) && bet > 0) {
+    chance += Math.min(0.14, bet / 8000);
+  }
+  const scaled = chance * Math.max(0, Number.isFinite(intensity) ? intensity : 1);
+  return Math.max(0, Math.min(0.9, scaled));
+}
+
+function shouldRigQuickCashoutAbuse(gameKey, betAmount = 0, intensity = 1) {
+  return Math.random() < getQuickCashoutRigChance(gameKey, betAmount, intensity);
 }
 
 function roundCurrency(value) {
@@ -845,7 +928,16 @@ async function pollAuthSessionWatchdog() {
       return;
     }
     if (response.ok && payload?.authenticated === false) {
+      const wasAuthenticated = authSessionLikelyAuthenticated;
       authSessionLikelyAuthenticated = false;
+      if (wasAuthenticated) {
+        venmoAdminUnlocked = false;
+        if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
+        hideFirstPlayTutorialOverlay({ markSeen: false });
+        setFirstLaunchAuthMode("login");
+        showFirstLaunchUsernameOverlay();
+        setFirstLaunchUsernameError("You were logged out by admin.");
+      }
     }
   } catch {}
   finally {
@@ -883,6 +975,11 @@ function getPersistedBalanceForUser({ username = "", playerId = "" } = {}) {
 }
 
 function applyServerPortfolioSnapshot(user, { useServerBalance = true, allowLocalBalanceFallback = false } = {}) {
+  const nextServerBalanceUpdatedAt = Number(user?.balanceUpdatedAt);
+  if (Number.isFinite(nextServerBalanceUpdatedAt) && nextServerBalanceUpdatedAt > 0) {
+    lastServerBalanceUpdatedAt = Math.max(lastServerBalanceUpdatedAt, Math.floor(nextServerBalanceUpdatedAt));
+  }
+
   const serverBalance = Number(user?.balance);
   let resolvedBalance = null;
   if (useServerBalance && Number.isFinite(serverBalance) && serverBalance >= 0) {
@@ -923,6 +1020,7 @@ function applyServerPortfolioSnapshot(user, { useServerBalance = true, allowLoca
   phoneState.avgCost = roundCurrency(avgCost);
   phoneState.savingsBalance = roundCurrency(savingsBalance);
   phoneState.autoSavingsPercent = roundCurrency(clampPercent(autoSavingsPercent));
+  phoneState.balanceUpdatedAt = Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0));
 }
 
 function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalBalance = false } = {}) {
@@ -930,6 +1028,11 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
   const playerId = String(user?.playerId || "").trim();
   if (!username || !playerId) return false;
   if (!saveUsername(username)) return false;
+  const previousPlayerId = String(venmoClaimPlayerId || "").trim();
+  if (previousPlayerId && previousPlayerId !== playerId) {
+    lastServerBalanceUpdatedAt = 0;
+    phoneState.balanceUpdatedAt = 0;
+  }
   setGuestModeEnabled(false);
   venmoClaimPlayerId = playerId;
   try {
@@ -1398,6 +1501,7 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminBackups = [];
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
+    lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
     hideFirstPlayTutorialOverlay({ markSeen: false });
@@ -1912,6 +2016,7 @@ async function logoutFromTradingBadge() {
     } catch {}
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
+    lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
     hideBannedOverlay();
     hideFirstPlayTutorialOverlay({ markSeen: false });
@@ -2738,6 +2843,7 @@ const phoneState = {
   shares: Math.max(0, Math.floor(Number(shares) || 0)),
   avgCost: roundCurrency(avgCost),
   savingsBalance: roundCurrency(savingsBalance),
+  balanceUpdatedAt: 0,
   playerId: "",
   username: playerUsername || "",
   unread: 0,
@@ -3270,6 +3376,7 @@ function savePhoneState() {
     phoneState.avgCost = profile.avgCost;
     phoneState.savingsBalance = profile.savingsBalance;
     phoneState.autoSavingsPercent = profile.autoSavingsPercent;
+    phoneState.balanceUpdatedAt = Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0));
     phoneState.playerId = profile.playerId;
     phoneState.username = profile.username;
     phoneState.missionXp = Math.max(0, Math.floor(Number(phoneState.missionXp) || 0));
@@ -3300,6 +3407,7 @@ function persistCashStateSoon() {
     phoneState.avgCost = snapshot.avgCost;
     phoneState.savingsBalance = snapshot.savingsBalance;
     phoneState.autoSavingsPercent = snapshot.autoSavingsPercent;
+    phoneState.balanceUpdatedAt = Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0));
     phoneState.playerId = snapshot.playerId;
     phoneState.username = snapshot.username;
     savePhoneState();
@@ -3322,6 +3430,7 @@ function syncCurrentUserProfileOnExit() {
   const payload = JSON.stringify({
     playerId: venmoClaimPlayerId,
     username: playerUsername,
+    clientBalanceUpdatedAt: Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0)),
     balance: roundCurrency(cash),
     shares: Math.max(0, Math.floor(Number(shares) || 0)),
     avgCost: Math.max(0, Number(avgCost) || 0),
@@ -3411,6 +3520,11 @@ function loadPhoneState({ force = false } = {}) {
     if (Number.isFinite(savedAutoSavingsPercent)) {
       phoneState.autoSavingsPercent = roundCurrency(clampPercent(savedAutoSavingsPercent));
       autoSavingsPercent = phoneState.autoSavingsPercent;
+    }
+    const savedBalanceUpdatedAt = Number(parsed.balanceUpdatedAt);
+    if (Number.isFinite(savedBalanceUpdatedAt) && savedBalanceUpdatedAt > 0) {
+      lastServerBalanceUpdatedAt = Math.floor(savedBalanceUpdatedAt);
+      phoneState.balanceUpdatedAt = lastServerBalanceUpdatedAt;
     }
     const savedPlayerId = String(parsed.playerId || "").trim();
     if (savedPlayerId) {
@@ -6250,10 +6364,17 @@ const hiddenAdminOverlayEl = document.getElementById("hiddenAdminOverlay");
 const hiddenAdminCloseBtnEl = document.getElementById("hiddenAdminCloseBtn");
 const hiddenAdminStatusEl = document.getElementById("hiddenAdminStatus");
 const hiddenAdminStatsEl = document.getElementById("hiddenAdminStats");
+const hiddenAdminStatsCollapseBtn = document.getElementById("hiddenAdminStatsCollapseBtn");
 const hiddenAdminHealthEl = document.getElementById("hiddenAdminHealth");
+const hiddenAdminHealthCollapseBtn = document.getElementById("hiddenAdminHealthCollapseBtn");
 const hiddenAdminUsersEl = document.getElementById("hiddenAdminUsers");
+const hiddenAdminUsersCollapseBtn = document.getElementById("hiddenAdminUsersCollapseBtn");
 const hiddenAdminDevicesEl = document.getElementById("hiddenAdminDevices");
+const hiddenAdminDevicesCollapseBtn = document.getElementById("hiddenAdminDevicesCollapseBtn");
+const hiddenAdminDevicesClearBtn = document.getElementById("hiddenAdminDevicesClearBtn");
 const hiddenAdminFeedbackEl = document.getElementById("hiddenAdminFeedback");
+const hiddenAdminFeedbackCollapseBtn = document.getElementById("hiddenAdminFeedbackCollapseBtn");
+const hiddenAdminFeedbackClearBtn = document.getElementById("hiddenAdminFeedbackClearBtn");
 const hiddenAdminActivityEl = document.getElementById("hiddenAdminActivity");
 const hiddenAdminActivityCollapseBtn = document.getElementById("hiddenAdminActivityCollapseBtn");
 const hiddenAdminActivityClearBtn = document.getElementById("hiddenAdminActivityClearBtn");
@@ -6261,6 +6382,11 @@ const hiddenAdminFraudEl = document.getElementById("hiddenAdminFraud");
 const hiddenAdminFraudCollapseBtn = document.getElementById("hiddenAdminFraudCollapseBtn");
 const hiddenAdminFraudClearBtn = document.getElementById("hiddenAdminFraudClearBtn");
 const hiddenAdminBackupsEl = document.getElementById("hiddenAdminBackups");
+const hiddenAdminBackupsCollapseBtn = document.getElementById("hiddenAdminBackupsCollapseBtn");
+const hiddenAdminBackupsClearBtn = document.getElementById("hiddenAdminBackupsClearBtn");
+const hiddenAdminClaimsCollapseBtn = document.getElementById("hiddenAdminClaimsCollapseBtn");
+const hiddenAdminClaimsClearBtn = document.getElementById("hiddenAdminClaimsClearBtn");
+const hiddenAdminUsersClearBtn = document.getElementById("hiddenAdminUsersClearBtn");
 const venmoAdminCodeInputEl = document.getElementById("venmoAdminCodeInput");
 const venmoAdminUnlockBtn = document.getElementById("venmoAdminUnlockBtn");
 const venmoAdminTrustDeviceBtn = document.getElementById("venmoAdminTrustDeviceBtn");
@@ -6305,8 +6431,20 @@ let userProfileSyncLatestStartedSequence = 0;
 let hiddenAdminPanelOpen = false;
 let hiddenAdminLivePollTimer = null;
 let hiddenAdminLivePollTick = 0;
+let hiddenAdminClaimsCollapsed = false;
+let hiddenAdminStatsCollapsed = false;
+let hiddenAdminHealthCollapsed = false;
+let hiddenAdminUsersCollapsed = false;
+let hiddenAdminDevicesCollapsed = false;
+let hiddenAdminFeedbackCollapsed = false;
 let hiddenAdminActivityCollapsed = false;
 let hiddenAdminFraudCollapsed = false;
+let hiddenAdminBackupsCollapsed = false;
+let hiddenAdminClaimsCleared = false;
+let hiddenAdminUsersCleared = false;
+let hiddenAdminDevicesCleared = false;
+let hiddenAdminFeedbackCleared = false;
+let hiddenAdminBackupsCleared = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -6532,6 +6670,7 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
       body: {
         playerId: venmoClaimPlayerId,
         username: playerUsername,
+        clientBalanceUpdatedAt: Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0)),
         balance: roundCurrency(cash),
         shares: Math.max(0, Math.floor(Number(shares) || 0)),
         avgCost: Math.max(0, Number(avgCost) || 0),
@@ -6539,6 +6678,11 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
         autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
       }
     });
+    const responseBalanceUpdatedAt = Number(payload?.user?.balanceUpdatedAt);
+    if (Number.isFinite(responseBalanceUpdatedAt) && responseBalanceUpdatedAt > 0) {
+      lastServerBalanceUpdatedAt = Math.max(lastServerBalanceUpdatedAt, Math.floor(responseBalanceUpdatedAt));
+      phoneState.balanceUpdatedAt = lastServerBalanceUpdatedAt;
+    }
     const isLatestSync = syncSequence === userProfileSyncLatestStartedSequence;
     if (force && payload?.user && isLatestSync) {
       const beforeSig = getPersistProfileSignature();
@@ -6814,8 +6958,14 @@ function getVenmoPackFunds(packId) {
 
 function renderVenmoAdminClaims() {
   if (!venmoAdminClaimsEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     venmoAdminClaimsEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminClaimsCollapsed) return;
+  if (hiddenAdminClaimsCleared) {
+    venmoAdminClaimsEl.innerHTML = `<div class="hidden-admin-empty">Pending Claims view cleared.</div>`;
     return;
   }
   const claims = [...venmoClaimState.adminClaims].sort((a, b) => Number(b.submittedAt) - Number(a.submittedAt));
@@ -6868,8 +7018,14 @@ function renderVenmoAdminClaims() {
 
 function renderHiddenAdminUsers() {
   if (!hiddenAdminUsersEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminUsersEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminUsersCollapsed) return;
+  if (hiddenAdminUsersCleared) {
+    hiddenAdminUsersEl.innerHTML = `<div class="hidden-admin-empty">Users view cleared.</div>`;
     return;
   }
   const users = [...venmoClaimState.adminUsers].sort((a, b) => Number(b.balance) - Number(a.balance));
@@ -6953,10 +7109,12 @@ function renderHiddenAdminUsers() {
 
 function renderHiddenAdminStats() {
   if (!hiddenAdminStatsEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminStatsEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
     return;
   }
+  if (hiddenAdminStatsCollapsed) return;
   const stats = venmoClaimState.adminStats;
   if (!stats) {
     hiddenAdminStatsEl.innerHTML = `<div class="hidden-admin-empty">No stats yet.</div>`;
@@ -6985,10 +7143,12 @@ function renderHiddenAdminStats() {
 
 function renderHiddenAdminHealth() {
   if (!hiddenAdminHealthEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminHealthEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
     return;
   }
+  if (hiddenAdminHealthCollapsed) return;
   const health = venmoClaimState.adminHealth;
   if (!health) {
     hiddenAdminHealthEl.innerHTML = `<div class="hidden-admin-empty">No system health data yet.</div>`;
@@ -7027,6 +7187,102 @@ function getAdminEventLabel(eventType) {
     .split(" ")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function syncHiddenAdminSectionControl(buttonEl, sectionEl, collapsed) {
+  if (buttonEl) {
+    buttonEl.textContent = collapsed ? "Expand" : "Collapse";
+    buttonEl.disabled = !venmoAdminUnlocked;
+  }
+  if (sectionEl) {
+    sectionEl.style.display = collapsed ? "none" : "";
+  }
+}
+
+function syncHiddenAdminClearControl(buttonEl, { count = 0, cleared = false } = {}) {
+  if (!buttonEl) return;
+  buttonEl.textContent = cleared ? "Restore" : "Clear";
+  buttonEl.disabled = !venmoAdminUnlocked || (!cleared && Number(count) <= 0);
+}
+
+function syncHiddenAdminCoreSectionControls() {
+  const claimCount = Array.isArray(venmoClaimState.adminClaims) ? venmoClaimState.adminClaims.length : 0;
+  const userCount = Array.isArray(venmoClaimState.adminUsers) ? venmoClaimState.adminUsers.length : 0;
+  const deviceCount = Array.isArray(venmoClaimState.adminDevices) ? venmoClaimState.adminDevices.length : 0;
+  const feedbackCount = Array.isArray(venmoClaimState.adminFeedback) ? venmoClaimState.adminFeedback.length : 0;
+  const backupCount = Array.isArray(venmoClaimState.adminBackups) ? venmoClaimState.adminBackups.length : 0;
+  syncHiddenAdminSectionControl(hiddenAdminClaimsCollapseBtn, venmoAdminClaimsEl, hiddenAdminClaimsCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminClaimsClearBtn, { count: claimCount, cleared: hiddenAdminClaimsCleared });
+  syncHiddenAdminSectionControl(hiddenAdminStatsCollapseBtn, hiddenAdminStatsEl, hiddenAdminStatsCollapsed);
+  syncHiddenAdminSectionControl(hiddenAdminHealthCollapseBtn, hiddenAdminHealthEl, hiddenAdminHealthCollapsed);
+  syncHiddenAdminSectionControl(hiddenAdminUsersCollapseBtn, hiddenAdminUsersEl, hiddenAdminUsersCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminUsersClearBtn, { count: userCount, cleared: hiddenAdminUsersCleared });
+  syncHiddenAdminSectionControl(hiddenAdminDevicesCollapseBtn, hiddenAdminDevicesEl, hiddenAdminDevicesCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminDevicesClearBtn, { count: deviceCount, cleared: hiddenAdminDevicesCleared });
+  syncHiddenAdminSectionControl(hiddenAdminFeedbackCollapseBtn, hiddenAdminFeedbackEl, hiddenAdminFeedbackCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminFeedbackClearBtn, { count: feedbackCount, cleared: hiddenAdminFeedbackCleared });
+  syncHiddenAdminSectionControl(hiddenAdminBackupsCollapseBtn, hiddenAdminBackupsEl, hiddenAdminBackupsCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminBackupsClearBtn, { count: backupCount, cleared: hiddenAdminBackupsCleared });
+}
+
+function setHiddenAdminClaimsCollapsed(collapsed) {
+  hiddenAdminClaimsCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminClaimsCleared(cleared) {
+  hiddenAdminClaimsCleared = Boolean(cleared);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminStatsCollapsed(collapsed) {
+  hiddenAdminStatsCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminHealthCollapsed(collapsed) {
+  hiddenAdminHealthCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminUsersCollapsed(collapsed) {
+  hiddenAdminUsersCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminUsersCleared(cleared) {
+  hiddenAdminUsersCleared = Boolean(cleared);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminDevicesCollapsed(collapsed) {
+  hiddenAdminDevicesCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminDevicesCleared(cleared) {
+  hiddenAdminDevicesCleared = Boolean(cleared);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminFeedbackCollapsed(collapsed) {
+  hiddenAdminFeedbackCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminFeedbackCleared(cleared) {
+  hiddenAdminFeedbackCleared = Boolean(cleared);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminBackupsCollapsed(collapsed) {
+  hiddenAdminBackupsCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminBackupsCleared(cleared) {
+  hiddenAdminBackupsCleared = Boolean(cleared);
+  syncHiddenAdminCoreSectionControls();
 }
 
 function syncHiddenAdminActivityControls() {
@@ -7169,8 +7425,14 @@ function renderHiddenAdminFraudFlags() {
 
 function renderHiddenAdminBackups() {
   if (!hiddenAdminBackupsEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminBackupsEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminBackupsCollapsed) return;
+  if (hiddenAdminBackupsCleared) {
+    hiddenAdminBackupsEl.innerHTML = `<div class="hidden-admin-empty">Backups view cleared.</div>`;
     return;
   }
   const backups = Array.isArray(venmoClaimState.adminBackups) ? venmoClaimState.adminBackups : [];
@@ -7212,8 +7474,14 @@ function renderHiddenAdminBackups() {
 
 function renderHiddenAdminDevices() {
   if (!hiddenAdminDevicesEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminDevicesEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminDevicesCollapsed) return;
+  if (hiddenAdminDevicesCleared) {
+    hiddenAdminDevicesEl.innerHTML = `<div class="hidden-admin-empty">Trusted Devices view cleared.</div>`;
     return;
   }
   const devices = Array.isArray(venmoClaimState.adminDevices) ? venmoClaimState.adminDevices : [];
@@ -7269,8 +7537,14 @@ function getAdminFeedbackStatusLabel(status) {
 
 function renderHiddenAdminFeedback() {
   if (!hiddenAdminFeedbackEl) return;
+  syncHiddenAdminCoreSectionControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminFeedbackEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminFeedbackCollapsed) return;
+  if (hiddenAdminFeedbackCleared) {
+    hiddenAdminFeedbackEl.innerHTML = `<div class="hidden-admin-empty">Player Feedback view cleared.</div>`;
     return;
   }
   const feedbackEntries = Array.isArray(venmoClaimState.adminFeedback) ? venmoClaimState.adminFeedback : [];
@@ -7630,7 +7904,11 @@ async function forceLogoutAdminUser(playerId) {
       })
     );
     const sessionsCleared = Number(payload?.sessionsCleared) || 0;
-    setHiddenAdminStatus(`Forced logout complete. Sessions cleared: ${sessionsCleared}.`);
+    setHiddenAdminStatus(
+      sessionsCleared > 0
+        ? `Forced logout complete. Sessions cleared: ${sessionsCleared}.`
+        : "No active sessions found for that user."
+    );
     return true;
   } catch (error) {
     setHiddenAdminStatus(`Could not force logout user: ${error.message}`, true);
@@ -7643,7 +7921,7 @@ async function resetAdminUserProgress(playerId) {
   const confirmed = window.confirm("Reset this user's progress (balance/shares/savings and claims/wins)?");
   if (!confirmed) return false;
   try {
-    await venmoApiRequest(
+    const payload = await venmoApiRequest(
       `/api/admin/users/${encodeURIComponent(playerId)}/reset-progress`,
       getAdminRequestOptions({
         method: "POST"
@@ -7652,7 +7930,12 @@ async function resetAdminUserProgress(playerId) {
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminStatsFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-    setHiddenAdminStatus("User progress reset.");
+    const sessionsCleared = Number(payload?.sessionsCleared) || 0;
+    setHiddenAdminStatus(
+      sessionsCleared > 0
+        ? `User progress reset. Sessions cleared: ${sessionsCleared}.`
+        : "User progress reset."
+    );
     return true;
   } catch (error) {
     setHiddenAdminStatus(`Could not reset user progress: ${error.message}`, true);
@@ -7828,6 +8111,111 @@ async function removeAdminFeedback(feedbackId) {
     setHiddenAdminStatus(`Could not remove feedback: ${error.message}`, true);
     return false;
   }
+}
+
+function toggleHiddenAdminClaimsViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminClaimsCleared) {
+    setHiddenAdminClaimsCleared(false);
+    renderVenmoAdminClaims();
+    setHiddenAdminStatus("Pending Claims view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminClaims) || venmoClaimState.adminClaims.length <= 0) {
+    setHiddenAdminStatus("Pending Claims list is already empty.");
+    return true;
+  }
+  setHiddenAdminClaimsCleared(true);
+  renderVenmoAdminClaims();
+  setHiddenAdminStatus("Pending Claims view cleared.");
+  return true;
+}
+
+function toggleHiddenAdminUsersViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminUsersCleared) {
+    setHiddenAdminUsersCleared(false);
+    renderHiddenAdminUsers();
+    setHiddenAdminStatus("Users view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminUsers) || venmoClaimState.adminUsers.length <= 0) {
+    setHiddenAdminStatus("Users list is already empty.");
+    return true;
+  }
+  setHiddenAdminUsersCleared(true);
+  renderHiddenAdminUsers();
+  setHiddenAdminStatus("Users view cleared.");
+  return true;
+}
+
+function toggleHiddenAdminDevicesViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminDevicesCleared) {
+    setHiddenAdminDevicesCleared(false);
+    renderHiddenAdminDevices();
+    setHiddenAdminStatus("Trusted Devices view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminDevices) || venmoClaimState.adminDevices.length <= 0) {
+    setHiddenAdminStatus("Trusted Devices list is already empty.");
+    return true;
+  }
+  setHiddenAdminDevicesCleared(true);
+  renderHiddenAdminDevices();
+  setHiddenAdminStatus("Trusted Devices view cleared.");
+  return true;
+}
+
+function toggleHiddenAdminFeedbackViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminFeedbackCleared) {
+    setHiddenAdminFeedbackCleared(false);
+    renderHiddenAdminFeedback();
+    setHiddenAdminStatus("Player Feedback view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminFeedback) || venmoClaimState.adminFeedback.length <= 0) {
+    setHiddenAdminStatus("Player Feedback list is already empty.");
+    return true;
+  }
+  setHiddenAdminFeedbackCleared(true);
+  renderHiddenAdminFeedback();
+  setHiddenAdminStatus("Player Feedback view cleared.");
+  return true;
+}
+
+function toggleHiddenAdminBackupsViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminBackupsCleared) {
+    setHiddenAdminBackupsCleared(false);
+    renderHiddenAdminBackups();
+    setHiddenAdminStatus("Backups view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminBackups) || venmoClaimState.adminBackups.length <= 0) {
+    setHiddenAdminStatus("Backups list is already empty.");
+    return true;
+  }
+  setHiddenAdminBackupsCleared(true);
+  renderHiddenAdminBackups();
+  setHiddenAdminStatus("Backups view cleared.");
+  return true;
 }
 
 async function clearHiddenAdminActivityFeed() {
@@ -8069,6 +8457,73 @@ function initHiddenAdminTrigger() {
       runFullAdminReset();
     });
   }
+  if (hiddenAdminClaimsCollapseBtn) {
+    hiddenAdminClaimsCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminClaimsCollapsed(!hiddenAdminClaimsCollapsed);
+      if (!hiddenAdminClaimsCollapsed) renderVenmoAdminClaims();
+    });
+  }
+  if (hiddenAdminClaimsClearBtn) {
+    hiddenAdminClaimsClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminClaimsViewClear();
+    });
+  }
+  if (hiddenAdminStatsCollapseBtn) {
+    hiddenAdminStatsCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminStatsCollapsed(!hiddenAdminStatsCollapsed);
+      if (!hiddenAdminStatsCollapsed) renderHiddenAdminStats();
+    });
+  }
+  if (hiddenAdminHealthCollapseBtn) {
+    hiddenAdminHealthCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminHealthCollapsed(!hiddenAdminHealthCollapsed);
+      if (!hiddenAdminHealthCollapsed) renderHiddenAdminHealth();
+    });
+  }
+  if (hiddenAdminUsersCollapseBtn) {
+    hiddenAdminUsersCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminUsersCollapsed(!hiddenAdminUsersCollapsed);
+      if (!hiddenAdminUsersCollapsed) renderHiddenAdminUsers();
+    });
+  }
+  if (hiddenAdminUsersClearBtn) {
+    hiddenAdminUsersClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminUsersViewClear();
+    });
+  }
+  if (hiddenAdminDevicesCollapseBtn) {
+    hiddenAdminDevicesCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminDevicesCollapsed(!hiddenAdminDevicesCollapsed);
+      if (!hiddenAdminDevicesCollapsed) renderHiddenAdminDevices();
+    });
+  }
+  if (hiddenAdminDevicesClearBtn) {
+    hiddenAdminDevicesClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminDevicesViewClear();
+    });
+  }
+  if (hiddenAdminFeedbackCollapseBtn) {
+    hiddenAdminFeedbackCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminFeedbackCollapsed(!hiddenAdminFeedbackCollapsed);
+      if (!hiddenAdminFeedbackCollapsed) renderHiddenAdminFeedback();
+    });
+  }
+  if (hiddenAdminFeedbackClearBtn) {
+    hiddenAdminFeedbackClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminFeedbackViewClear();
+    });
+  }
+  if (hiddenAdminBackupsCollapseBtn) {
+    hiddenAdminBackupsCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminBackupsCollapsed(!hiddenAdminBackupsCollapsed);
+      if (!hiddenAdminBackupsCollapsed) renderHiddenAdminBackups();
+    });
+  }
+  if (hiddenAdminBackupsClearBtn) {
+    hiddenAdminBackupsClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminBackupsViewClear();
+    });
+  }
   if (hiddenAdminActivityCollapseBtn) {
     hiddenAdminActivityCollapseBtn.addEventListener("click", () => {
       setHiddenAdminActivityCollapsed(!hiddenAdminActivityCollapsed);
@@ -8165,6 +8620,9 @@ function initHiddenAdminTrigger() {
     if (event.key !== "Escape" || !hiddenAdminPanelOpen) return;
     closeHiddenAdminPanel();
   });
+  syncHiddenAdminCoreSectionControls();
+  syncHiddenAdminActivityControls();
+  syncHiddenAdminFraudControls();
   syncHiddenAdminTriggerVisibility();
 }
 
@@ -12010,6 +12468,9 @@ const hiloState = {
   gameActive: false,
   guessLocked: false,
   skipRemaining: 3,
+  roundGuesses: 0,
+  roundStartedAt: 0,
+  roundOutcomeLogged: false,
   suits: ["♦", "♣", "♥", "♠"]
 };
 const HILO_SKIP_MAX = 3;
@@ -12022,6 +12483,9 @@ function loadHiLo() {
   hiloState.gameActive = false;
   hiloState.guessLocked = false;
   hiloState.skipRemaining = HILO_SKIP_MAX;
+  hiloState.roundGuesses = 0;
+  hiloState.roundStartedAt = 0;
+  hiloState.roundOutcomeLogged = false;
 
   c.innerHTML = `
     <div class="hilo-root">
@@ -12218,6 +12682,17 @@ function loadHiLo() {
     return Math.max(1, Math.min(13, nonSame));
   }
 
+  function logHiLoRound(outcome) {
+    if (hiloState.roundOutcomeLogged) return;
+    hiloState.roundOutcomeLogged = true;
+    const durationMs = hiloState.roundStartedAt > 0 ? Date.now() - hiloState.roundStartedAt : 0;
+    registerQuickCashoutRound("hilo", {
+      outcome,
+      steps: hiloState.roundGuesses,
+      durationMs
+    });
+  }
+
   function placeBet() {
     if (hiloState.gameActive) return;
     if (!ensureCasinoBettingAllowedNow()) return;
@@ -12237,6 +12712,9 @@ function loadHiLo() {
     hiloState.currentProfit = betAmount;
     hiloState.guessLocked = false;
     hiloState.skipRemaining = HILO_SKIP_MAX;
+    hiloState.roundGuesses = 0;
+    hiloState.roundStartedAt = Date.now();
+    hiloState.roundOutcomeLogged = false;
 
     setRoundState(true);
     updateUI();
@@ -12254,7 +12732,10 @@ function loadHiLo() {
     hiloState.guessLocked = true;
 
     const prev = hiloState.currentCardValue;
-    const nextCard = shouldRigHighBet(hiloState.betAmount, 0.95)
+    const rigForQuickCashout =
+      hiloState.roundGuesses < QUICK_CASHOUT_STEP_LIMIT &&
+      shouldRigQuickCashoutAbuse("hilo", hiloState.betAmount, 1.06);
+    const nextCard = (shouldRigHighBet(hiloState.betAmount, 0.95) || rigForQuickCashout)
       ? getRiggedHiLoCard(prev, guess)
       : getRandomCard();
     let won = false;
@@ -12262,6 +12743,7 @@ function loadHiLo() {
     if (guess === "higher" && nextCard > prev) won = true;
     if (guess === "lower" && nextCard < prev) won = true;
     if (guess === "same" && nextCard === prev) won = true;
+    hiloState.roundGuesses += 1;
 
     if (won) {
       hiloState.currentProfit *= multipliers[guess];
@@ -12270,6 +12752,7 @@ function loadHiLo() {
       hiloState.currentProfit = 0;
       setRoundState(false);
       playGameSound("loss");
+      logHiLoRound("loss");
     }
 
     hiloState.currentCardValue = nextCard;
@@ -12347,6 +12830,7 @@ function loadHiLo() {
 
   function cashout() {
     if (!hiloState.gameActive) return;
+    logHiLoRound("cashout");
     const payout = hiloState.currentProfit;
     const netProfit = payout - hiloState.betAmount;
     cash += hiloState.currentProfit;
@@ -16798,12 +17282,12 @@ function loadDragonTower() {
               </div>
 
               <div class="field" id="autoPickPatternWrap" hidden>
-                <label for="autoPickPattern">Pattern (1-4)</label>
+                <label for="autoPickPattern">Pattern (pick on tower)</label>
                 <input
                   type="text"
                   id="autoPickPattern"
                   value="1,2,3,4"
-                  placeholder="Example: 1,4,2,3"
+                  placeholder="Click tower tiles by row"
                   autocomplete="off"
                 />
               </div>
@@ -16861,6 +17345,9 @@ function loadDragonTower() {
   let difficulty = "easy";
   let highScore = 0;
   let scheduledCashoutId = null;
+  let roundStartedAt = 0;
+  let roundPickCount = 0;
+  let roundOutcomeLogged = false;
 
   const ROWS = 9;
   const TILES = 4;
@@ -16882,6 +17369,7 @@ function loadDragonTower() {
   let autoRunId = 0;
   let lastOutcome = null;
   let rowElements = [];
+  const autoPatternByRow = Array.from({ length: ROWS }, () => null);
 
   const balanceEl = container.querySelector("#balance");
   const multiplierEl = container.querySelector("#multiplier");
@@ -16976,6 +17464,7 @@ function loadDragonTower() {
     if (autoPickModeEl) autoPickModeEl.disabled = !allow;
     if (autoPickPatternEl) autoPickPatternEl.disabled = !allow || (autoPickModeEl?.value || "random") !== "pattern";
     setTabsEnabled(allow);
+    syncAutoPatternBoardUi();
   }
 
   function syncAutoPickUi() {
@@ -16983,6 +17472,11 @@ function loadDragonTower() {
     const showPattern = mode === "pattern";
     if (autoPickPatternWrapEl) autoPickPatternWrapEl.hidden = !showPattern;
     if (autoPickPatternEl) autoPickPatternEl.disabled = !showPattern || autoRunning;
+    syncAutoPatternBoardUi();
+    if (showPattern && isAutoPatternSelectMode()) {
+      const picked = getAutoPatternSelectedCount();
+      message(picked > 0 ? `Pattern ready (${picked}/${ROWS} rows)` : "Pick tower tiles to build your auto pattern");
+    }
   }
 
   function parseAutoPattern() {
@@ -16995,12 +17489,54 @@ function loadDragonTower() {
     return values;
   }
 
-  function getAutoPickColumn(config, pickIndex) {
+  function isAutoPatternSelectMode() {
+    return uiMode === "auto" && !autoRunning && !gameActive && (autoPickModeEl?.value || "random") === "pattern";
+  }
+
+  function getAutoPatternSelectedCount() {
+    return autoPatternByRow.filter((value) => Number.isInteger(value)).length;
+  }
+
+  function syncAutoPatternInputFromBoard() {
+    if (!autoPickPatternEl) return;
+    const picks = autoPatternByRow
+      .filter((value) => Number.isInteger(value))
+      .map((value) => String(value + 1));
+    autoPickPatternEl.value = picks.join(",");
+  }
+
+  function syncAutoPatternBoardUi() {
+    const allowSelection = isAutoPatternSelectMode();
+    rowElements.forEach((rowEl, rowIndex) => {
+      const hasSelection = allowSelection && Number.isInteger(autoPatternByRow[rowIndex]);
+      rowEl.classList.toggle("auto-pattern-row", hasSelection);
+      rowEl.querySelectorAll(".tile").forEach((tileEl, colIndex) => {
+        const selected = hasSelection && autoPatternByRow[rowIndex] === colIndex;
+        tileEl.classList.toggle("auto-pattern-selected", selected);
+        tileEl.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+    });
+  }
+
+  function selectAutoPatternTile(rowIndex, colIndex) {
+    if (rowIndex < 0 || rowIndex >= ROWS || colIndex < 0 || colIndex >= TILES) return;
+    autoPatternByRow[rowIndex] = autoPatternByRow[rowIndex] === colIndex ? null : colIndex;
+    syncAutoPatternInputFromBoard();
+    syncAutoPatternBoardUi();
+    const picked = getAutoPatternSelectedCount();
+    message(picked > 0 ? `Pattern ready (${picked}/${ROWS} rows)` : "Pick tiles to set an auto pattern");
+  }
+
+  function getAutoPickColumn(config, pickIndex, rowIndex) {
     if (config.pickMode === "lane" && Number.isInteger(config.fixedCol)) {
       return config.fixedCol;
     }
-    if (config.pickMode === "pattern" && Array.isArray(config.pattern) && config.pattern.length > 0) {
-      return config.pattern[pickIndex % config.pattern.length];
+    if (config.pickMode === "pattern") {
+      const byRow = config.patternByRow?.[rowIndex];
+      if (config.usePatternByRow && Number.isInteger(byRow)) return byRow;
+      if (Array.isArray(config.pattern) && config.pattern.length > 0) {
+        return config.pattern[pickIndex % config.pattern.length];
+      }
     }
     return Math.floor(Math.random() * TILES);
   }
@@ -17039,6 +17575,7 @@ function loadDragonTower() {
 
     syncButtons();
     message(uiMode === "auto" ? "Configure auto and start" : (IS_PHONE_EMBED_MODE ? "Place a bet to start" : "SAGE"));
+    syncAutoPatternBoardUi();
   }
 
   function sleep(ms) {
@@ -17052,6 +17589,11 @@ function loadDragonTower() {
     const stop = autoStopEl?.value || "never";
     const pickModeRaw = autoPickModeEl?.value || "random";
     const pattern = pickModeRaw === "pattern" ? parseAutoPattern() : [];
+    const patternByRow =
+      pickModeRaw === "pattern"
+        ? autoPatternByRow.map((value) => (Number.isInteger(value) ? value : null))
+        : [];
+    const usePatternByRow = patternByRow.some((value) => Number.isInteger(value));
 
     let delay = 420;
     if (speed === "fast") delay = 260;
@@ -17065,7 +17607,7 @@ function loadDragonTower() {
         pickMode = "lane";
         fixedCol = col;
       }
-    } else if (pickModeRaw === "pattern" && pattern.length > 0) {
+    } else if (pickModeRaw === "pattern" && (pattern.length > 0 || usePatternByRow)) {
       pickMode = "pattern";
     }
 
@@ -17076,13 +17618,20 @@ function loadDragonTower() {
       stop,
       pickMode,
       fixedCol,
-      pattern
+      pattern,
+      patternByRow,
+      usePatternByRow,
+      pickModeRaw
     };
   }
 
   async function startAuto() {
     if (autoRunning || destroyed) return;
     const config = getAutoConfig();
+    if (config.pickModeRaw === "pattern" && !config.usePatternByRow && config.pattern.length === 0) {
+      message("Pick at least one tower tile for Pattern auto mode");
+      return;
+    }
 
     autoRunning = true;
     lastOutcome = null;
@@ -17120,7 +17669,7 @@ function loadDragonTower() {
         }
 
         await sleep(config.delay);
-        const col = getAutoPickColumn(config, roundPickIndex);
+        const col = getAutoPickColumn(config, roundPickIndex, currentRow);
         roundPickIndex += 1;
         clickTile(currentRow, col);
       }
@@ -17175,10 +17724,19 @@ function loadDragonTower() {
         tile.setAttribute("tabindex", "0");
         tile.setAttribute("aria-label", `Row ${rowIndex + 1}, tile ${colIndex + 1}`);
 
-        const onPick = () => clickTile(rowIndex, colIndex);
+        const onPick = () => {
+          if (isAutoPatternSelectMode()) {
+            selectAutoPatternTile(rowIndex, colIndex);
+            return;
+          }
+          clickTile(rowIndex, colIndex);
+        };
         tile.addEventListener("click", onPick);
         tile.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") onPick();
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onPick();
+          }
         });
 
         slot.appendChild(tile);
@@ -17188,12 +17746,14 @@ function loadDragonTower() {
       boardEl.appendChild(row);
       rowElements.push(row);
     }
+    syncAutoPatternBoardUi();
   }
 
   function generateTower() {
     towerData = [];
     const rigPenalty = shouldRigHighBet(betAmount, 1) ? 1 : 0;
-    const safeCount = Math.max(1, DIFF[difficulty].safe - rigPenalty);
+    const spamRigPenalty = shouldRigQuickCashoutAbuse("dragontower", betAmount, 1.05) ? 1 : 0;
+    const safeCount = Math.max(1, DIFF[difficulty].safe - rigPenalty - spamRigPenalty);
 
     for (let rowIndex = 0; rowIndex < ROWS; rowIndex++) {
       const row = Array(TILES).fill(false);
@@ -17257,6 +17817,9 @@ function loadDragonTower() {
     currentRow = 0;
     gameActive = true;
     lastOutcome = null;
+    roundStartedAt = Date.now();
+    roundPickCount = 0;
+    roundOutcomeLogged = false;
 
     if (uiMode === "manual") cashBtn.disabled = false;
 
@@ -17300,6 +17863,17 @@ function loadDragonTower() {
     updateMultiplier();
   }
 
+  function logDragonRound(outcome) {
+    if (roundOutcomeLogged) return;
+    roundOutcomeLogged = true;
+    const durationMs = roundStartedAt > 0 ? Date.now() - roundStartedAt : 0;
+    registerQuickCashoutRound("dragontower", {
+      outcome,
+      steps: outcome === "cashout" ? currentRow : roundPickCount,
+      durationMs
+    });
+  }
+
   function endGame(win) {
     gameActive = false;
 
@@ -17308,7 +17882,10 @@ function loadDragonTower() {
       scheduledCashoutId = null;
     }
 
-    if (!win) lastOutcome = "loss";
+    if (!win) {
+      lastOutcome = "loss";
+      logDragonRound("loss");
+    }
     if (uiMode === "manual") cashBtn.disabled = true;
 
     multiplier = 1;
@@ -17331,6 +17908,7 @@ function loadDragonTower() {
     const win = betAmount * multiplier;
     const netProfit = win - betAmount;
     lastOutcome = "win";
+    logDragonRound("cashout");
 
     balance += win;
     syncGlobalCash();
@@ -17349,6 +17927,7 @@ function loadDragonTower() {
 
   function clickTile(rowIndex, colIndex) {
     if (destroyed || !gameActive || rowIndex !== currentRow) return;
+    roundPickCount += 1;
 
     const slot = rowElements[rowIndex]?.children?.[colIndex];
     if (slot) {
@@ -20970,6 +21549,7 @@ function loadMines() {
   const HISTORY_LIMIT = 10;
 
   let destroyed = false;
+  let roundStartedAt = 0;
 
   const state = {
     gameState: "idle",
@@ -21285,6 +21865,7 @@ function loadMines() {
     state.multiplier = 1;
     state.board = createShuffledBoard(mines);
     state.balance -= bet;
+    roundStartedAt = Date.now();
     syncGlobalCash();
 
     ensureBoardTiles();
@@ -21337,7 +21918,10 @@ function loadMines() {
     const autoMineChance = Math.min(0.78, 0.26 + state.gemsFound * 0.09);
     if (unrevealedMines.length > 0 && Math.random() < autoMineChance) {
       pick = unrevealedMines[Math.floor(Math.random() * unrevealedMines.length)];
-    } else if (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) {
+    } else if (
+      (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
+      (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
+    ) {
       state.board[pick].isMine = true;
     }
     revealTile(pick);
@@ -21429,6 +22013,11 @@ function loadMines() {
         : "Round lost. Press Bet to start a new round."
     );
     pushHistoryEntry("loss", `-${formatMoney(state.currentBet)}`);
+    registerQuickCashoutRound("mines", {
+      outcome: "loss",
+      steps: state.gemsFound,
+      durationMs: roundStartedAt > 0 ? Date.now() - roundStartedAt : 0
+    });
     triggerCasinoKickoutCheckAfterRound();
     if (state.autoRunning) queueNextAutoRound();
   }
@@ -21446,6 +22035,11 @@ function loadMines() {
     setMessage(customMessage || `You secured ${formatMoney(payout)} at ${state.multiplier.toFixed(2)}x.`);
     pushHistoryEntry("win", `+${formatMoney(payout)}`);
     updateStatsUI();
+    registerQuickCashoutRound("mines", {
+      outcome: "cashout",
+      steps: state.gemsFound,
+      durationMs: roundStartedAt > 0 ? Date.now() - roundStartedAt : 0
+    });
     triggerCasinoKickoutCheckAfterRound();
     if (state.autoRunning) queueNextAutoRound();
   }
@@ -21457,7 +22051,10 @@ function loadMines() {
     const index = Number(tile.dataset.index);
     const tileData = state.board[index];
     if (!tileData || tileData.revealed) return;
-    if (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) {
+    if (
+      (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
+      (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
+    ) {
       tileData.isMine = true;
     }
 
@@ -21474,6 +22071,7 @@ function loadMines() {
     state.gemsFound = 0;
     state.multiplier = 1;
     state.board = [];
+    roundStartedAt = 0;
     ensureBoardTiles();
     clearBoardVisuals();
     setOverlay();
@@ -22560,6 +23158,7 @@ function loadCrossyRoad() {
       row: 3,
       intensity: 0
     },
+    runStartedAt: 0,
     time: 0,
     crashFlash: 0,
     crashLane: -1
@@ -22722,6 +23321,10 @@ function loadCrossyRoad() {
     if (state.bet > HIGH_BET_RIG_THRESHOLD) {
       chance += getHighBetRigChance(state.bet, 0.45);
     }
+    const quickCashoutRig = getQuickCashoutRigChance("crossyroad", state.bet, 1.08);
+    if (quickCashoutRig > 0 && multiplier <= 1.35) {
+      chance += quickCashoutRig * 0.55;
+    }
 
     return Math.min(0.995, chance);
   }
@@ -22778,6 +23381,7 @@ function loadCrossyRoad() {
 
     state.bet = cleanBet;
     state.balance = round2(state.balance - cleanBet);
+    state.runStartedAt = Date.now();
     syncGlobalCash();
 
     state.running = true;
@@ -22802,8 +23406,23 @@ function loadCrossyRoad() {
 
   function finishRun(reason) {
     if (!state.running) return;
+    const runDurationMs = state.runStartedAt > 0 ? Date.now() - state.runStartedAt : 0;
+    if (reason === "cashout") {
+      registerQuickCashoutRound("crossyroad", {
+        outcome: "cashout",
+        steps: state.laneReached,
+        durationMs: runDurationMs
+      });
+    } else {
+      registerQuickCashoutRound("crossyroad", {
+        outcome: reason === "crash_car" ? "loss" : "win",
+        steps: state.laneReached,
+        durationMs: runDurationMs
+      });
+    }
 
     state.running = false;
+    state.runStartedAt = 0;
     startBtn.textContent = "Start Game";
     setDifficultyLocked(false);
     setBettingLocked(false);

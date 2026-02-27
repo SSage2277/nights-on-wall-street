@@ -646,15 +646,31 @@
     </div>
     <div id="hiddenAdminStatus" class="hidden-admin-status"></div>
     <section class="hidden-admin-section">
-      <h4>Overview</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Overview</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminStatsCollapseBtn" type="button">Collapse</button>
+        </div>
+      </div>
       <div id="hiddenAdminStats" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>System Health</h4>
+      <div class="hidden-admin-section-head">
+        <h4>System Health</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminHealthCollapseBtn" type="button">Collapse</button>
+        </div>
+      </div>
       <div id="hiddenAdminHealth" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Pending Claims</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Pending Claims</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminClaimsCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminClaimsClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="venmoAdminClaims" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
@@ -668,23 +684,53 @@
       <div id="hiddenAdminActivity" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Fraud Flags</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Fraud Flags</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminFraudCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminFraudClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="hiddenAdminFraud" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Player Feedback</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Player Feedback</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminFeedbackCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminFeedbackClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="hiddenAdminFeedback" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Users</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Users</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminUsersCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminUsersClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="hiddenAdminUsers" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Trusted Devices</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Trusted Devices</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminDevicesCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminDevicesClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="hiddenAdminDevices" class="hidden-admin-table-wrap"></div>
     </section>
     <section class="hidden-admin-section">
-      <h4>Backups &amp; Restore</h4>
+      <div class="hidden-admin-section-head">
+        <h4>Backups &amp; Restore</h4>
+        <div class="hidden-admin-inline-actions">
+          <button id="hiddenAdminBackupsCollapseBtn" type="button">Collapse</button>
+          <button id="hiddenAdminBackupsClearBtn" class="hidden-admin-danger-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div class="hidden-admin-actions-row">
         <button id="hiddenAdminCreateBackupBtn" type="button">Create Backup Now</button>
       </div>
