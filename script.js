@@ -107,6 +107,10 @@ let authSessionWatchdogTimer = null;
 let authSessionWatchdogBusy = false;
 let lastServerBalanceUpdatedAt = 0;
 let bannedOverlayActive = false;
+let accountMessageQueue = [];
+let activeAccountMessage = null;
+let accountMessageAckBusy = false;
+const pendingAccountMessageIds = new Set();
 let antiTamperGuardsInitialized = false;
 let antiTamperLastNoticeAt = 0;
 let antiTamperDevtoolsOpen = false;
@@ -649,6 +653,7 @@ function showBannedOverlay(message = "You are banned.") {
   authSessionLikelyAuthenticated = false;
   stopAuthSessionWatchdog();
   autoPlay = false;
+  clearAccountMessageQueue();
   if (typeof hideFirstLaunchUsernameOverlay === "function") hideFirstLaunchUsernameOverlay();
   if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
   const loanPanel = document.getElementById("loan-panel");
@@ -664,6 +669,94 @@ function hideBannedOverlay() {
   bannedOverlayActive = false;
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
+}
+
+function normalizeIncomingAdminPopup(entry) {
+  const id = String(entry?.id || "").trim();
+  const message = String(entry?.message || "").trim();
+  if (!id || !message) return null;
+  return {
+    id,
+    message: message.slice(0, 260),
+    createdAt: Number(entry?.createdAt) || Date.now()
+  };
+}
+
+function hideAccountMessageOverlay() {
+  const overlay = document.getElementById("accountMessageOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+function clearAccountMessageQueue() {
+  accountMessageQueue = [];
+  activeAccountMessage = null;
+  accountMessageAckBusy = false;
+  pendingAccountMessageIds.clear();
+  hideAccountMessageOverlay();
+}
+
+function showNextAccountMessageOverlay() {
+  if (activeAccountMessage || accountMessageAckBusy) return;
+  const overlay = document.getElementById("accountMessageOverlay");
+  const bodyEl = document.getElementById("accountMessageBody");
+  if (!overlay || !bodyEl) return;
+  if (!accountMessageQueue.length) {
+    hideAccountMessageOverlay();
+    return;
+  }
+  const next = accountMessageQueue.shift();
+  if (!next) return;
+  activeAccountMessage = next;
+  bodyEl.textContent = next.message;
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function queueIncomingAdminPopups(entries) {
+  if (!Array.isArray(entries) || entries.length <= 0) return;
+  let queuedAny = false;
+  entries.forEach((entry) => {
+    const normalized = normalizeIncomingAdminPopup(entry);
+    if (!normalized || pendingAccountMessageIds.has(normalized.id)) return;
+    pendingAccountMessageIds.add(normalized.id);
+    accountMessageQueue.push(normalized);
+    queuedAny = true;
+  });
+  if (!queuedAny) return;
+  accountMessageQueue.sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  showNextAccountMessageOverlay();
+}
+
+async function acknowledgeActiveAccountMessage() {
+  if (!activeAccountMessage || accountMessageAckBusy) return;
+  accountMessageAckBusy = true;
+  const current = activeAccountMessage;
+  activeAccountMessage = null;
+  pendingAccountMessageIds.delete(current.id);
+  hideAccountMessageOverlay();
+  try {
+    if (authSessionLikelyAuthenticated) {
+      await venmoApiRequest(`/api/messages/${encodeURIComponent(current.id)}/ack`, {
+        method: "POST"
+      });
+    }
+  } catch {}
+  finally {
+    accountMessageAckBusy = false;
+    showNextAccountMessageOverlay();
+  }
+}
+
+function initAccountMessageOverlay() {
+  const dismissBtn = document.getElementById("accountMessageDismissBtn");
+  const overlay = document.getElementById("accountMessageOverlay");
+  if (!dismissBtn || !overlay || dismissBtn.dataset.bound === "true") return;
+  dismissBtn.dataset.bound = "true";
+  dismissBtn.addEventListener("click", () => {
+    acknowledgeActiveAccountMessage();
+  });
 }
 
 function pushAntiTamperNotice(message) {
@@ -843,11 +936,13 @@ async function pollAuthSessionWatchdog() {
     }
     if (response.ok && payload?.authenticated === true) {
       authSessionLikelyAuthenticated = true;
+      queueIncomingAdminPopups(payload?.adminPopups);
       return;
     }
     if (response.ok && payload?.authenticated === false) {
       const wasAuthenticated = authSessionLikelyAuthenticated;
       authSessionLikelyAuthenticated = false;
+      clearAccountMessageQueue();
       if (wasAuthenticated) {
         venmoAdminUnlocked = false;
         if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
@@ -941,7 +1036,14 @@ function applyServerPortfolioSnapshot(user, { useServerBalance = true, allowLoca
   phoneState.balanceUpdatedAt = Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0));
 }
 
-function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalBalance = false } = {}) {
+function applyAuthenticatedProfile(
+  user,
+  {
+    useServerBalance = true,
+    preferLocalBalance = false,
+    adminPopups = []
+  } = {}
+) {
   const username = normalizeUsername(user?.username);
   const playerId = String(user?.playerId || "").trim();
   if (!username || !playerId) return false;
@@ -965,6 +1067,7 @@ function applyAuthenticatedProfile(user, { useServerBalance = true, preferLocalB
   startAuthSessionWatchdog();
   hideFirstLaunchUsernameOverlay();
   showFirstPlayTutorialIfNeeded({ playerId, scope: "account" });
+  queueIncomingAdminPopups(adminPopups);
   setFirstLaunchUsernameError("");
   if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
   if (typeof updateUI === "function") updateUI();
@@ -982,7 +1085,11 @@ async function hydrateAuthSessionIfPresent() {
       stopAuthSessionWatchdog();
       return false;
     }
-    return applyAuthenticatedProfile(payload.user, { useServerBalance: true, preferLocalBalance: false });
+    return applyAuthenticatedProfile(payload.user, {
+      useServerBalance: true,
+      preferLocalBalance: false,
+      adminPopups: payload?.adminPopups
+    });
   } catch {
     authSessionLikelyAuthenticated = false;
     stopAuthSessionWatchdog();
@@ -1270,6 +1377,7 @@ async function submitFirstLaunchUsername() {
         return false;
       }
       setGuestModeEnabled(true);
+      clearAccountMessageQueue();
       hideFirstLaunchUsernameOverlay();
       setFirstLaunchUsernameError("");
       if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
@@ -1305,7 +1413,11 @@ async function submitFirstLaunchUsername() {
       if (!sessionReady) {
         throw new Error("Login session was not saved. Open the live site and try again.");
       }
-      const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: false });
+      const ok = applyAuthenticatedProfile(payload?.user, {
+        useServerBalance: true,
+        preferLocalBalance: false,
+        adminPopups: payload?.adminPopups
+      });
       if (!ok) {
         setFirstLaunchUsernameError("Login succeeded but profile data was invalid.");
         return false;
@@ -1348,7 +1460,11 @@ async function submitFirstLaunchUsername() {
     if (!sessionReady) {
       throw new Error("Account created, but login session was not saved. Open the live site and login.");
     }
-    const ok = applyAuthenticatedProfile(payload?.user, { useServerBalance: true, preferLocalBalance: false });
+    const ok = applyAuthenticatedProfile(payload?.user, {
+      useServerBalance: true,
+      preferLocalBalance: false,
+      adminPopups: payload?.adminPopups
+    });
     if (!ok) {
       setFirstLaunchUsernameError("Account created but profile data was invalid.");
       return false;
@@ -1413,14 +1529,17 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminStats = null;
     venmoClaimState.adminHealth = null;
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminOwnerLockEnabled = false;
     venmoClaimState.adminFeedback = [];
     venmoClaimState.adminActivity = [];
     venmoClaimState.adminFraudFlags = [];
     venmoClaimState.adminBackups = [];
+    venmoClaimState.adminMessages = [];
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
     lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
+    clearAccountMessageQueue();
     hideBannedOverlay();
     hideFirstPlayTutorialOverlay({ markSeen: false });
     setFirstLaunchAuthMode("register");
@@ -1438,6 +1557,7 @@ async function clearLocalAccountOnDevice() {
     renderHiddenAdminUsers();
     renderHiddenAdminDevices();
     renderHiddenAdminFeedback();
+    renderHiddenAdminMessages();
     setHiddenAdminStatus("");
     setFirstLaunchUsernameError("Cleared. Create a new account or login with a different one.");
     if (registerUsernameInput) registerUsernameInput.focus();
@@ -1936,6 +2056,7 @@ async function logoutFromTradingBadge() {
     authSessionLikelyAuthenticated = false;
     lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
+    clearAccountMessageQueue();
     hideBannedOverlay();
     hideFirstPlayTutorialOverlay({ markSeen: false });
     if (hiddenAdminPanelOpen) closeHiddenAdminPanel();
@@ -6281,6 +6402,12 @@ const hiddenAdminTriggerEl = document.getElementById("hiddenAdminTrigger");
 const hiddenAdminOverlayEl = document.getElementById("hiddenAdminOverlay");
 const hiddenAdminCloseBtnEl = document.getElementById("hiddenAdminCloseBtn");
 const hiddenAdminStatusEl = document.getElementById("hiddenAdminStatus");
+const hiddenAdminMessagesEl = document.getElementById("hiddenAdminMessages");
+const hiddenAdminMessagesCollapseBtn = document.getElementById("hiddenAdminMessagesCollapseBtn");
+const hiddenAdminMessagesClearBtn = document.getElementById("hiddenAdminMessagesClearBtn");
+const hiddenAdminMessageInputEl = document.getElementById("hiddenAdminMessageInput");
+const hiddenAdminMessageTargetInputEl = document.getElementById("hiddenAdminMessageTargetInput");
+const hiddenAdminSendMessageBtn = document.getElementById("hiddenAdminSendMessageBtn");
 const hiddenAdminStatsEl = document.getElementById("hiddenAdminStats");
 const hiddenAdminStatsCollapseBtn = document.getElementById("hiddenAdminStatsCollapseBtn");
 const hiddenAdminHealthEl = document.getElementById("hiddenAdminHealth");
@@ -6332,10 +6459,12 @@ const venmoClaimState = {
   adminStats: null,
   adminHealth: null,
   adminDevices: [],
+  adminOwnerLockEnabled: false,
   adminFeedback: [],
   adminActivity: [],
   adminFraudFlags: [],
-  adminBackups: []
+  adminBackups: [],
+  adminMessages: []
 };
 let venmoAdminUnlocked = false;
 let venmoAdminDeviceToken = "";
@@ -6358,11 +6487,13 @@ let hiddenAdminFeedbackCollapsed = false;
 let hiddenAdminActivityCollapsed = false;
 let hiddenAdminFraudCollapsed = false;
 let hiddenAdminBackupsCollapsed = false;
+let hiddenAdminMessagesCollapsed = false;
 let hiddenAdminClaimsCleared = false;
 let hiddenAdminUsersCleared = false;
 let hiddenAdminDevicesCleared = false;
 let hiddenAdminFeedbackCleared = false;
 let hiddenAdminBackupsCleared = false;
+let hiddenAdminMessagesCleared = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -6823,10 +6954,12 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLock
     venmoClaimState.adminStats = null;
     venmoClaimState.adminHealth = null;
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminOwnerLockEnabled = false;
     venmoClaimState.adminFeedback = [];
     venmoClaimState.adminActivity = [];
     venmoClaimState.adminFraudFlags = [];
     venmoClaimState.adminBackups = [];
+    venmoClaimState.adminMessages = [];
     venmoAdminUnlocked = false;
     renderVenmoAdminClaims();
     renderHiddenAdminUsers();
@@ -6837,6 +6970,7 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLock
     renderHiddenAdminActivity();
     renderHiddenAdminFraudFlags();
     renderHiddenAdminBackups();
+    renderHiddenAdminMessages();
     const handledLoginRequired = handleAdminLoginRequired(error);
     if (!silent && !handledLoginRequired) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
@@ -6964,14 +7098,19 @@ function renderHiddenAdminUsers() {
       const mutedUntil = Number(user.mutedUntil) || 0;
       const isBanned = bannedAt > 0;
       const isMuted = mutedUntil > Date.now();
+      const syncGuardBypassUntil = Number(user.syncGuardBypassUntil) || 0;
+      const isMarkedSafe = syncGuardBypassUntil > Date.now();
       const bannedReason = escapeHtml(user.bannedReason || "");
       const mutedReason = escapeHtml(user.mutedReason || "");
       const playerId = escapeHtml(String(user.playerId || ""));
-      const statusLabel = isBanned
+      const baseStatusLabel = isBanned
         ? `Banned ${formatDateTime(bannedAt)}${bannedReason ? ` (${bannedReason})` : ""}`
         : isMuted
           ? `Muted until ${formatDateTime(mutedUntil)}${mutedReason ? ` (${mutedReason})` : ""}`
           : "Active";
+      const statusLabel = isMarkedSafe
+        ? `${baseStatusLabel} • Marked Safe until ${formatDateTime(syncGuardBypassUntil)}`
+        : baseStatusLabel;
       return `
         <tr>
           <td>${username}</td>
@@ -6984,9 +7123,15 @@ function renderHiddenAdminUsers() {
           <td>${wins}</td>
           <td>${lastSeen}</td>
           <td>
+            <button type="button" data-user-action="message" data-player-id="${playerId}">Message</button>
             <button type="button" data-user-action="set-balance" data-player-id="${playerId}" data-current-balance="${(Number(user.balance) || 0).toFixed(2)}">Set Balance</button>
             <button type="button" data-user-action="reset-progress" data-player-id="${playerId}">Reset Progress</button>
             <button type="button" data-user-action="force-logout" data-player-id="${playerId}">Force Logout</button>
+            ${
+              isMarkedSafe
+                ? `<button type="button" data-user-action="clear-safe" data-player-id="${playerId}">Clear Safe</button>`
+                : `<button type="button" data-user-action="mark-safe" data-player-id="${playerId}">Mark Safe (30m)</button>`
+            }
             ${
               isMuted
                 ? `<button type="button" data-user-action="unmute" data-player-id="${playerId}">Unmute</button>`
@@ -7129,6 +7274,12 @@ function syncHiddenAdminCoreSectionControls() {
   const deviceCount = Array.isArray(venmoClaimState.adminDevices) ? venmoClaimState.adminDevices.length : 0;
   const feedbackCount = Array.isArray(venmoClaimState.adminFeedback) ? venmoClaimState.adminFeedback.length : 0;
   const backupCount = Array.isArray(venmoClaimState.adminBackups) ? venmoClaimState.adminBackups.length : 0;
+  const messageCount = Array.isArray(venmoClaimState.adminMessages) ? venmoClaimState.adminMessages.length : 0;
+  syncHiddenAdminSectionControl(hiddenAdminMessagesCollapseBtn, hiddenAdminMessagesEl, hiddenAdminMessagesCollapsed);
+  syncHiddenAdminClearControl(hiddenAdminMessagesClearBtn, { count: messageCount, cleared: hiddenAdminMessagesCleared });
+  if (hiddenAdminMessageInputEl) hiddenAdminMessageInputEl.disabled = !venmoAdminUnlocked;
+  if (hiddenAdminMessageTargetInputEl) hiddenAdminMessageTargetInputEl.disabled = !venmoAdminUnlocked;
+  if (hiddenAdminSendMessageBtn) hiddenAdminSendMessageBtn.disabled = !venmoAdminUnlocked;
   syncHiddenAdminSectionControl(hiddenAdminClaimsCollapseBtn, venmoAdminClaimsEl, hiddenAdminClaimsCollapsed);
   syncHiddenAdminClearControl(hiddenAdminClaimsClearBtn, { count: claimCount, cleared: hiddenAdminClaimsCleared });
   syncHiddenAdminSectionControl(hiddenAdminStatsCollapseBtn, hiddenAdminStatsEl, hiddenAdminStatsCollapsed);
@@ -7145,6 +7296,16 @@ function syncHiddenAdminCoreSectionControls() {
 
 function setHiddenAdminClaimsCollapsed(collapsed) {
   hiddenAdminClaimsCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminMessagesCollapsed(collapsed) {
+  hiddenAdminMessagesCollapsed = Boolean(collapsed);
+  syncHiddenAdminCoreSectionControls();
+}
+
+function setHiddenAdminMessagesCleared(cleared) {
+  hiddenAdminMessagesCleared = Boolean(cleared);
   syncHiddenAdminCoreSectionControls();
 }
 
@@ -7310,15 +7471,24 @@ function renderHiddenAdminFraudFlags() {
       const severity = String(flag?.severity || "low").toUpperCase();
       const value = Number(flag?.value);
       const renderedValue = Number.isFinite(value) ? (Math.abs(value) >= 1000 ? formatCurrency(value) : value.toFixed(2)) : "—";
+      const playerIdRaw = String(flag?.playerId || "").trim();
+      const escapedPlayerId = escapeHtml(playerIdRaw);
       return `
         <tr>
           <td>${escapeHtml(getAdminEventLabel(flag?.type))}</td>
           <td>${escapeHtml(severity)}</td>
           <td>${escapeHtml(String(flag?.username || "—"))}</td>
-          <td>${escapeHtml(String(flag?.playerId || "—"))}</td>
+          <td>${escapedPlayerId || "—"}</td>
           <td>${escapeHtml(String(renderedValue))}</td>
           <td>${escapeHtml(String(flag?.note || "—"))}</td>
           <td>${escapeHtml(formatDateTime(flag?.createdAt))}</td>
+          <td>
+            ${
+              escapedPlayerId
+                ? `<button type="button" data-fraud-action="mark-safe" data-player-id="${escapedPlayerId}">Mark Safe (30m)</button>`
+                : "—"
+            }
+          </td>
         </tr>
       `;
     })
@@ -7334,6 +7504,7 @@ function renderHiddenAdminFraudFlags() {
           <th>Value</th>
           <th>Reason</th>
           <th>Time</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -7411,7 +7582,12 @@ function renderHiddenAdminDevices() {
     .map((device) => {
       const deviceId = escapeHtml(String(device.id || ""));
       const isActive = device.active !== false && Number(device.revokedAt) <= 0;
-      const status = isActive ? "Active" : `Banned ${formatDateTime(device.revokedAt)}`;
+      const isOwnerLocked = device.ownerLocked === true;
+      const status = isActive
+        ? isOwnerLocked
+          ? "Owner Device (Locked)"
+          : "Active"
+        : `Banned ${formatDateTime(device.revokedAt)}`;
       return `
         <tr>
           <td>${escapeHtml(device.label || "Trusted device")}${device.current ? " (This device)" : ""}</td>
@@ -7419,6 +7595,16 @@ function renderHiddenAdminDevices() {
           <td>${formatDateTime(device.trustedAt)}</td>
           <td>${formatDateTime(device.lastSeenAt)}</td>
           <td>
+            ${
+              isActive && !isOwnerLocked
+                ? `<button type="button" data-device-action="set-owner-lock" data-device-id="${deviceId}">Set Owner Device</button>`
+                : ""
+            }
+            ${
+              isOwnerLocked
+                ? `<button type="button" data-device-action="clear-owner-lock" data-device-id="${deviceId}">Clear Owner Lock</button>`
+                : ""
+            }
             ${
               isActive
                 ? `<button type="button" data-device-action="ban" data-device-id="${deviceId}">Ban</button>`
@@ -7443,6 +7629,11 @@ function renderHiddenAdminDevices() {
       </thead>
       <tbody>${rows}</tbody>
     </table>
+    ${
+      venmoClaimState.adminOwnerLockEnabled
+        ? `<div class="hidden-admin-footnote">Admin panel is locked to the owner device.</div>`
+        : `<div class="hidden-admin-footnote">Owner lock is off. Set one trusted device as owner to restrict admin access to your computer only.</div>`
+    }
   `;
 }
 
@@ -7513,6 +7704,96 @@ function renderHiddenAdminFeedback() {
   `;
 }
 
+function renderHiddenAdminMessages() {
+  if (!hiddenAdminMessagesEl) return;
+  syncHiddenAdminCoreSectionControls();
+  if (!venmoAdminUnlocked) {
+    hiddenAdminMessagesEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
+    return;
+  }
+  if (hiddenAdminMessagesCollapsed) return;
+  if (hiddenAdminMessagesCleared) {
+    hiddenAdminMessagesEl.innerHTML = `<div class="hidden-admin-empty">Admin Messages view cleared.</div>`;
+    return;
+  }
+  const messages = Array.isArray(venmoClaimState.adminMessages) ? venmoClaimState.adminMessages : [];
+  if (!messages.length) {
+    hiddenAdminMessagesEl.innerHTML = `<div class="hidden-admin-empty">No admin popups sent yet.</div>`;
+    return;
+  }
+  const rows = [...messages]
+    .sort((a, b) => Number(b?.createdAt) - Number(a?.createdAt))
+    .map((entry) => {
+      const messageId = escapeHtml(String(entry?.id || ""));
+      const targetPlayerId = String(entry?.targetPlayerId || "");
+      const targetUsername = String(entry?.targetUsername || "");
+      const targetLabel = targetPlayerId
+        ? `${targetUsername || "User"} (${targetPlayerId})`
+        : "Everyone";
+      const statusLabel = entry?.active === false ? "Closed" : "Active";
+      const readCount = Math.max(0, Math.floor(Number(entry?.readCount) || 0));
+      const canClear = entry?.active !== false;
+      return `
+        <tr>
+          <td class="admin-txn-id">${messageId}</td>
+          <td>${escapeHtml(targetLabel)}</td>
+          <td>${escapeHtml(String(entry?.message || ""))}</td>
+          <td>${escapeHtml(String(statusLabel))}</td>
+          <td>${readCount}</td>
+          <td>${escapeHtml(formatDateTime(entry?.createdAt))}</td>
+          <td>
+            ${
+              targetPlayerId
+                ? `<button type="button" data-message-action="prefill-target" data-message-target-id="${escapeHtml(targetPlayerId)}">Target</button>`
+                : ""
+            }
+            ${
+              canClear
+                ? `<button type="button" data-message-action="clear" data-message-id="${messageId}">Clear</button>`
+                : ""
+            }
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+  hiddenAdminMessagesEl.innerHTML = `
+    <table class="hidden-admin-table">
+      <thead>
+        <tr>
+          <th>Message ID</th>
+          <th>Target</th>
+          <th>Message</th>
+          <th>Status</th>
+          <th>Seen</th>
+          <th>Sent</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refreshHiddenAdminMessagesFromServer({ silent = false, allowWhenLocked = false } = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
+  try {
+    const payload = await venmoApiRequest(
+      buildAdminApiUrl("/api/admin/messages?limit=150"),
+      getAdminRequestOptions()
+    );
+    venmoClaimState.adminMessages = Array.isArray(payload.messages) ? payload.messages : [];
+    venmoAdminUnlocked = true;
+    renderHiddenAdminMessages();
+    return true;
+  } catch (error) {
+    venmoClaimState.adminMessages = [];
+    renderHiddenAdminMessages();
+    if (!silent) setHiddenAdminStatus(`Could not load admin messages: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function refreshHiddenAdminUsersFromServer({ silent = false, allowWhenLocked = false } = {}) {
   if (!venmoAdminUnlocked && !allowWhenLocked) return false;
   try {
@@ -7578,11 +7859,13 @@ async function refreshHiddenAdminDevicesFromServer({ silent = false, allowWhenLo
       getAdminRequestOptions()
     );
     venmoClaimState.adminDevices = Array.isArray(payload.devices) ? payload.devices : [];
+    venmoClaimState.adminOwnerLockEnabled = payload?.ownerLockEnabled === true;
     venmoAdminUnlocked = true;
     renderHiddenAdminDevices();
     return true;
   } catch (error) {
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminOwnerLockEnabled = false;
     renderHiddenAdminDevices();
     if (!silent) setHiddenAdminStatus(`Could not load devices: ${error.message}`, true);
     return false;
@@ -7679,6 +7962,7 @@ async function tryAutoUnlockAdminFromTrustedDevice() {
   await refreshHiddenAdminUsersFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminDevicesFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminFeedbackFromServer({ silent: true, allowWhenLocked: true });
+  await refreshHiddenAdminMessagesFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminActivityFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminFraudFlagsFromServer({ silent: true, allowWhenLocked: true });
   await refreshHiddenAdminBackupsFromServer({ silent: true, allowWhenLocked: true });
@@ -7742,6 +8026,57 @@ async function removeAdminDevice(deviceId) {
     return true;
   } catch (error) {
     setHiddenAdminStatus(`Could not remove device: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function setOwnerAdminDeviceLock(deviceId) {
+  if (!venmoAdminUnlocked || !deviceId) return false;
+  const confirmed = window.confirm(
+    "Lock admin panel to this device only? Other computers will lose admin access even with the code."
+  );
+  if (!confirmed) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/devices/${encodeURIComponent(deviceId)}/set-owner-lock`,
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus("Owner device lock enabled.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not set owner lock: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function clearOwnerAdminDeviceLock() {
+  if (!venmoAdminUnlocked) return false;
+  const code = String(venmoAdminCodeInputEl?.value || "").trim();
+  if (!code) {
+    setHiddenAdminStatus("Enter admin code first to clear owner lock.", true);
+    if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.focus();
+    return false;
+  }
+  const confirmed = window.confirm("Clear owner device lock? Admin access will work from other devices again.");
+  if (!confirmed) return false;
+  try {
+    await venmoApiRequest(
+      "/api/admin/devices/clear-owner-lock",
+      getAdminRequestOptions({
+        method: "POST",
+        body: { adminCode: code }
+      })
+    );
+    await refreshHiddenAdminDevicesFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus("Owner device lock cleared.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not clear owner lock: ${error.message}`, true);
     return false;
   }
 }
@@ -7830,6 +8165,48 @@ async function forceLogoutAdminUser(playerId) {
     return true;
   } catch (error) {
     setHiddenAdminStatus(`Could not force logout user: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function markAdminUserSafe(playerId, minutes = 30) {
+  if (!venmoAdminUnlocked || !playerId) return false;
+  const safeMinutes = Math.max(1, Math.min(10080, Math.floor(Number(minutes) || 30)));
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/sync-guard-bypass`,
+      getAdminRequestOptions({
+        method: "POST",
+        body: { minutes: safeMinutes }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
+    setHiddenAdminStatus(`Marked safe for ${safeMinutes} minute${safeMinutes === 1 ? "" : "s"}.`);
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not mark user safe: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function clearAdminUserSafe(playerId) {
+  if (!venmoAdminUnlocked || !playerId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/users/${encodeURIComponent(playerId)}/sync-guard-bypass/clear`,
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
+    setHiddenAdminStatus("Safe override cleared.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not clear safe override: ${error.message}`, true);
     return false;
   }
 }
@@ -7999,6 +8376,7 @@ async function restoreAdminBackup(backupId) {
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminDevicesFromServer({ silent: true });
     await refreshHiddenAdminFeedbackFromServer({ silent: true });
+    await refreshHiddenAdminMessagesFromServer({ silent: true });
     await refreshHiddenAdminActivityFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
     await refreshHiddenAdminBackupsFromServer({ silent: true });
@@ -8031,6 +8409,80 @@ async function removeAdminFeedback(feedbackId) {
   }
 }
 
+async function sendHiddenAdminPopupMessage() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  const messageText = String(hiddenAdminMessageInputEl?.value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!messageText) {
+    setHiddenAdminStatus("Enter a message first.", true);
+    if (hiddenAdminMessageInputEl) hiddenAdminMessageInputEl.focus();
+    return false;
+  }
+  if (messageText.length > 260) {
+    setHiddenAdminStatus("Message must be 260 characters or less.", true);
+    if (hiddenAdminMessageInputEl) hiddenAdminMessageInputEl.focus();
+    return false;
+  }
+  const targetPlayerId = String(hiddenAdminMessageTargetInputEl?.value || "").trim();
+  try {
+    await venmoApiRequest(
+      "/api/admin/messages",
+      getAdminRequestOptions({
+        method: "POST",
+        body: {
+          message: messageText,
+          targetPlayerId: targetPlayerId || ""
+        }
+      })
+    );
+    if (hiddenAdminMessageInputEl) hiddenAdminMessageInputEl.value = "";
+    if (hiddenAdminMessageTargetInputEl) hiddenAdminMessageTargetInputEl.value = "";
+    setHiddenAdminMessagesCleared(false);
+    await refreshHiddenAdminMessagesFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus(targetPlayerId ? "Popup sent to selected player." : "Popup sent to everyone.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not send popup message: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function clearHiddenAdminPopupMessage(messageId) {
+  if (!venmoAdminUnlocked || !messageId) return false;
+  try {
+    await venmoApiRequest(
+      `/api/admin/messages/${encodeURIComponent(messageId)}/clear`,
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    await refreshHiddenAdminMessagesFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus("Popup message cleared.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not clear popup message: ${error.message}`, true);
+    return false;
+  }
+}
+
+function prefillHiddenAdminMessageTarget(playerId = "") {
+  const safePlayerId = String(playerId || "").trim();
+  if (!safePlayerId || !hiddenAdminMessageTargetInputEl) return false;
+  hiddenAdminMessageTargetInputEl.value = safePlayerId;
+  setHiddenAdminMessagesCollapsed(false);
+  setHiddenAdminMessagesCleared(false);
+  renderHiddenAdminMessages();
+  if (hiddenAdminMessageInputEl) hiddenAdminMessageInputEl.focus();
+  setHiddenAdminStatus(`Target set to ${safePlayerId}. Enter message and click Send Popup.`);
+  return true;
+}
+
 function toggleHiddenAdminClaimsViewClear() {
   if (!venmoAdminUnlocked) {
     setHiddenAdminStatus("Unlock admin first.", true);
@@ -8049,6 +8501,27 @@ function toggleHiddenAdminClaimsViewClear() {
   setHiddenAdminClaimsCleared(true);
   renderVenmoAdminClaims();
   setHiddenAdminStatus("Pending Claims view cleared.");
+  return true;
+}
+
+function toggleHiddenAdminMessagesViewClear() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  if (hiddenAdminMessagesCleared) {
+    setHiddenAdminMessagesCleared(false);
+    renderHiddenAdminMessages();
+    setHiddenAdminStatus("Admin Messages view restored.");
+    return true;
+  }
+  if (!Array.isArray(venmoClaimState.adminMessages) || venmoClaimState.adminMessages.length <= 0) {
+    setHiddenAdminStatus("Admin Messages list is already empty.");
+    return true;
+  }
+  setHiddenAdminMessagesCleared(true);
+  renderHiddenAdminMessages();
+  setHiddenAdminStatus("Admin Messages view cleared.");
   return true;
 }
 
@@ -8228,10 +8701,12 @@ async function runFullAdminReset() {
     venmoClaimState.adminStats = null;
     venmoClaimState.adminHealth = null;
     venmoClaimState.adminDevices = [];
+    venmoClaimState.adminOwnerLockEnabled = false;
     venmoClaimState.adminFeedback = [];
     venmoClaimState.adminActivity = [];
     venmoClaimState.adminFraudFlags = [];
     venmoClaimState.adminBackups = [];
+    venmoClaimState.adminMessages = [];
     venmoClaimState.claims = [];
     renderVenmoAdminClaims();
     renderHiddenAdminUsers();
@@ -8239,6 +8714,7 @@ async function runFullAdminReset() {
     renderHiddenAdminHealth();
     renderHiddenAdminDevices();
     renderHiddenAdminFeedback();
+    renderHiddenAdminMessages();
     renderHiddenAdminActivity();
     renderHiddenAdminFraudFlags();
     renderHiddenAdminBackups();
@@ -8247,6 +8723,7 @@ async function runFullAdminReset() {
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminDevicesFromServer({ silent: true });
     await refreshHiddenAdminFeedbackFromServer({ silent: true });
+    await refreshHiddenAdminMessagesFromServer({ silent: true });
     await refreshHiddenAdminActivityFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
     await refreshHiddenAdminBackupsFromServer({ silent: true });
@@ -8295,6 +8772,7 @@ function startHiddenAdminLivePolling() {
     refreshHiddenAdminHealthFromServer({ silent: true });
     refreshHiddenAdminDevicesFromServer({ silent: true });
     refreshHiddenAdminFeedbackFromServer({ silent: true });
+    refreshHiddenAdminMessagesFromServer({ silent: true });
     refreshHiddenAdminActivityFromServer({ silent: true });
     refreshHiddenAdminFraudFlagsFromServer({ silent: true });
     if (hiddenAdminLivePollTick % 15 === 0) {
@@ -8328,6 +8806,7 @@ async function openHiddenAdminPanel() {
   renderHiddenAdminUsers();
   renderHiddenAdminDevices();
   renderHiddenAdminFeedback();
+  renderHiddenAdminMessages();
   renderHiddenAdminActivity();
   renderHiddenAdminFraudFlags();
   renderHiddenAdminBackups();
@@ -8338,6 +8817,7 @@ async function openHiddenAdminPanel() {
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminDevicesFromServer({ silent: true });
     await refreshHiddenAdminFeedbackFromServer({ silent: true });
+    await refreshHiddenAdminMessagesFromServer({ silent: true });
     await refreshHiddenAdminActivityFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
     await refreshHiddenAdminBackupsFromServer({ silent: true });
@@ -8373,6 +8853,30 @@ function initHiddenAdminTrigger() {
   if (hiddenAdminFullResetBtn) {
     hiddenAdminFullResetBtn.addEventListener("click", () => {
       runFullAdminReset();
+    });
+  }
+  if (hiddenAdminMessagesCollapseBtn) {
+    hiddenAdminMessagesCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminMessagesCollapsed(!hiddenAdminMessagesCollapsed);
+      if (!hiddenAdminMessagesCollapsed) renderHiddenAdminMessages();
+    });
+  }
+  if (hiddenAdminMessagesClearBtn) {
+    hiddenAdminMessagesClearBtn.addEventListener("click", () => {
+      toggleHiddenAdminMessagesViewClear();
+    });
+  }
+  if (hiddenAdminSendMessageBtn) {
+    hiddenAdminSendMessageBtn.addEventListener("click", () => {
+      sendHiddenAdminPopupMessage();
+    });
+  }
+  if (hiddenAdminMessageInputEl) {
+    hiddenAdminMessageInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        sendHiddenAdminPopupMessage();
+      }
     });
   }
   if (hiddenAdminClaimsCollapseBtn) {
@@ -8482,6 +8986,9 @@ function initHiddenAdminTrigger() {
         const currentBalance = String(target.getAttribute("data-current-balance") || "");
         setAdminUserBalance(playerId, currentBalance);
       }
+      if (action === "message") prefillHiddenAdminMessageTarget(playerId);
+      if (action === "mark-safe") markAdminUserSafe(playerId, 30);
+      if (action === "clear-safe") clearAdminUserSafe(playerId);
       if (action === "reset-progress") resetAdminUserProgress(playerId);
       if (action === "force-logout") forceLogoutAdminUser(playerId);
       if (action === "mute") muteAdminUser(playerId);
@@ -8532,9 +9039,49 @@ function initHiddenAdminTrigger() {
       if (action === "ban") banAdminDevice(deviceId);
       if (action === "unban") unbanAdminDevice(deviceId);
       if (action === "remove") removeAdminDevice(deviceId);
+      if (action === "set-owner-lock") setOwnerAdminDeviceLock(deviceId);
+      if (action === "clear-owner-lock") clearOwnerAdminDeviceLock();
+    });
+  }
+  if (hiddenAdminMessagesEl) {
+    hiddenAdminMessagesEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("button[data-message-action]")
+        : null;
+      if (!target) return;
+      const action = String(target.getAttribute("data-message-action") || "");
+      if (action === "clear") {
+        const messageId = String(target.getAttribute("data-message-id") || "");
+        if (!messageId) return;
+        clearHiddenAdminPopupMessage(messageId);
+      }
+      if (action === "prefill-target") {
+        const targetId = String(target.getAttribute("data-message-target-id") || "");
+        if (!targetId) return;
+        prefillHiddenAdminMessageTarget(targetId);
+      }
+    });
+  }
+  if (hiddenAdminFraudEl) {
+    hiddenAdminFraudEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("button[data-fraud-action][data-player-id]")
+        : null;
+      if (!target) return;
+      const action = String(target.getAttribute("data-fraud-action") || "");
+      const playerId = String(target.getAttribute("data-player-id") || "");
+      if (!action || !playerId) return;
+      if (action === "mark-safe") {
+        markAdminUserSafe(playerId, 30);
+      }
     });
   }
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && activeAccountMessage) {
+      event.preventDefault();
+      acknowledgeActiveAccountMessage();
+      return;
+    }
     if (event.key !== "Escape" || !hiddenAdminPanelOpen) return;
     closeHiddenAdminPanel();
   });
@@ -8676,6 +9223,7 @@ function initVenmoClaimWorkflow() {
   renderHiddenAdminUsers();
   renderHiddenAdminDevices();
   renderHiddenAdminFeedback();
+  renderHiddenAdminMessages();
   renderHiddenAdminActivity();
   renderHiddenAdminFraudFlags();
   renderHiddenAdminBackups();
@@ -8696,6 +9244,7 @@ function initVenmoClaimWorkflow() {
       refreshHiddenAdminUsersFromServer({ silent: true });
       refreshHiddenAdminDevicesFromServer({ silent: true });
       refreshHiddenAdminFeedbackFromServer({ silent: true });
+      refreshHiddenAdminMessagesFromServer({ silent: true });
       refreshHiddenAdminActivityFromServer({ silent: true });
       refreshHiddenAdminFraudFlagsFromServer({ silent: true });
       refreshHiddenAdminBackupsFromServer({ silent: true });
@@ -8734,6 +9283,7 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
     renderHiddenAdminUsers();
     renderHiddenAdminDevices();
     renderHiddenAdminFeedback();
+    renderHiddenAdminMessages();
     renderHiddenAdminActivity();
     renderHiddenAdminFraudFlags();
     renderHiddenAdminBackups();
@@ -8744,6 +9294,7 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
   await refreshHiddenAdminUsersFromServer({ silent: true });
   await refreshHiddenAdminDevicesFromServer({ silent: true });
   await refreshHiddenAdminFeedbackFromServer({ silent: true });
+  await refreshHiddenAdminMessagesFromServer({ silent: true });
   await refreshHiddenAdminActivityFromServer({ silent: true });
   await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
   await refreshHiddenAdminBackupsFromServer({ silent: true });
@@ -12354,6 +12905,7 @@ refreshPokerSessionMeta();
 initAntiTamperGuards();
 initTradingUsernameBadge();
 bindPersistenceFlushHandlers();
+initAccountMessageOverlay();
 initFirstPlayTutorial();
 initFirstLaunchUsernameSetup();
 initHiddenAdminTrigger();
@@ -12392,7 +12944,7 @@ const HILO_SKIP_PENALTY = 0.04;
 
 function loadHiLo() {
   const c = document.getElementById("casino-container");
-  hiloState.currentCardValue = 2;
+  hiloState.currentCardValue = Math.floor(Math.random() * 13) + 1;
   hiloState.currentProfit = 0;
   hiloState.gameActive = false;
   hiloState.guessLocked = false;
@@ -12610,6 +13162,7 @@ function loadHiLo() {
     hiloState.betAmount = betAmount;
     cash -= betAmount;
     hiloState.currentProfit = betAmount;
+    hiloState.currentCardValue = getRandomCard();
     hiloState.guessLocked = false;
     hiloState.skipRemaining = HILO_SKIP_MAX;
 

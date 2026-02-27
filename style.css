@@ -1183,6 +1183,54 @@ body {
   line-height: 1.45;
 }
 
+.account-message-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 16990;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 10, 15, 0.84);
+  backdrop-filter: blur(3px);
+  padding: 18px;
+}
+
+.account-message-overlay.hidden {
+  display: none;
+}
+
+.account-message-card {
+  width: min(460px, calc(100vw - 34px));
+  border-radius: 14px;
+  border: 1px solid #2e5b79;
+  background: linear-gradient(180deg, #132b3e, #0c1b29);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.58);
+  padding: 18px;
+  text-align: center;
+}
+
+.account-message-card h2 {
+  margin: 0 0 8px;
+  color: #d8edff;
+  font-size: 1.08rem;
+}
+
+.account-message-card p {
+  margin: 0 0 14px;
+  color: #c3dced;
+  font-size: 0.95rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+}
+
+.account-message-card button {
+  border: 1px solid #2f8fd9;
+  background: #134261;
+  color: #e8f7ff;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
 .hidden-admin-panel {
   width: min(980px, calc(100vw - 36px));
   max-height: min(86vh, 780px);
@@ -1261,6 +1309,44 @@ body {
   border-color: #7f2f3c;
   background: #3c1119;
   color: #ffd8df;
+}
+
+.hidden-admin-message-form {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 2fr 1fr auto;
+  margin-bottom: 8px;
+}
+
+.hidden-admin-message-form textarea,
+.hidden-admin-message-form input {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #3f6580;
+  background: #07131d;
+  color: #dff3ff;
+  padding: 8px 9px;
+}
+
+.hidden-admin-message-form textarea {
+  resize: vertical;
+  min-height: 40px;
+  max-height: 120px;
+}
+
+.hidden-admin-message-form button {
+  border: 1px solid #2f8fd9;
+  background: #134261;
+  color: #e8f7ff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .hidden-admin-message-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .hidden-admin-status {

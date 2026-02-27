@@ -30,6 +30,7 @@ const BALANCE_SYNC_BURST_UP = 25_000;
 const BALANCE_SYNC_UP_PER_MIN = 50_000;
 const SHARES_SYNC_BURST_UP = 5_000;
 const SHARES_SYNC_UP_PER_MIN = 10_000;
+const MAX_SYNC_GUARD_BYPASS_MINUTES = 10080;
 
 if (!DATABASE_URL) {
   throw new Error("Missing DATABASE_URL environment variable.");
@@ -74,6 +75,8 @@ const MAX_ADMIN_ACTIVITY_EVENTS = 3000;
 const MAX_SYSTEM_RUNTIME_EVENTS = 6000;
 const MAX_BALANCE_AUDIT_EVENTS = 10000;
 const MAX_ADMIN_BACKUPS = 15;
+const MAX_ADMIN_POPUP_MESSAGES = 3000;
+const MAX_ADMIN_POPUP_MESSAGE_READS = 300000;
 const leaderboardStreamClients = new Set();
 let leaderboardBroadcastTimer = null;
 
@@ -189,6 +192,17 @@ function sanitizeFeedbackMessage(value) {
     .trim();
   if (!normalized) return "";
   return normalized.slice(0, 500);
+}
+
+function sanitizeAdminPopupMessage(value) {
+  const normalized = String(value || "")
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ")
+    .replace(/\u200B/g, "")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+  if (!normalized) return "";
+  return normalized.slice(0, 260);
 }
 
 const PROFANITY_BLOCKLIST = Object.freeze([
@@ -319,6 +333,43 @@ function mapFeedbackRow(row) {
     submittedAt: Number(row.submitted_at) || 0,
     reviewedAt: Number(row.reviewed_at) || 0
   };
+}
+
+function mapAdminPopupMessageRow(row) {
+  return {
+    id: String(row.id || ""),
+    targetPlayerId: String(row.target_player_id || ""),
+    targetUsername: sanitizeUsername(row.target_username) || "",
+    message: sanitizeAdminPopupMessage(row.message),
+    createdBy: sanitizePlayerId(row.created_by),
+    createdAt: Number(row.created_at) || 0,
+    active: row.active !== false,
+    readCount: Number(row.read_count) || 0
+  };
+}
+
+async function fetchUnreadAdminPopupsForPlayer(playerId, { limit = 3 } = {}) {
+  const safePlayerId = sanitizePlayerId(playerId);
+  if (!safePlayerId) return [];
+  const safeLimit = Number.isFinite(Number(limit))
+    ? Math.max(1, Math.min(10, Math.floor(Number(limit))))
+    : 3;
+  const result = await db.query(
+    `
+      SELECT m.id, m.target_player_id, m.target_username, m.message, m.created_by, m.created_at, m.active
+      FROM admin_popup_messages m
+      LEFT JOIN admin_popup_message_reads r
+        ON r.message_id = m.id
+       AND r.player_id = $1
+      WHERE m.active = true
+        AND (m.target_player_id = '' OR m.target_player_id = $1)
+        AND r.message_id IS NULL
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT $2
+    `,
+    [safePlayerId, safeLimit]
+  );
+  return result.rows.map(mapAdminPopupMessageRow);
 }
 
 async function fetchLeaderboardPlayers({ limit = LEADERBOARD_STREAM_LIMIT, playerId = "", username = "" } = {}) {
@@ -474,6 +525,22 @@ async function trimTableById({ tableName, maxRows }) {
   );
 }
 
+async function trimAdminPopupReads(maxRows = MAX_ADMIN_POPUP_MESSAGE_READS) {
+  const safeMax = Math.max(1, Math.floor(Number(maxRows) || 1));
+  await db.query(
+    `
+      DELETE FROM admin_popup_message_reads
+      WHERE (message_id, player_id) IN (
+        SELECT message_id, player_id
+        FROM admin_popup_message_reads
+        ORDER BY read_at DESC, message_id DESC, player_id DESC
+        OFFSET $1
+      )
+    `,
+    [safeMax]
+  );
+}
+
 function recordAdminActivity({
   eventType,
   playerId = "",
@@ -570,6 +637,7 @@ function mapAdminUserRow(row) {
     bannedReason: String(row.banned_reason || ""),
     mutedUntil: Number(row.muted_until) || 0,
     mutedReason: String(row.muted_reason || ""),
+    syncGuardBypassUntil: Number(row.sync_guard_bypass_until) || 0,
     totalClaims: Number(row.total_claims) || 0,
     pendingClaims: Number(row.pending_claims) || 0,
     approvedClaims: Number(row.approved_claims) || 0,
@@ -700,6 +768,7 @@ function mapAdminDeviceRow(row) {
     lastIp: String(row.last_ip || ""),
     lastUserAgent: String(row.last_user_agent || ""),
     revokedAt: Number(row.revoked_at) || 0,
+    ownerLocked: row.owner_lock === true,
     active: Number(row.revoked_at) <= 0
   };
 }
@@ -823,10 +892,32 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
 
     const deviceToken = getAdminDeviceToken(req);
     const tokenHash = deviceToken ? hashAdminDeviceToken(deviceToken) : "";
+    const ownerLockLookup = await db.query(
+      `
+        SELECT token_hash, player_id
+        FROM admin_trusted_devices
+        WHERE owner_lock = true
+          AND revoked_at = 0
+        ORDER BY id DESC
+        LIMIT 1
+      `
+    );
+    const ownerLock = ownerLockLookup.rowCount ? ownerLockLookup.rows[0] : null;
+    const ownerTokenHash = ownerLock ? String(ownerLock.token_hash || "") : "";
+    const ownerPlayerId = ownerLock ? sanitizePlayerId(ownerLock.player_id) : "";
+    const ownerLockEnabled = Boolean(ownerTokenHash);
+
+    if (ownerLockEnabled) {
+      if (!tokenHash || tokenHash !== ownerTokenHash || !ownerPlayerId || ownerPlayerId !== sessionPlayerId) {
+        res.status(403).json({ ok: false, error: "Admin panel is locked to the owner device only." });
+        return null;
+      }
+    }
+
     if (tokenHash) {
       const trustedLookup = await db.query(
         `
-          SELECT id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+          SELECT id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
           FROM admin_trusted_devices
           WHERE token_hash = $1
             AND player_id = $2
@@ -847,9 +938,15 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
           isAdmin: true,
           viaTrustedDevice: true,
           viaCode: false,
+          ownerLockEnabled,
           device: mapAdminDeviceRow(trustedLookup.rows[0])
         };
       }
+    }
+
+    if (ownerLockEnabled) {
+      res.status(403).json({ ok: false, error: "Admin panel is locked to the owner device only." });
+      return null;
     }
 
     if (!codeMatches) {
@@ -867,6 +964,7 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
       isAdmin: true,
       viaTrustedDevice: false,
       viaCode: true,
+      ownerLockEnabled,
       device: null
     };
   } catch (error) {
@@ -961,7 +1059,7 @@ const RATE_LIMIT_RULES = Object.freeze([
   {
     id: "admin-read",
     methods: new Set(["GET"]),
-    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback|activity|health|fraud-flags|backups)$/i,
+    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback|messages|activity|health|fraud-flags|backups)$/i,
     scope: "sessionOrIp",
     max: 360,
     windowMs: 60 * 1000,
@@ -1245,10 +1343,12 @@ app.get("/api/auth/session", async (req, res) => {
       res.status(403).json({ ok: false, authenticated: false, error: "Account is banned." });
       return;
     }
+    const adminPopups = await fetchUnreadAdminPopupsForPlayer(playerId, { limit: 3 });
     res.json({
       ok: true,
       authenticated: true,
-      user: normalizeUserForClient(lookup.rows[0])
+      user: normalizeUserForClient(lookup.rows[0]),
+      adminPopups
     });
   } catch (error) {
     console.error("Failed to read auth session", error);
@@ -1310,7 +1410,9 @@ app.post("/api/auth/register", async (req, res) => {
           beforeBalance: Number(existing.balance) || INITIAL_ACCOUNT_BALANCE,
           afterBalance: Number(updated.rows[0]?.balance ?? existing.balance ?? INITIAL_ACCOUNT_BALANCE)
         });
-        res.json({ ok: true, user: normalizeUserForClient(updated.rows[0] || existing) });
+        const sessionPlayerId = sanitizePlayerId(updated.rows[0]?.player_id || existing.player_id);
+        const adminPopups = await fetchUnreadAdminPopupsForPlayer(sessionPlayerId, { limit: 3 });
+        res.json({ ok: true, user: normalizeUserForClient(updated.rows[0] || existing), adminPopups });
         return;
       }
       res.status(409).json({
@@ -1339,7 +1441,9 @@ app.post("/api/auth/register", async (req, res) => {
       beforeBalance: 0,
       afterBalance: Number(upsert.rows[0]?.balance) || INITIAL_ACCOUNT_BALANCE
     });
-    res.json({ ok: true, user: normalizeUserForClient(upsert.rows[0]) });
+    const sessionPlayerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
+    const adminPopups = await fetchUnreadAdminPopupsForPlayer(sessionPlayerId, { limit: 3 });
+    res.json({ ok: true, user: normalizeUserForClient(upsert.rows[0]), adminPopups });
   } catch (error) {
     if (error?.code === "23505") {
       res.status(409).json({ ok: false, error: "Username already taken." });
@@ -1406,7 +1510,9 @@ app.post("/api/auth/login", async (req, res) => {
         ip: getRequestIp(req)
       }
     });
-    res.json({ ok: true, user: normalizeUserForClient(user) });
+    const sessionPlayerId = sanitizePlayerId(user.player_id);
+    const adminPopups = await fetchUnreadAdminPopupsForPlayer(sessionPlayerId, { limit: 3 });
+    res.json({ ok: true, user: normalizeUserForClient(user), adminPopups });
   } catch (error) {
     console.error("Failed to login", error);
     res.status(500).json({ ok: false, error: "Could not login." });
@@ -1431,6 +1537,50 @@ app.post("/api/auth/logout", (req, res) => {
     res.clearCookie("nows.sid");
     res.json({ ok: true });
   });
+});
+
+app.post("/api/messages/:id/ack", async (req, res) => {
+  try {
+    const playerId = getSessionPlayerId(req);
+    if (!playerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    const messageId = String(req.params?.id || "").trim();
+    if (!/^\d{1,18}$/.test(messageId)) {
+      res.status(400).json({ ok: false, error: "Invalid message id." });
+      return;
+    }
+    const lookup = await db.query(
+      `
+        SELECT id
+        FROM admin_popup_messages
+        WHERE id = $1
+          AND active = true
+          AND (target_player_id = '' OR target_player_id = $2)
+        LIMIT 1
+      `,
+      [messageId, playerId]
+    );
+    if (!lookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Message not found." });
+      return;
+    }
+    await db.query(
+      `
+        INSERT INTO admin_popup_message_reads (message_id, player_id, read_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (message_id, player_id)
+        DO UPDATE SET read_at = EXCLUDED.read_at
+      `,
+      [messageId, playerId, Date.now()]
+    );
+    await trimAdminPopupReads();
+    res.json({ ok: true, ack: { id: String(messageId) } });
+  } catch (error) {
+    console.error("Failed to acknowledge admin popup message", error);
+    res.status(500).json({ ok: false, error: "Could not acknowledge message." });
+  }
 });
 
 app.get("/api/feedback", async (req, res) => {
@@ -1928,7 +2078,7 @@ app.post("/api/users/sync", async (req, res) => {
     }
     const currentLookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, sync_guard_bypass_until
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1979,6 +2129,8 @@ app.post("/api/users/sync", async (req, res) => {
       const currentBalance = Math.round(toNumber(current.balance) * 100) / 100;
       const currentShares = Math.max(0, Math.floor(toNumber(current.shares)));
       const serverBalanceUpdatedAt = Number(current.balance_updated_at) || 0;
+      const syncGuardBypassUntil = Number(current.sync_guard_bypass_until) || 0;
+      const syncGuardBypassed = syncGuardBypassUntil > now;
       if (clientBalanceUpdatedAt > 0 && serverBalanceUpdatedAt > 0 && clientBalanceUpdatedAt < serverBalanceUpdatedAt) {
         res.status(409).json({
           ok: false,
@@ -1992,7 +2144,7 @@ app.post("/api/users/sync", async (req, res) => {
       const allowedBalanceIncrease = getSyncAllowedIncrease(elapsedMs, BALANCE_SYNC_BURST_UP, BALANCE_SYNC_UP_PER_MIN);
       const allowedSharesIncrease = getSyncAllowedIncrease(elapsedMs, SHARES_SYNC_BURST_UP, SHARES_SYNC_UP_PER_MIN);
 
-      if (nextBalance > currentBalance + allowedBalanceIncrease) {
+      if (!syncGuardBypassed && nextBalance > currentBalance + allowedBalanceIncrease) {
         res.status(409).json({
           ok: false,
           error: "Balance update rejected by server guard.",
@@ -2000,7 +2152,7 @@ app.post("/api/users/sync", async (req, res) => {
         });
         return;
       }
-      if (nextShares > currentShares + allowedSharesIncrease) {
+      if (!syncGuardBypassed && nextShares > currentShares + allowedSharesIncrease) {
         res.status(409).json({
           ok: false,
           error: "Share update rejected by server guard.",
@@ -2111,6 +2263,7 @@ app.get("/api/admin/users", async (req, res) => {
           u.banned_reason,
           u.muted_until,
           u.muted_reason,
+          u.sync_guard_bypass_until,
           (u.password_hash IS NOT NULL AND u.password_hash <> '') AS has_password,
           COALESCE(claims.total_claims, 0) AS total_claims,
           COALESCE(claims.pending_claims, 0) AS pending_claims,
@@ -2178,6 +2331,174 @@ app.get("/api/admin/feedback", async (req, res) => {
   } catch (error) {
     console.error("Failed to load admin feedback", error);
     res.status(500).json({ ok: false, error: "Could not load feedback." });
+  }
+});
+
+app.get("/api/admin/messages", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(300, Math.floor(rawLimit))) : 120;
+    const result = await db.query(
+      `
+        SELECT
+          m.id,
+          m.target_player_id,
+          m.target_username,
+          m.message,
+          m.created_by,
+          m.created_at,
+          m.active,
+          COALESCE(COUNT(r.player_id), 0)::int AS read_count
+        FROM admin_popup_messages m
+        LEFT JOIN admin_popup_message_reads r ON r.message_id = m.id
+        GROUP BY m.id
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    res.json({
+      ok: true,
+      messages: result.rows.map(mapAdminPopupMessageRow),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load admin popup messages", error);
+    res.status(500).json({ ok: false, error: "Could not load admin messages." });
+  }
+});
+
+app.post("/api/admin/messages", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const message = sanitizeAdminPopupMessage(req.body?.message);
+    if (!message) {
+      res.status(400).json({ ok: false, error: "Message cannot be empty." });
+      return;
+    }
+    const targetPlayerId = sanitizePlayerId(req.body?.targetPlayerId);
+    let targetUsername = "";
+    if (targetPlayerId) {
+      const targetLookup = await db.query(
+        `
+          SELECT player_id, username
+          FROM users
+          WHERE player_id = $1
+          LIMIT 1
+        `,
+        [targetPlayerId]
+      );
+      if (!targetLookup.rowCount) {
+        res.status(404).json({ ok: false, error: "Target user not found." });
+        return;
+      }
+      targetUsername = sanitizeUsername(targetLookup.rows[0]?.username) || "";
+    }
+    const inserted = await db.query(
+      `
+        INSERT INTO admin_popup_messages (
+          target_player_id,
+          target_username,
+          message,
+          created_by,
+          created_at,
+          active
+        )
+        VALUES ($1, $2, $3, $4, $5, true)
+        RETURNING id, target_player_id, target_username, message, created_by, created_at, active
+      `,
+      [targetPlayerId || "", targetUsername, message, adminAccess.playerId, Date.now()]
+    );
+    await db.query(
+      `
+        DELETE FROM admin_popup_messages
+        WHERE id IN (
+          SELECT id
+          FROM admin_popup_messages
+          ORDER BY created_at DESC, id DESC
+          OFFSET $1
+        )
+      `,
+      [MAX_ADMIN_POPUP_MESSAGES]
+    );
+    await db.query(
+      `
+        DELETE FROM admin_popup_message_reads r
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM admin_popup_messages m
+          WHERE m.id = r.message_id
+        )
+      `
+    );
+    await trimAdminPopupReads();
+    const messageRow = mapAdminPopupMessageRow(inserted.rows[0]);
+    recordAdminActivity({
+      eventType: "popup_message_sent",
+      actorPlayerId: adminAccess.playerId,
+      playerId: targetPlayerId || "",
+      username: targetUsername || "",
+      details: {
+        messageId: messageRow.id,
+        target: targetPlayerId ? "individual" : "broadcast",
+        messagePreview: message.slice(0, 80)
+      }
+    });
+    res.json({
+      ok: true,
+      message: messageRow,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to send admin popup message", error);
+    res.status(500).json({ ok: false, error: "Could not send admin message." });
+  }
+});
+
+app.post("/api/admin/messages/:id/clear", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const messageId = String(req.params?.id || "").trim();
+    if (!/^\d{1,18}$/.test(messageId)) {
+      res.status(400).json({ ok: false, error: "Invalid message id." });
+      return;
+    }
+    const cleared = await db.query(
+      `
+        UPDATE admin_popup_messages
+        SET active = false
+        WHERE id = $1
+        RETURNING id, target_player_id, target_username, message, created_by, created_at, active
+      `,
+      [messageId]
+    );
+    if (!cleared.rowCount) {
+      res.status(404).json({ ok: false, error: "Message not found." });
+      return;
+    }
+    await db.query("DELETE FROM admin_popup_message_reads WHERE message_id = $1", [messageId]);
+    const clearedMessage = mapAdminPopupMessageRow(cleared.rows[0]);
+    recordAdminActivity({
+      eventType: "popup_message_cleared",
+      actorPlayerId: adminAccess.playerId,
+      playerId: clearedMessage.targetPlayerId,
+      username: clearedMessage.targetUsername,
+      details: {
+        messageId: clearedMessage.id
+      }
+    });
+    res.json({
+      ok: true,
+      cleared: clearedMessage,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to clear admin popup message", error);
+    res.status(500).json({ ok: false, error: "Could not clear admin message." });
   }
 });
 
@@ -2476,7 +2797,8 @@ app.post("/api/admin/backups/create", async (req, res) => {
     const usersResult = await client.query(
       `
         SELECT player_id, username, username_key, email, password_hash, email_verified_at, is_admin, balance, shares, avg_cost,
-               savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason
+               savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason,
+               sync_guard_bypass_until
         FROM users
         ORDER BY player_id ASC
       `
@@ -2504,9 +2826,23 @@ app.post("/api/admin/backups/create", async (req, res) => {
     );
     const devicesResult = await client.query(
       `
-        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
         FROM admin_trusted_devices
         ORDER BY id ASC
+      `
+    );
+    const popupMessagesResult = await client.query(
+      `
+        SELECT id, target_player_id, target_username, message, created_by, created_at, active
+        FROM admin_popup_messages
+        ORDER BY id ASC
+      `
+    );
+    const popupReadsResult = await client.query(
+      `
+        SELECT message_id, player_id, read_at
+        FROM admin_popup_message_reads
+        ORDER BY message_id ASC, player_id ASC
       `
     );
     const summary = {
@@ -2514,14 +2850,18 @@ app.post("/api/admin/backups/create", async (req, res) => {
       claims: claimsResult.rowCount,
       liveWins: winsResult.rowCount,
       feedback: feedbackResult.rowCount,
-      trustedDevices: devicesResult.rowCount
+      trustedDevices: devicesResult.rowCount,
+      popupMessages: popupMessagesResult.rowCount,
+      popupReads: popupReadsResult.rowCount
     };
     const data = {
       users: usersResult.rows,
       claims: claimsResult.rows,
       liveWins: winsResult.rows,
       feedback: feedbackResult.rows,
-      trustedDevices: devicesResult.rows
+      trustedDevices: devicesResult.rows,
+      popupMessages: popupMessagesResult.rows,
+      popupReads: popupReadsResult.rows
     };
     const inserted = await client.query(
       `
@@ -2607,6 +2947,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
     const liveWins = Array.isArray(data.liveWins) ? data.liveWins : [];
     const feedback = Array.isArray(data.feedback) ? data.feedback : [];
     const trustedDevices = Array.isArray(data.trustedDevices) ? data.trustedDevices : [];
+    const popupMessages = Array.isArray(data.popupMessages) ? data.popupMessages : [];
+    const popupReads = Array.isArray(data.popupReads) ? data.popupReads : [];
     const adminInBackup = users.some((user) => sanitizePlayerId(user?.player_id) === sanitizePlayerId(adminAccess.playerId));
     if (!adminInBackup) {
       res.status(409).json({
@@ -2627,6 +2969,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
     await client.query("DELETE FROM live_wins");
     await client.query("DELETE FROM feedback_submissions");
     await client.query("DELETE FROM admin_trusted_devices");
+    await client.query("DELETE FROM admin_popup_message_reads");
+    await client.query("DELETE FROM admin_popup_messages");
     await client.query("DELETE FROM users");
 
     for (const user of users) {
@@ -2641,9 +2985,10 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
         `
           INSERT INTO users (
             player_id, username, username_key, email, password_hash, email_verified_at, is_admin, balance, shares, avg_cost,
-            savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason
+            savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, muted_until, muted_reason,
+            sync_guard_bypass_until
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         `,
         [
           safePlayerId,
@@ -2663,7 +3008,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
           Number(user?.banned_at) || 0,
           sanitizeBanReason(user?.banned_reason),
           Number(user?.muted_until) || 0,
-          sanitizeBanReason(user?.muted_reason)
+          sanitizeBanReason(user?.muted_reason),
+          Number(user?.sync_guard_bypass_until) || 0
         ]
       );
     }
@@ -2733,8 +3079,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
     for (const device of trustedDevices) {
       await client.query(
         `
-          INSERT INTO admin_trusted_devices (id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          INSERT INTO admin_trusted_devices (id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         `,
         [
           Number(device?.id) || null,
@@ -2745,8 +3091,44 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
           Number(device?.last_seen_at) || 0,
           String(device?.last_ip || "").slice(0, 128),
           String(device?.last_user_agent || "").slice(0, 255),
-          Number(device?.revoked_at) || 0
+          Number(device?.revoked_at) || 0,
+          device?.owner_lock === true
         ]
+      );
+    }
+
+    for (const popup of popupMessages) {
+      const safeMessage = sanitizeAdminPopupMessage(popup?.message);
+      if (!safeMessage) continue;
+      await client.query(
+        `
+          INSERT INTO admin_popup_messages (id, target_player_id, target_username, message, created_by, created_at, active)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [
+          Number(popup?.id) || null,
+          sanitizePlayerId(popup?.target_player_id) || "",
+          sanitizeUsername(popup?.target_username) || "",
+          safeMessage,
+          sanitizePlayerId(popup?.created_by) || "",
+          Number(popup?.created_at) || 0,
+          popup?.active !== false
+        ]
+      );
+    }
+
+    for (const popupRead of popupReads) {
+      const safePlayerId = sanitizePlayerId(popupRead?.player_id);
+      const safeMessageId = Number(popupRead?.message_id);
+      if (!safePlayerId || !Number.isFinite(safeMessageId) || safeMessageId <= 0) continue;
+      await client.query(
+        `
+          INSERT INTO admin_popup_message_reads (message_id, player_id, read_at)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (message_id, player_id)
+          DO UPDATE SET read_at = EXCLUDED.read_at
+        `,
+        [safeMessageId, safePlayerId, Number(popupRead?.read_at) || 0]
       );
     }
 
@@ -2770,6 +3152,11 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
         SELECT setval(pg_get_serial_sequence('admin_trusted_devices', 'id'), COALESCE((SELECT MAX(id) FROM admin_trusted_devices), 1), true)
       `
     );
+    await client.query(
+      `
+        SELECT setval(pg_get_serial_sequence('admin_popup_messages', 'id'), COALESCE((SELECT MAX(id) FROM admin_popup_messages), 1), true)
+      `
+    );
 
     await client.query(
       `
@@ -2789,7 +3176,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
         users: users.length,
         claims: claims.length,
         liveWins: liveWins.length,
-        feedback: feedback.length
+        feedback: feedback.length,
+        popupMessages: popupMessages.length
       }
     });
     res.json({
@@ -2799,7 +3187,8 @@ app.post("/api/admin/backups/:id/restore", async (req, res) => {
         users: users.length,
         claims: claims.length,
         liveWins: liveWins.length,
-        feedback: feedback.length
+        feedback: feedback.length,
+        popupMessages: popupMessages.length
       },
       trustedDevice: adminAccess.device || null
     });
@@ -2874,8 +3263,8 @@ app.post("/api/admin/device/trust", async (req, res) => {
     const now = Date.now();
     const upsert = await db.query(
       `
-        INSERT INTO admin_trusted_devices (player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at)
-        VALUES ($1, $2, $3, $4, $4, $5, $6, 0)
+        INSERT INTO admin_trusted_devices (player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock)
+        VALUES ($1, $2, $3, $4, $4, $5, $6, 0, false)
         ON CONFLICT (token_hash)
         DO UPDATE SET
           player_id = EXCLUDED.player_id,
@@ -2884,7 +3273,7 @@ app.post("/api/admin/device/trust", async (req, res) => {
           last_ip = EXCLUDED.last_ip,
           last_user_agent = EXCLUDED.last_user_agent,
           revoked_at = 0
-        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent
+        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
       `,
       [adminAccess.playerId, tokenHash, label, now, getRequestIp(req), getRequestUserAgent(req)]
     );
@@ -2910,9 +3299,20 @@ app.get("/api/admin/devices", async (req, res) => {
     if (!adminAccess) return;
     const currentToken = getAdminDeviceToken(req);
     const currentTokenHash = currentToken ? hashAdminDeviceToken(currentToken) : "";
+    const ownerLockLookup = await db.query(
+      `
+        SELECT token_hash
+        FROM admin_trusted_devices
+        WHERE owner_lock = true
+          AND revoked_at = 0
+        ORDER BY id DESC
+        LIMIT 1
+      `
+    );
+    const ownerTokenHash = ownerLockLookup.rowCount ? String(ownerLockLookup.rows[0].token_hash || "") : "";
     const result = await db.query(
       `
-        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
         FROM admin_trusted_devices
         WHERE player_id = $1
           AND token_hash IS NOT NULL
@@ -2923,12 +3323,101 @@ app.get("/api/admin/devices", async (req, res) => {
     );
     const devices = result.rows.map((row) => ({
       ...mapAdminDeviceRow(row),
-      current: Boolean(currentTokenHash && row.token_hash === currentTokenHash)
+      current: Boolean(currentTokenHash && row.token_hash === currentTokenHash),
+      ownerLocked: Boolean(ownerTokenHash && row.token_hash === ownerTokenHash)
     }));
-    res.json({ ok: true, devices });
+    res.json({
+      ok: true,
+      devices,
+      ownerLockEnabled: Boolean(ownerTokenHash)
+    });
   } catch (error) {
     console.error("Failed to load admin devices", error);
     res.status(500).json({ ok: false, error: "Could not load trusted devices." });
+  }
+});
+
+app.post("/api/admin/devices/:id/set-owner-lock", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const deviceId = Number(req.params?.id);
+    if (!Number.isInteger(deviceId) || deviceId <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid device id." });
+      return;
+    }
+    const targetLookup = await db.query(
+      `
+        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
+        FROM admin_trusted_devices
+        WHERE id = $1
+          AND player_id = $2
+          AND revoked_at = 0
+        LIMIT 1
+      `,
+      [deviceId, adminAccess.playerId]
+    );
+    if (!targetLookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Active device not found." });
+      return;
+    }
+    await db.query(
+      `
+        UPDATE admin_trusted_devices
+        SET owner_lock = CASE WHEN id = $1 THEN true ELSE false END
+      `,
+      [deviceId]
+    );
+    const lockedLookup = await db.query(
+      `
+        SELECT id, player_id, token_hash, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
+        FROM admin_trusted_devices
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [deviceId]
+    );
+    recordAdminActivity({
+      eventType: "owner_device_locked",
+      actorPlayerId: adminAccess.playerId,
+      details: { deviceId }
+    });
+    res.json({
+      ok: true,
+      ownerLockEnabled: true,
+      device: lockedLookup.rowCount ? mapAdminDeviceRow(lockedLookup.rows[0]) : mapAdminDeviceRow(targetLookup.rows[0])
+    });
+  } catch (error) {
+    console.error("Failed to set owner device lock", error);
+    res.status(500).json({ ok: false, error: "Could not lock admin to this device." });
+  }
+});
+
+app.post("/api/admin/devices/clear-owner-lock", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const adminCode = normalizeAdminCode(getAdminCode(req));
+    const expectedCode = normalizeAdminCode(ADMIN_CODE);
+    if (!adminCode || adminCode !== expectedCode) {
+      res.status(401).json({ ok: false, error: "Admin code is required to clear owner lock." });
+      return;
+    }
+    await db.query(
+      `
+        UPDATE admin_trusted_devices
+        SET owner_lock = false
+        WHERE owner_lock = true
+      `
+    );
+    recordAdminActivity({
+      eventType: "owner_device_lock_cleared",
+      actorPlayerId: adminAccess.playerId
+    });
+    res.json({ ok: true, ownerLockEnabled: false });
+  } catch (error) {
+    console.error("Failed to clear owner device lock", error);
+    res.status(500).json({ ok: false, error: "Could not clear owner device lock." });
   }
 });
 
@@ -2949,7 +3438,7 @@ app.post("/api/admin/devices/:id/ban", async (req, res) => {
         WHERE id = $2
           AND player_id = $3
           AND revoked_at = 0
-        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
       `,
       [now, deviceId, adminAccess.playerId]
     );
@@ -2990,7 +3479,7 @@ app.post("/api/admin/devices/:id/unban", async (req, res) => {
         WHERE id = $1
           AND player_id = $2
           AND revoked_at > 0
-        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
       `,
       [deviceId, adminAccess.playerId]
     );
@@ -3029,7 +3518,7 @@ app.post("/api/admin/devices/:id/remove", async (req, res) => {
         DELETE FROM admin_trusted_devices
         WHERE id = $1
           AND player_id = $2
-        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at
+        RETURNING id, player_id, label, created_at, last_seen_at, last_ip, last_user_agent, revoked_at, owner_lock
       `,
       [deviceId, adminAccess.playerId]
     );
@@ -3233,6 +3722,94 @@ app.post("/api/admin/users/:playerId/force-logout", async (req, res) => {
   }
 });
 
+app.post("/api/admin/users/:playerId/sync-guard-bypass", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const minutesValue = Number(req.body?.minutes);
+    const minutes = Number.isFinite(minutesValue)
+      ? Math.max(1, Math.min(MAX_SYNC_GUARD_BYPASS_MINUTES, Math.floor(minutesValue)))
+      : 30;
+    const bypassUntil = Date.now() + minutes * 60 * 1000;
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET sync_guard_bypass_until = $1
+        WHERE player_id = $2
+        RETURNING player_id, username, sync_guard_bypass_until
+      `,
+      [bypassUntil, playerId]
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    recordAdminActivity({
+      eventType: "sync_guard_bypass_granted",
+      playerId,
+      username: sanitizeUsername(updated.rows[0]?.username) || "",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        minutes,
+        bypassUntil
+      }
+    });
+    res.json({
+      ok: true,
+      playerId,
+      bypassUntil,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to grant sync guard bypass", error);
+    res.status(500).json({ ok: false, error: "Could not grant guard bypass." });
+  }
+});
+
+app.post("/api/admin/users/:playerId/sync-guard-bypass/clear", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.params?.playerId);
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: "Invalid player id." });
+      return;
+    }
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET sync_guard_bypass_until = 0
+        WHERE player_id = $1
+        RETURNING player_id, username
+      `,
+      [playerId]
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ ok: false, error: "User not found." });
+      return;
+    }
+    recordAdminActivity({
+      eventType: "sync_guard_bypass_cleared",
+      playerId,
+      username: sanitizeUsername(updated.rows[0]?.username) || "",
+      actorPlayerId: adminAccess.playerId
+    });
+    res.json({
+      ok: true,
+      playerId,
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to clear sync guard bypass", error);
+    res.status(500).json({ ok: false, error: "Could not clear guard bypass." });
+  }
+});
+
 app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
   const client = await db.connect();
   try {
@@ -3276,6 +3853,7 @@ app.post("/api/admin/users/:playerId/reset-progress", async (req, res) => {
             avg_cost = 0,
             savings_balance = 0,
             auto_savings_percent = 0,
+            sync_guard_bypass_until = 0,
             balance_updated_at = $3
         WHERE player_id = $1
         RETURNING player_id, username, email, username_key, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
@@ -3551,6 +4129,8 @@ app.post("/api/admin/system/reset", async (req, res) => {
     const feedbackDeleted = await client.query("DELETE FROM feedback_submissions");
     const winsDeleted = await client.query("DELETE FROM live_wins");
     const verificationDeleted = await client.query("DELETE FROM email_verification_codes");
+    const popupReadsDeleted = await client.query("DELETE FROM admin_popup_message_reads");
+    const popupMessagesDeleted = await client.query("DELETE FROM admin_popup_messages");
     const sessionsDeleted = await client.query(
       `
         DELETE FROM user_sessions
@@ -3571,6 +4151,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
         SET is_admin = true,
             banned_at = 0,
             banned_reason = '',
+            sync_guard_bypass_until = 0,
             balance = 1000,
             shares = 0,
             avg_cost = 0,
@@ -3597,6 +4178,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
         `
           UPDATE admin_trusted_devices
           SET revoked_at = 0,
+              owner_lock = true,
               last_seen_at = $2
           WHERE player_id = $1
             AND token_hash = $3
@@ -3613,7 +4195,8 @@ app.post("/api/admin/system/reset", async (req, res) => {
         usersDeleted: usersDeleted.rowCount,
         claimsDeleted: claimsDeleted.rowCount,
         feedbackDeleted: feedbackDeleted.rowCount,
-        liveWinsDeleted: winsDeleted.rowCount
+        liveWinsDeleted: winsDeleted.rowCount,
+        popupMessagesDeleted: popupMessagesDeleted.rowCount
       }
     });
     res.json({
@@ -3623,6 +4206,8 @@ app.post("/api/admin/system/reset", async (req, res) => {
         claimsDeleted: claimsDeleted.rowCount,
         feedbackDeleted: feedbackDeleted.rowCount,
         liveWinsDeleted: winsDeleted.rowCount,
+        popupMessagesDeleted: popupMessagesDeleted.rowCount,
+        popupReadsDeleted: popupReadsDeleted.rowCount,
         pendingVerificationsDeleted: verificationDeleted.rowCount,
         sessionsDeleted: sessionsDeleted.rowCount,
         devicesDeleted: devicesDeleted.rowCount
@@ -3742,7 +4327,8 @@ async function ensureSchema() {
       banned_at BIGINT NOT NULL DEFAULT 0,
       banned_reason TEXT NOT NULL DEFAULT '',
       muted_until BIGINT NOT NULL DEFAULT 0,
-      muted_reason TEXT NOT NULL DEFAULT ''
+      muted_reason TEXT NOT NULL DEFAULT '',
+      sync_guard_bypass_until BIGINT NOT NULL DEFAULT 0
     )
   `);
   await db.query(`
@@ -3807,6 +4393,10 @@ async function ensureSchema() {
   `);
   await db.query(`
     ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS sync_guard_bypass_until BIGINT NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
     ADD COLUMN IF NOT EXISTS is_admin BOOLEAN
   `);
   await db.query(`
@@ -3822,6 +4412,7 @@ async function ensureSchema() {
         banned_reason = COALESCE(banned_reason, ''),
         muted_until = COALESCE(muted_until, 0),
         muted_reason = COALESCE(muted_reason, ''),
+        sync_guard_bypass_until = COALESCE(sync_guard_bypass_until, 0),
         is_admin = COALESCE(is_admin, false)
     WHERE username_key IS NULL OR username_key = ''
        OR email_verified_at IS NULL
@@ -3834,7 +4425,16 @@ async function ensureSchema() {
        OR banned_reason IS NULL
        OR muted_until IS NULL
        OR muted_reason IS NULL
+       OR sync_guard_bypass_until IS NULL
        OR is_admin IS NULL
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ALTER COLUMN sync_guard_bypass_until SET DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ALTER COLUMN sync_guard_bypass_until SET NOT NULL
   `);
   await db.query(`
     ALTER TABLE users
@@ -3938,7 +4538,8 @@ async function ensureSchema() {
       last_seen_at BIGINT NOT NULL DEFAULT 0,
       last_ip TEXT NOT NULL DEFAULT '',
       last_user_agent TEXT NOT NULL DEFAULT '',
-      revoked_at BIGINT NOT NULL DEFAULT 0
+      revoked_at BIGINT NOT NULL DEFAULT 0,
+      owner_lock BOOLEAN NOT NULL DEFAULT false
     )
   `);
   await db.query(`
@@ -3974,6 +4575,10 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS revoked_at BIGINT
   `);
   await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ADD COLUMN IF NOT EXISTS owner_lock BOOLEAN NOT NULL DEFAULT false
+  `);
+  await db.query(`
     UPDATE admin_trusted_devices
     SET player_id = COALESCE(player_id, ''),
         label = COALESCE(NULLIF(label, ''), 'Trusted device'),
@@ -3981,7 +4586,8 @@ async function ensureSchema() {
         last_seen_at = COALESCE(last_seen_at, 0),
         last_ip = COALESCE(last_ip, ''),
         last_user_agent = COALESCE(last_user_agent, ''),
-        revoked_at = COALESCE(revoked_at, 0)
+        revoked_at = COALESCE(revoked_at, 0),
+        owner_lock = COALESCE(owner_lock, false)
   `);
   await db.query(`
     ALTER TABLE admin_trusted_devices
@@ -3992,9 +4598,23 @@ async function ensureSchema() {
     ALTER COLUMN player_id SET NOT NULL
   `);
   await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ALTER COLUMN owner_lock SET DEFAULT false
+  `);
+  await db.query(`
+    ALTER TABLE admin_trusted_devices
+    ALTER COLUMN owner_lock SET NOT NULL
+  `);
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS admin_trusted_devices_token_hash_idx
     ON admin_trusted_devices (token_hash)
     WHERE token_hash IS NOT NULL AND token_hash <> ''
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_trusted_devices_owner_lock_unique_idx
+    ON admin_trusted_devices ((owner_lock))
+    WHERE owner_lock = true
+      AND revoked_at = 0
   `);
   await db.query(`
     CREATE INDEX IF NOT EXISTS admin_trusted_devices_player_id_idx
@@ -4279,6 +4899,154 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS admin_backups_created_idx
     ON admin_backups (created_at DESC, id DESC)
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_popup_messages (
+      id BIGSERIAL PRIMARY KEY,
+      target_player_id TEXT NOT NULL DEFAULT '',
+      target_username TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT true
+    )
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS target_player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS target_username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS message TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS created_by TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS created_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ADD COLUMN IF NOT EXISTS active BOOLEAN
+  `);
+  await db.query(`
+    UPDATE admin_popup_messages
+    SET target_player_id = COALESCE(target_player_id, ''),
+        target_username = COALESCE(target_username, ''),
+        message = COALESCE(message, ''),
+        created_by = COALESCE(created_by, ''),
+        created_at = COALESCE(created_at, 0),
+        active = COALESCE(active, true)
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN target_player_id SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN target_player_id SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN target_username SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN target_username SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN message SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN message SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN created_by SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN created_by SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN created_at SET DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN created_at SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN active SET DEFAULT true
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_messages
+    ALTER COLUMN active SET NOT NULL
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_popup_messages_active_created_idx
+    ON admin_popup_messages (active, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_popup_messages_target_active_created_idx
+    ON admin_popup_messages (target_player_id, active, created_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_popup_message_reads (
+      message_id BIGINT NOT NULL,
+      player_id TEXT NOT NULL,
+      read_at BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (message_id, player_id)
+    )
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_message_reads
+    ADD COLUMN IF NOT EXISTS message_id BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_message_reads
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE admin_popup_message_reads
+    ADD COLUMN IF NOT EXISTS read_at BIGINT
+  `);
+  await db.query(`
+    DELETE FROM admin_popup_message_reads
+    WHERE message_id IS NULL
+       OR player_id IS NULL
+       OR player_id = ''
+  `);
+  await db.query(`
+    UPDATE admin_popup_message_reads
+    SET read_at = COALESCE(read_at, 0)
+    WHERE read_at IS NULL
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_popup_message_reads_player_read_idx
+    ON admin_popup_message_reads (player_id, read_at DESC, message_id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_popup_message_reads_message_idx
+    ON admin_popup_message_reads (message_id, player_id)
+  `);
+  await db.query(`
+    DELETE FROM admin_popup_message_reads r
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM admin_popup_messages m
+      WHERE m.id = r.message_id
+    )
+  `);
+  await trimAdminPopupReads();
 }
 
 async function startServer() {
