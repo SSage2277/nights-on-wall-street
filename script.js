@@ -17752,8 +17752,7 @@ function loadDragonTower() {
   function generateTower() {
     towerData = [];
     const rigPenalty = shouldRigHighBet(betAmount, 1) ? 1 : 0;
-    const spamRigPenalty = shouldRigQuickCashoutAbuse("dragontower", betAmount, 1.05) ? 1 : 0;
-    const safeCount = Math.max(1, DIFF[difficulty].safe - rigPenalty - spamRigPenalty);
+    const safeCount = Math.max(1, DIFF[difficulty].safe - rigPenalty);
 
     for (let rowIndex = 0; rowIndex < ROWS; rowIndex++) {
       const row = Array(TILES).fill(false);
@@ -17769,6 +17768,23 @@ function loadDragonTower() {
 
       towerData.push(row);
     }
+  }
+
+  function maybeRigDragonPick(rowIndex, colIndex) {
+    if (currentRow >= QUICK_CASHOUT_STEP_LIMIT) return;
+    if (!shouldRigQuickCashoutAbuse("dragontower", betAmount, 1.05)) return;
+    const row = towerData[rowIndex];
+    if (!Array.isArray(row) || !row[colIndex]) return;
+
+    const badCols = [];
+    for (let i = 0; i < row.length; i += 1) {
+      if (!row[i]) badCols.push(i);
+    }
+    if (badCols.length === 0) return;
+
+    const swapCol = badCols[Math.floor(Math.random() * badCols.length)];
+    row[swapCol] = true;
+    row[colIndex] = false;
   }
 
   function resetBoardVisuals() {
@@ -17928,6 +17944,7 @@ function loadDragonTower() {
   function clickTile(rowIndex, colIndex) {
     if (destroyed || !gameActive || rowIndex !== currentRow) return;
     roundPickCount += 1;
+    maybeRigDragonPick(rowIndex, colIndex);
 
     const slot = rowElements[rowIndex]?.children?.[colIndex];
     if (slot) {
@@ -21817,6 +21834,29 @@ function loadMines() {
     }
   }
 
+  function rigMinesPickWithSwap(index) {
+    const selectedTile = state.board[index];
+    if (!selectedTile || selectedTile.isMine) return false;
+
+    const swapCandidates = [];
+    state.board.forEach((tile, tileIndex) => {
+      if (!tile || tileIndex === index || !tile.isMine) return;
+      if (!tile.revealed) swapCandidates.push(tileIndex);
+    });
+    if (swapCandidates.length === 0) {
+      state.board.forEach((tile, tileIndex) => {
+        if (!tile || tileIndex === index || !tile.isMine) return;
+        swapCandidates.push(tileIndex);
+      });
+    }
+    if (swapCandidates.length === 0) return false;
+
+    const swapIndex = swapCandidates[Math.floor(Math.random() * swapCandidates.length)];
+    state.board[swapIndex].isMine = false;
+    selectedTile.isMine = true;
+    return true;
+  }
+
   function revealAllMines(triggeredIndex = -1) {
     state.board.forEach((tile, index) => {
       if (tile.isMine) {
@@ -21922,7 +21962,7 @@ function loadMines() {
       (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
       (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
     ) {
-      state.board[pick].isMine = true;
+      rigMinesPickWithSwap(pick);
     }
     revealTile(pick);
     const tileData = state.board[pick];
@@ -22055,7 +22095,7 @@ function loadMines() {
       (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
       (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
     ) {
-      tileData.isMine = true;
+      rigMinesPickWithSwap(index);
     }
 
     revealTile(index);
@@ -23321,9 +23361,10 @@ function loadCrossyRoad() {
     if (state.bet > HIGH_BET_RIG_THRESHOLD) {
       chance += getHighBetRigChance(state.bet, 0.45);
     }
-    const quickCashoutRig = getQuickCashoutRigChance("crossyroad", state.bet, 1.08);
-    if (quickCashoutRig > 0 && multiplier <= 1.35) {
-      chance += quickCashoutRig * 0.55;
+    const quickCashoutRig = getQuickCashoutRigChance("crossyroad", state.bet, 0.72);
+    const canApplyQuickRig = quickCashoutRig >= 0.28 && multiplier <= 1.2;
+    if (canApplyQuickRig) {
+      chance += Math.min(0.06, quickCashoutRig * 0.12);
     }
 
     return Math.min(0.995, chance);
