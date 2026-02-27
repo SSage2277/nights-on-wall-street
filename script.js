@@ -158,7 +158,10 @@ const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
 ]);
 
 const GAME_SOUND_ASSETS = Object.freeze({
+  car_screech: "Sound Effects/car_screech.mp3",
   card_deal: "Sound Effects/card_deal.mp3",
+  chicken: "Sound Effects/chicken.mp3",
+  chicken_dead: "Sound Effects/chicken_dead.mp3",
   click: "Sound Effects/click.mp3",
   horse_start: "Sound Effects/horse_start.mp3",
   loss: "Sound Effects/loss.mp3",
@@ -171,7 +174,10 @@ const GAME_SOUND_ASSETS = Object.freeze({
 });
 
 const GAME_SOUND_DEFAULTS = Object.freeze({
+  car_screech: { volume: 0.62, allowOverlap: false, restart: true, throttleMs: 180 },
   card_deal: { volume: 0.6, allowOverlap: true, throttleMs: 50 },
+  chicken: { volume: 0.62, allowOverlap: false, restart: true, throttleMs: 90 },
+  chicken_dead: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 220 },
   click: { volume: 0.45, allowOverlap: false, restart: true, throttleMs: 60 },
   horse_start: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 240 },
   loss: { volume: 0.66, allowOverlap: true, throttleMs: 150 },
@@ -14618,6 +14624,16 @@ function loadCasinoPlinkoNeon() {
   let autoInterval = null;
   let animationFrame = 0;
 
+  function getActiveBallCount() {
+    return balls.reduce((count, ball) => count + (ball.done ? 0 : 1), 0);
+  }
+
+  function updatePlinkoControlLocks() {
+    const locked = getActiveBallCount() > 0 || Boolean(autoInterval);
+    if (rowCountSelect) rowCountSelect.disabled = locked;
+    if (difficultySelect) difficultySelect.disabled = locked;
+  }
+
   const CUSTOM_WEIGHTS = {
     8: [0.39, 3.13, 10.94, 21.88, 27.34, 21.88, 10.94, 3.13, 0.39],
     10: [0.098, 0.977, 4.395, 11.72, 20.51, 24.61, 20.51, 11.72, 4.395, 0.977, 0.098],
@@ -14951,7 +14967,7 @@ function loadCasinoPlinkoNeon() {
   }
 
   function triggerDrop() {
-    const activeBalls = balls.reduce((count, ball) => count + (ball.done ? 0 : 1), 0);
+    const activeBalls = getActiveBallCount();
     if (activeBalls <= 0 && !ensureCasinoBettingAllowedNow()) {
       stopAuto();
       return;
@@ -14978,6 +14994,7 @@ function loadCasinoPlinkoNeon() {
 
     const targetSlot = getResultBasedOnWeights();
     balls.push(new Ball(targetSlot, bet));
+    updatePlinkoControlLocks();
   }
 
   function startAuto() {
@@ -14986,6 +15003,7 @@ function loadCasinoPlinkoNeon() {
     const delay = baseDelay;
     triggerDrop();
     autoInterval = window.setInterval(triggerDrop, delay);
+    updatePlinkoControlLocks();
     if (autoBtn) {
       autoBtn.textContent = "STOP";
       autoBtn.classList.add("running");
@@ -14995,6 +15013,7 @@ function loadCasinoPlinkoNeon() {
   function stopAuto() {
     if (autoInterval) clearInterval(autoInterval);
     autoInterval = null;
+    updatePlinkoControlLocks();
     if (autoBtn) {
       autoBtn.textContent = "AUTO";
       autoBtn.classList.remove("running");
@@ -15020,6 +15039,7 @@ function loadCasinoPlinkoNeon() {
       ball.draw();
     });
     balls = balls.filter((ball) => !ball.done);
+    updatePlinkoControlLocks();
 
     animationFrame = requestAnimationFrame(animate);
   }
@@ -15033,15 +15053,24 @@ function loadCasinoPlinkoNeon() {
     if (autoInterval) startAuto();
   });
   bind(rowCountSelect, "change", (event) => {
+    if (rowCountSelect?.disabled) {
+      event.target.value = String(rows);
+      return;
+    }
     rows = Number.parseInt(event.target.value, 10);
     initBoard();
   });
   bind(difficultySelect, "change", (event) => {
+    if (difficultySelect?.disabled) {
+      event.target.value = difficulty;
+      return;
+    }
     difficulty = event.target.value;
     initBoard();
   });
 
   initBoard();
+  updatePlinkoControlLocks();
   animate();
 
   activeCasinoCleanup = () => {
@@ -22927,6 +22956,7 @@ function loadCrossyRoad() {
     attack.impactTime = 0;
     attack.y = attack.dir > 0 ? -geometry.rowHeight * 1.2 : geometry.height + geometry.rowHeight * 1.2;
     state.crashLane = lane;
+    playGameSound("car_screech", { restart: true, allowOverlap: false });
     setStatus("Car incoming!");
   }
 
@@ -23002,6 +23032,7 @@ function loadCrossyRoad() {
         state.crashFlash = 0.34;
         state.chickenSquished = true;
         state.chickenSquishTime = 0.28;
+        playGameSound("chicken_dead", { restart: true, allowOverlap: false });
         triggerDeathEffects();
       }
       return;
@@ -23027,6 +23058,7 @@ function loadCrossyRoad() {
     if (threat.type === "car") {
       chicken.lane = targetLane;
       chicken.hopT = 0.12;
+      playGameSound("chicken", { restart: true, allowOverlap: false });
       state.laneReached = Math.max(0, chicken.lane + 1);
       state.currentMultiplier = getMultiplierForCrossedLanes(state.laneReached);
       state.cameraTargetLane = clamp(chicken.lane - 1, 0, laneCount - visibleLaneCount);
@@ -23039,6 +23071,7 @@ function loadCrossyRoad() {
 
     chicken.lane = targetLane;
     chicken.hopT = 0.18;
+    playGameSound("chicken", { restart: true, allowOverlap: false });
     state.laneReached = Math.max(0, chicken.lane + 1);
     state.currentMultiplier = getMultiplierForCrossedLanes(state.laneReached);
     state.cameraTargetLane = clamp(chicken.lane - 1, 0, laneCount - visibleLaneCount);
