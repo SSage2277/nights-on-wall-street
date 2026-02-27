@@ -10753,6 +10753,7 @@ function loadSlots() {
     if (!ensureCasinoBettingAllowedNow()) return;
 
     const session = spinSession;
+    playGameSound("slots_spin", { restart: true, allowOverlap: false });
     const totalBet = getTotalBet();
     const isFreeSpin = state.freeSpins > 0;
     if (state.mode === "auto" && state.autoRunning && !isFreeSpin) {
@@ -10773,7 +10774,6 @@ function loadSlots() {
     }
 
     clearRoundEffects();
-    playGameSound("slots_spin", { restart: true, allowOverlap: false });
 
     if (isFreeSpin) {
       state.freeSpins = Math.max(0, state.freeSpins - 1);
@@ -10971,6 +10971,13 @@ function loadSlots() {
       renderBackgroundPaylines();
       syncInputsFromState();
       renderUI();
+    });
+
+    ui.betBtn.addEventListener("pointerdown", () => {
+      if (destroyed) return;
+      if (state.phase === "spinning" || state.phase === "evaluating") return;
+      if (state.mode === "auto" && state.autoRunning) return;
+      playGameSound("slots_spin", { restart: true, allowOverlap: false });
     });
 
     ui.betBtn.addEventListener("click", () => {
@@ -14911,7 +14918,6 @@ function loadCasinoPlinkoNeon() {
     const multiplier = MULTIPLIERS[slot];
     const win = roundCurrency(bet * multiplier);
     const profit = roundCurrency(win - bet);
-    if (profit < 0) playGameSound("loss");
     balance = roundCurrency(balance + win);
     syncGlobalCash();
     if (profit > 0.009) {
@@ -16186,7 +16192,6 @@ function resolveWin(slot, bet) {
 
   const win = bet * multiplier;
   const profit = roundCurrency(win - bet);
-  if (profit < 0) playGameSound("loss");
   cash += win;
   if (profit > 0.009) {
     maybeAutoSaveFromCasinoWin({ amount: profit, multiplier, source: "plinko" });
@@ -18284,9 +18289,9 @@ function loadSlide() {
     if (destroyed || isSpinning || !track || !trackViewport || !betBtn || !betInput) return false;
     if (!ensureCasinoBettingAllowedNow()) return false;
     const fromAuto = Boolean(options.fromAuto);
+    playGameSound("slide_spin", { restart: true, allowOverlap: false });
     const betAmount = validateBetAmount(fromAuto);
     if (betAmount == null) return false;
-    playGameSound("slide_spin", { restart: true, allowOverlap: false });
 
     roundsPlayed += 1;
     updateBalance(-betAmount);
@@ -18351,6 +18356,10 @@ function loadSlide() {
   }
 
   if (betBtn) {
+    betBtn.addEventListener("pointerdown", () => {
+      if (destroyed || isSpinning) return;
+      playGameSound("slide_spin", { restart: true, allowOverlap: false });
+    });
     betBtn.addEventListener("click", startGame);
   }
   if (autoBtn) {
@@ -24553,6 +24562,7 @@ function createCasinoRouletteInstance(rootEl, options = {}) {
     if (!ensureCasinoBettingAllowedNow()) return;
     const totalBet = getTotalBet();
     if (totalBet <= 0 || totalBet > state.balance) return;
+    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
     state.isSpinning = true;
     state.lastBets = new Map(state.placedBets);
     clearResultVisuals();
@@ -24561,7 +24571,6 @@ function createCasinoRouletteInstance(rootEl, options = {}) {
     syncBalance();
     updateHud();
     setStatus("Spinning...");
-    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
 
     let winningNumber = Math.floor(Math.random() * 37);
     if (typeof shouldRigHighBet === "function" && shouldRigHighBet(totalBet, 1.2)) {
@@ -24695,6 +24704,12 @@ function createCasinoRouletteInstance(rootEl, options = {}) {
         return;
       }
       await spinRound();
+    }, { signal });
+
+    spinBtn?.addEventListener("pointerdown", () => {
+      if (state.isSpinning) return;
+      if (state.mode === "auto" && state.autoRunning) return;
+      playGameSound("roulette_spin", { restart: true, allowOverlap: false });
     }, { signal });
 
     let resizeTimer = null;
@@ -25132,10 +25147,10 @@ function loadRoulette() {
     if (!ensureCasinoBettingAllowedNow()) return;
     const totalBet = getTotalBet();
     if (totalBet === 0) return;
+    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
 
     state.lastRoundBets = { ...state.bets };
     state.spinning = true;
-    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
     ui.spinBtn.disabled = true;
     ui.spinBtn.textContent = "SPINNING";
     ui.spinBtn.classList.add("spinning");
@@ -25188,6 +25203,11 @@ function loadRoulette() {
     updateBoardUI();
     ui.clearBtn.addEventListener("click", clearBets);
     ui.rebetBtn.addEventListener("click", rebet);
+    ui.spinBtn.addEventListener("pointerdown", () => {
+      if (destroyed || state.spinning) return;
+      if (getTotalBet() === 0) return;
+      playGameSound("roulette_spin", { restart: true, allowOverlap: false });
+    });
     ui.spinBtn.addEventListener("click", spin);
     window.addEventListener("resize", onResize);
   }
