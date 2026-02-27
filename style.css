@@ -17632,3 +17632,241 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
     border-radius: 17px;
   }
 }
+
+/* ============================
+   CASINO GAME FIT (PHONE WEB)
+   ============================ */
+@media (max-width: 980px) {
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #game-exit-bar {
+    height: 50px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #exitGameBtn {
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #game-exit-bar .game-title {
+    font-size: 0.82rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #game-exit-bar .game-cash {
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container {
+    padding: 58px 8px 10px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed {
+    padding: 58px 0 10px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .crypto-slot-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .poker-wrapper,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .casino-poker-classic,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .dice-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .slide-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > #casino-horserace-screen,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .diamond-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .mines-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .roulette-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .keno-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .blackjack-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .plinko-casino,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .dragon-root,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .crossy-root {
+    min-height: calc(100dvh - 58px);
+    height: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slots-fullbleed .crypto-slot-root .app-shell {
+    grid-template-columns: 1fr;
+    min-height: calc(100dvh - 58px);
+    height: auto;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slots-fullbleed .crypto-slot-root .left-panel {
+    order: 2;
+    max-height: none;
+    border-top: 1px solid #274256;
+    border-right: 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slots-fullbleed .crypto-slot-root .right-panel {
+    order: 1;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.blackjack-fullbleed .blackjack-root .app {
+    min-height: calc(100dvh - 58px);
+    height: auto;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.blackjack-fullbleed .blackjack-root .sidebar,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.blackjack-fullbleed .blackjack-root .main {
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.poker-fullbleed .poker-wrapper {
+    padding: 8px;
+    min-height: calc(100dvh - 58px);
+    height: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.poker-fullbleed #poker-table {
+    width: 100%;
+    height: min(66dvh, 460px);
+    border-radius: 50% / 34%;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.poker-fullbleed #poker-controls {
+    position: static;
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slide-fullbleed .slide-root {
+    min-height: calc(100dvh - 58px);
+    height: auto;
+    flex-direction: column;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slide-fullbleed .slide-root .sidebar {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid #2f4553;
+    padding: 10px;
+    gap: 10px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slide-fullbleed .slide-root .top-bar {
+    height: auto;
+    min-height: 50px;
+    padding: 8px 10px;
+    flex-wrap: wrap;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slide-fullbleed .slide-root .track-viewport {
+    height: 174px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.keno-fullbleed .keno-root .app-shell {
+    grid-template-columns: 1fr;
+    min-height: calc(100dvh - 58px);
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.keno-fullbleed .keno-root .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #2e465b;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.roulette-fullbleed .roulette-root .app-shell {
+    grid-template-columns: 1fr;
+    min-height: calc(100dvh - 58px);
+    height: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.roulette-fullbleed .roulette-root .left-panel,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.roulette-fullbleed .roulette-root .history-panel {
+    max-height: none;
+    border-right: 0;
+    border-left: 0;
+    border-top: 1px solid #20415b;
+    border-bottom: 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.roulette-fullbleed .roulette-root .table-stage {
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .app {
+    grid-template-columns: 1fr;
+    min-height: calc(100dvh - 58px);
+    height: auto;
+    gap: 10px;
+    padding: 8px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .side-panel {
+    order: 2;
+    width: 100%;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .board-area {
+    order: 1;
+    padding: 10px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .tower {
+    width: min(100%, 460px);
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .crossy-root .road-shell {
+    min-height: calc(100dvh - 58px);
+    height: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .crossy-root .stage-card {
+    height: min(54dvh, 440px);
+    min-height: 220px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .plinko-casino .app-layout {
+    min-height: calc(100dvh - 58px);
+    height: auto;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .plinko-casino .history-column {
+    width: 100%;
+    max-height: 160px;
+    height: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-roulette-classic-fullbleed > #casino-roulette-screen {
+    overflow: auto;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-roulette-classic-fullbleed .casino-roulette-root .table-stage {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.poker-classic-fullbleed .casino-poker-classic #poker-table,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.poker-classic-fullbleed #poker-table {
+    transform: translateY(48px) scale(0.62) !important;
+    transform-origin: center top !important;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .slot {
+    width: 60px;
+    height: 60px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .tile {
+    width: 38px;
+    height: 50px;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .dragon-root .tile.fail {
+    width: 48px;
+    height: 48px;
+  }
+}
