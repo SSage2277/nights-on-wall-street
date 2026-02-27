@@ -54,9 +54,6 @@ const PHONE_EMBED_GAME_TITLES = {
 const HIGH_BET_RIG_THRESHOLD = 2000;
 const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
-const QUICK_CASHOUT_STEP_LIMIT = 3;
-const QUICK_CASHOUT_WINDOW_MS = 10 * 60 * 1000;
-const QUICK_CASHOUT_RIG_MIN_CHAIN = 3;
 const CURRENCY_SYMBOL = "S$";
 const USERNAME_STORAGE_KEY = "nows_username_v1";
 const USERNAME_STORAGE_FALLBACK_KEYS = Object.freeze([
@@ -119,7 +116,6 @@ let antiTamperClearStreak = 0;
 let antiTamperOverlayEl = null;
 let antiTamperPresentationReady = false;
 let antiTamperScanArmedUntil = 0;
-const quickCashoutSpamByGame = new Map();
 const ANTI_TAMPER_ARM_MS = 45000;
 const VIP_COST = 5000;
 const VIP_WEEKLY_BONUS = 100;
@@ -333,84 +329,6 @@ function getHighBetRigChance(betAmount, intensity = 1) {
 
 function shouldRigHighBet(betAmount, intensity = 1) {
   return Math.random() < getHighBetRigChance(betAmount, intensity);
-}
-
-function normalizeQuickCashoutGameKey(gameKey) {
-  return String(gameKey || "")
-    .trim()
-    .toLowerCase();
-}
-
-function pruneQuickCashoutSpamState(state, nowMs = Date.now()) {
-  if (!state || !Array.isArray(state.cashouts)) return;
-  state.cashouts = state.cashouts.filter((timestamp) => nowMs - timestamp <= QUICK_CASHOUT_WINDOW_MS);
-}
-
-function registerQuickCashoutRound(gameKey, { outcome = "", steps = 0, durationMs = 0 } = {}) {
-  const key = normalizeQuickCashoutGameKey(gameKey);
-  if (!key) return;
-  const nowMs = Date.now();
-  let state = quickCashoutSpamByGame.get(key);
-  if (!state) {
-    state = { cashouts: [], score: 0 };
-    quickCashoutSpamByGame.set(key, state);
-  }
-  pruneQuickCashoutSpamState(state, nowMs);
-
-  const normalizedOutcome = String(outcome || "").trim().toLowerCase();
-  const moveCount = Math.max(0, Math.floor(Number(steps) || 0));
-  const elapsedMs = Math.max(0, Number(durationMs) || 0);
-  const isShortCashout =
-    normalizedOutcome === "cashout" &&
-    moveCount > 0 &&
-    moveCount <= QUICK_CASHOUT_STEP_LIMIT &&
-    (elapsedMs <= 0 || elapsedMs <= 90 * 1000);
-
-  if (isShortCashout) {
-    state.cashouts.push(nowMs);
-    state.score = Math.min(12, state.score + 1);
-  } else if (normalizedOutcome === "cashout") {
-    state.score = Math.max(0, state.score - 0.35);
-  } else {
-    state.score = Math.max(0, state.score - 0.9);
-  }
-
-  pruneQuickCashoutSpamState(state, nowMs);
-  if (state.cashouts.length === 0 && state.score < 0.01) {
-    quickCashoutSpamByGame.delete(key);
-  }
-}
-
-function getQuickCashoutRigChance(gameKey, betAmount = 0, intensity = 1) {
-  const key = normalizeQuickCashoutGameKey(gameKey);
-  if (!key) return 0;
-  const state = quickCashoutSpamByGame.get(key);
-  if (!state) return 0;
-
-  const nowMs = Date.now();
-  pruneQuickCashoutSpamState(state, nowMs);
-  const cashoutCount = state.cashouts.length;
-  const score = Number(state.score) || 0;
-
-  if (cashoutCount < QUICK_CASHOUT_RIG_MIN_CHAIN && score < QUICK_CASHOUT_RIG_MIN_CHAIN) {
-    return 0;
-  }
-
-  const pressure =
-    Math.max(0, cashoutCount - (QUICK_CASHOUT_RIG_MIN_CHAIN - 1)) +
-    Math.max(0, score - (QUICK_CASHOUT_RIG_MIN_CHAIN - 1)) * 0.6;
-
-  let chance = 0.08 + pressure * 0.11;
-  const bet = Number(betAmount);
-  if (Number.isFinite(bet) && bet > 0) {
-    chance += Math.min(0.14, bet / 8000);
-  }
-  const scaled = chance * Math.max(0, Number.isFinite(intensity) ? intensity : 1);
-  return Math.max(0, Math.min(0.9, scaled));
-}
-
-function shouldRigQuickCashoutAbuse(gameKey, betAmount = 0, intensity = 1) {
-  return Math.random() < getQuickCashoutRigChance(gameKey, betAmount, intensity);
 }
 
 function roundCurrency(value) {
@@ -12468,9 +12386,6 @@ const hiloState = {
   gameActive: false,
   guessLocked: false,
   skipRemaining: 3,
-  roundGuesses: 0,
-  roundStartedAt: 0,
-  roundOutcomeLogged: false,
   suits: ["♦", "♣", "♥", "♠"]
 };
 const HILO_SKIP_MAX = 3;
@@ -12483,9 +12398,6 @@ function loadHiLo() {
   hiloState.gameActive = false;
   hiloState.guessLocked = false;
   hiloState.skipRemaining = HILO_SKIP_MAX;
-  hiloState.roundGuesses = 0;
-  hiloState.roundStartedAt = 0;
-  hiloState.roundOutcomeLogged = false;
 
   c.innerHTML = `
     <div class="hilo-root">
@@ -12682,17 +12594,6 @@ function loadHiLo() {
     return Math.max(1, Math.min(13, nonSame));
   }
 
-  function logHiLoRound(outcome) {
-    if (hiloState.roundOutcomeLogged) return;
-    hiloState.roundOutcomeLogged = true;
-    const durationMs = hiloState.roundStartedAt > 0 ? Date.now() - hiloState.roundStartedAt : 0;
-    registerQuickCashoutRound("hilo", {
-      outcome,
-      steps: hiloState.roundGuesses,
-      durationMs
-    });
-  }
-
   function placeBet() {
     if (hiloState.gameActive) return;
     if (!ensureCasinoBettingAllowedNow()) return;
@@ -12712,9 +12613,6 @@ function loadHiLo() {
     hiloState.currentProfit = betAmount;
     hiloState.guessLocked = false;
     hiloState.skipRemaining = HILO_SKIP_MAX;
-    hiloState.roundGuesses = 0;
-    hiloState.roundStartedAt = Date.now();
-    hiloState.roundOutcomeLogged = false;
 
     setRoundState(true);
     updateUI();
@@ -12732,10 +12630,7 @@ function loadHiLo() {
     hiloState.guessLocked = true;
 
     const prev = hiloState.currentCardValue;
-    const rigForQuickCashout =
-      hiloState.roundGuesses < QUICK_CASHOUT_STEP_LIMIT &&
-      shouldRigQuickCashoutAbuse("hilo", hiloState.betAmount, 1.06);
-    const nextCard = (shouldRigHighBet(hiloState.betAmount, 0.95) || rigForQuickCashout)
+    const nextCard = shouldRigHighBet(hiloState.betAmount, 0.95)
       ? getRiggedHiLoCard(prev, guess)
       : getRandomCard();
     let won = false;
@@ -12743,8 +12638,6 @@ function loadHiLo() {
     if (guess === "higher" && nextCard > prev) won = true;
     if (guess === "lower" && nextCard < prev) won = true;
     if (guess === "same" && nextCard === prev) won = true;
-    hiloState.roundGuesses += 1;
-
     if (won) {
       hiloState.currentProfit *= multipliers[guess];
       hiloState.skipRemaining = HILO_SKIP_MAX;
@@ -12752,7 +12645,6 @@ function loadHiLo() {
       hiloState.currentProfit = 0;
       setRoundState(false);
       playGameSound("loss");
-      logHiLoRound("loss");
     }
 
     hiloState.currentCardValue = nextCard;
@@ -12830,7 +12722,6 @@ function loadHiLo() {
 
   function cashout() {
     if (!hiloState.gameActive) return;
-    logHiLoRound("cashout");
     const payout = hiloState.currentProfit;
     const netProfit = payout - hiloState.betAmount;
     cash += hiloState.currentProfit;
@@ -17345,9 +17236,6 @@ function loadDragonTower() {
   let difficulty = "easy";
   let highScore = 0;
   let scheduledCashoutId = null;
-  let roundStartedAt = 0;
-  let roundPickCount = 0;
-  let roundOutcomeLogged = false;
 
   const ROWS = 9;
   const TILES = 4;
@@ -17770,23 +17658,6 @@ function loadDragonTower() {
     }
   }
 
-  function maybeRigDragonPick(rowIndex, colIndex) {
-    if (currentRow >= QUICK_CASHOUT_STEP_LIMIT) return;
-    if (!shouldRigQuickCashoutAbuse("dragontower", betAmount, 1.05)) return;
-    const row = towerData[rowIndex];
-    if (!Array.isArray(row) || !row[colIndex]) return;
-
-    const badCols = [];
-    for (let i = 0; i < row.length; i += 1) {
-      if (!row[i]) badCols.push(i);
-    }
-    if (badCols.length === 0) return;
-
-    const swapCol = badCols[Math.floor(Math.random() * badCols.length)];
-    row[swapCol] = true;
-    row[colIndex] = false;
-  }
-
   function resetBoardVisuals() {
     rowElements.forEach((row) => {
       row.classList.remove("active");
@@ -17833,9 +17704,6 @@ function loadDragonTower() {
     currentRow = 0;
     gameActive = true;
     lastOutcome = null;
-    roundStartedAt = Date.now();
-    roundPickCount = 0;
-    roundOutcomeLogged = false;
 
     if (uiMode === "manual") cashBtn.disabled = false;
 
@@ -17879,17 +17747,6 @@ function loadDragonTower() {
     updateMultiplier();
   }
 
-  function logDragonRound(outcome) {
-    if (roundOutcomeLogged) return;
-    roundOutcomeLogged = true;
-    const durationMs = roundStartedAt > 0 ? Date.now() - roundStartedAt : 0;
-    registerQuickCashoutRound("dragontower", {
-      outcome,
-      steps: outcome === "cashout" ? currentRow : roundPickCount,
-      durationMs
-    });
-  }
-
   function endGame(win) {
     gameActive = false;
 
@@ -17898,10 +17755,7 @@ function loadDragonTower() {
       scheduledCashoutId = null;
     }
 
-    if (!win) {
-      lastOutcome = "loss";
-      logDragonRound("loss");
-    }
+    if (!win) lastOutcome = "loss";
     if (uiMode === "manual") cashBtn.disabled = true;
 
     multiplier = 1;
@@ -17924,7 +17778,6 @@ function loadDragonTower() {
     const win = betAmount * multiplier;
     const netProfit = win - betAmount;
     lastOutcome = "win";
-    logDragonRound("cashout");
 
     balance += win;
     syncGlobalCash();
@@ -17943,8 +17796,6 @@ function loadDragonTower() {
 
   function clickTile(rowIndex, colIndex) {
     if (destroyed || !gameActive || rowIndex !== currentRow) return;
-    roundPickCount += 1;
-    maybeRigDragonPick(rowIndex, colIndex);
 
     const slot = rowElements[rowIndex]?.children?.[colIndex];
     if (slot) {
@@ -21566,7 +21417,6 @@ function loadMines() {
   const HISTORY_LIMIT = 10;
 
   let destroyed = false;
-  let roundStartedAt = 0;
 
   const state = {
     gameState: "idle",
@@ -21834,29 +21684,6 @@ function loadMines() {
     }
   }
 
-  function rigMinesPickWithSwap(index) {
-    const selectedTile = state.board[index];
-    if (!selectedTile || selectedTile.isMine) return false;
-
-    const swapCandidates = [];
-    state.board.forEach((tile, tileIndex) => {
-      if (!tile || tileIndex === index || !tile.isMine) return;
-      if (!tile.revealed) swapCandidates.push(tileIndex);
-    });
-    if (swapCandidates.length === 0) {
-      state.board.forEach((tile, tileIndex) => {
-        if (!tile || tileIndex === index || !tile.isMine) return;
-        swapCandidates.push(tileIndex);
-      });
-    }
-    if (swapCandidates.length === 0) return false;
-
-    const swapIndex = swapCandidates[Math.floor(Math.random() * swapCandidates.length)];
-    state.board[swapIndex].isMine = false;
-    selectedTile.isMine = true;
-    return true;
-  }
-
   function revealAllMines(triggeredIndex = -1) {
     state.board.forEach((tile, index) => {
       if (tile.isMine) {
@@ -21905,7 +21732,6 @@ function loadMines() {
     state.multiplier = 1;
     state.board = createShuffledBoard(mines);
     state.balance -= bet;
-    roundStartedAt = Date.now();
     syncGlobalCash();
 
     ensureBoardTiles();
@@ -21958,11 +21784,8 @@ function loadMines() {
     const autoMineChance = Math.min(0.78, 0.26 + state.gemsFound * 0.09);
     if (unrevealedMines.length > 0 && Math.random() < autoMineChance) {
       pick = unrevealedMines[Math.floor(Math.random() * unrevealedMines.length)];
-    } else if (
-      (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
-      (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
-    ) {
-      rigMinesPickWithSwap(pick);
+    } else if (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) {
+      state.board[pick].isMine = true;
     }
     revealTile(pick);
     const tileData = state.board[pick];
@@ -22053,11 +21876,6 @@ function loadMines() {
         : "Round lost. Press Bet to start a new round."
     );
     pushHistoryEntry("loss", `-${formatMoney(state.currentBet)}`);
-    registerQuickCashoutRound("mines", {
-      outcome: "loss",
-      steps: state.gemsFound,
-      durationMs: roundStartedAt > 0 ? Date.now() - roundStartedAt : 0
-    });
     triggerCasinoKickoutCheckAfterRound();
     if (state.autoRunning) queueNextAutoRound();
   }
@@ -22075,11 +21893,6 @@ function loadMines() {
     setMessage(customMessage || `You secured ${formatMoney(payout)} at ${state.multiplier.toFixed(2)}x.`);
     pushHistoryEntry("win", `+${formatMoney(payout)}`);
     updateStatsUI();
-    registerQuickCashoutRound("mines", {
-      outcome: "cashout",
-      steps: state.gemsFound,
-      durationMs: roundStartedAt > 0 ? Date.now() - roundStartedAt : 0
-    });
     triggerCasinoKickoutCheckAfterRound();
     if (state.autoRunning) queueNextAutoRound();
   }
@@ -22091,11 +21904,8 @@ function loadMines() {
     const index = Number(tile.dataset.index);
     const tileData = state.board[index];
     if (!tileData || tileData.revealed) return;
-    if (
-      (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) ||
-      (state.gemsFound < QUICK_CASHOUT_STEP_LIMIT && shouldRigQuickCashoutAbuse("mines", state.currentBet, 1.08))
-    ) {
-      rigMinesPickWithSwap(index);
+    if (state.gemsFound === 0 && shouldRigHighBet(state.currentBet, 1.1)) {
+      tileData.isMine = true;
     }
 
     revealTile(index);
@@ -22111,7 +21921,6 @@ function loadMines() {
     state.gemsFound = 0;
     state.multiplier = 1;
     state.board = [];
-    roundStartedAt = 0;
     ensureBoardTiles();
     clearBoardVisuals();
     setOverlay();
@@ -23198,7 +23007,6 @@ function loadCrossyRoad() {
       row: 3,
       intensity: 0
     },
-    runStartedAt: 0,
     time: 0,
     crashFlash: 0,
     crashLane: -1
@@ -23361,11 +23169,6 @@ function loadCrossyRoad() {
     if (state.bet > HIGH_BET_RIG_THRESHOLD) {
       chance += getHighBetRigChance(state.bet, 0.45);
     }
-    const quickCashoutRig = getQuickCashoutRigChance("crossyroad", state.bet, 0.72);
-    const canApplyQuickRig = quickCashoutRig >= 0.28 && multiplier <= 1.2;
-    if (canApplyQuickRig) {
-      chance += Math.min(0.06, quickCashoutRig * 0.12);
-    }
 
     return Math.min(0.995, chance);
   }
@@ -23422,7 +23225,6 @@ function loadCrossyRoad() {
 
     state.bet = cleanBet;
     state.balance = round2(state.balance - cleanBet);
-    state.runStartedAt = Date.now();
     syncGlobalCash();
 
     state.running = true;
@@ -23447,23 +23249,8 @@ function loadCrossyRoad() {
 
   function finishRun(reason) {
     if (!state.running) return;
-    const runDurationMs = state.runStartedAt > 0 ? Date.now() - state.runStartedAt : 0;
-    if (reason === "cashout") {
-      registerQuickCashoutRound("crossyroad", {
-        outcome: "cashout",
-        steps: state.laneReached,
-        durationMs: runDurationMs
-      });
-    } else {
-      registerQuickCashoutRound("crossyroad", {
-        outcome: reason === "crash_car" ? "loss" : "win",
-        steps: state.laneReached,
-        durationMs: runDurationMs
-      });
-    }
 
     state.running = false;
-    state.runStartedAt = 0;
     startBtn.textContent = "Start Game";
     setDifficultyLocked(false);
     setBettingLocked(false);
