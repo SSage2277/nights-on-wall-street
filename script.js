@@ -10705,7 +10705,13 @@ function fitPhoneGameIntoStage(root) {
     return;
   }
 
-  if (gameKey === "crash" || gameKey === "roulette" || gameKey === "plinko" || gameKey === "horseracing") {
+  if (
+    gameKey === "crash" ||
+    gameKey === "roulette" ||
+    gameKey === "plinko" ||
+    gameKey === "horseracing" ||
+    gameKey === "mines"
+  ) {
     root.style.position = "absolute";
     root.style.left = "0px";
     root.style.top = "0px";
@@ -16328,16 +16334,12 @@ function loadPlinkoPhoneApp() {
     return weightedPick(weights);
   }
 
-  function getMultiplierColor(index, count) {
-    const center = (Math.max(2, count) - 1) / 2;
-    const distance = Math.abs(index - center) / Math.max(1, center);
-    const t = clampLocal(distance, 0, 1);
-    const from = [255, 225, 90];
-    const to = [245, 7, 63];
-    const r = Math.round(from[0] + (to[0] - from[0]) * t);
-    const g = Math.round(from[1] + (to[1] - from[1]) * t);
-    const b = Math.round(from[2] + (to[2] - from[2]) * t);
-    return `rgb(${r}, ${g}, ${b})`;
+  function getMultiplierColor(multiplierValue) {
+    const value = Number(multiplierValue) || 0;
+    if (value < 1) return "#ff003c";
+    if (value < 2) return "#d9ed92";
+    if (value < 10) return "#00e701";
+    return "#f3ba2f";
   }
 
   function computeGeometry() {
@@ -16413,7 +16415,7 @@ function loadPlinkoPhoneApp() {
       const value = state.multipliers[i] ?? 0;
       bin.className = "bin";
       bin.textContent = `${formatMultiplier(value)}x`;
-      bin.style.background = getMultiplierColor(i, binsCount);
+      bin.style.background = getMultiplierColor(value);
       const chance = totalWeight > 0 ? (weights[i] / totalWeight) * 100 : 0;
       bin.dataset.chance = String(chance);
       bin.dataset.multiplier = String(value);
