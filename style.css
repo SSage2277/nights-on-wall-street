@@ -5655,7 +5655,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
 
 .plinko-phone-app {
   --bg-0: #0f1923;
-  --bg-1: #14202b;
+  --bg-1: #0f1923;
   --panel: #1a242d;
   --panel-2: #0f1923;
   --ink: #ffffff;
@@ -5663,7 +5663,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
   --accent: #00e701;
   --danger: #ff0055;
   --line: #2f3b4b;
-  --line-soft: rgba(255, 255, 255, 0.1);
+  --line-soft: rgba(255, 255, 255, 0.14);
   height: 100%;
   width: 100%;
   position: relative;
@@ -5671,9 +5671,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
   display: flex;
   justify-content: center;
   align-items: stretch;
-  background:
-    radial-gradient(120% 70% at 50% -20%, rgba(0, 231, 1, 0.09) 0%, transparent 58%),
-    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
   color: var(--ink);
   font-family: "Segoe UI", "Tahoma", "Arial", sans-serif;
 }
@@ -5797,9 +5795,7 @@ body.phone-embedded-mini-mode #casino-section .casino-corner-brand {
   border-radius: 12px;
   border: 1px solid var(--line);
   overflow: hidden;
-  background:
-    radial-gradient(120% 85% at 50% -15%, rgba(0, 231, 1, 0.08) 0%, transparent 65%),
-    linear-gradient(180deg, rgba(26, 36, 45, 0.98), rgba(15, 25, 35, 0.98));
+  background: linear-gradient(180deg, rgba(26, 36, 45, 0.98), rgba(15, 25, 35, 0.98));
   box-shadow: inset 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
@@ -7800,6 +7796,8 @@ body.phone-embedded-mini-mode h1,
 body.phone-embedded-mini-mode #nav,
 body.phone-embedded-mini-mode #loan-panel,
 body.phone-embedded-mini-mode #trading-section,
+body.phone-embedded-mini-mode #appVersionTag,
+body.phone-embedded-mini-mode #tradingUsernameBadge,
 body.phone-embedded-mini-mode #phoneBtn,
 body.phone-embedded-mini-mode #phoneOverlay,
 body.phone-embedded-mini-mode #siteLegalLinks {
@@ -8441,6 +8439,11 @@ body.phone-embedded-mini-mode .phone-game-plinko.plinko-root {
   padding: 0;
   min-height: 0;
   height: 100%;
+  --bg-color: #0f1923;
+  --card-bg: #1a242d;
+  --accent: #00e701;
+  --loss: #ff0055;
+  background: #0f1923;
 }
 
 body.phone-embedded-mini-mode .phone-game-plinko.plinko-root .app-layout {
@@ -8484,13 +8487,15 @@ body.phone-embedded-mini-mode .phone-game-plinko.plinko-root .canvas-wrapper {
   margin: 0 auto;
   padding: 0;
   overflow: hidden;
+  background: #1a242d;
+  border-radius: 10px;
 }
 
 body.phone-embedded-mini-mode .phone-game-plinko.plinko-root #plinkoCanvas {
   display: block;
   max-width: 100%;
   margin: 0 auto;
-  background: #121e2b;
+  background: #1a242d;
   border-radius: 10px;
 }
 
@@ -8770,6 +8775,29 @@ body.phone-embedded-mini-mode .phone-game-mines .mines-root .grid {
 
 body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile {
   aspect-ratio: 1 / 1;
+}
+
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile,
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile .icon {
+  transform-style: flat;
+  backface-visibility: hidden;
+}
+
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile .icon {
+  transform: scale(0.78);
+}
+
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile.revealed {
+  animation: mines-tile-reveal-mobile 220ms ease-out both !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .tile.revealed .icon {
+  transform: scale(0.96);
+}
+
+body.phone-embedded-mini-mode .phone-game-mines .mines-root .gem-svg {
+  width: 52%;
+  height: 52%;
 }
 
 body.phone-embedded-mini-mode .phone-game-mines .mines-root #roundOverlay {
@@ -9325,6 +9353,11 @@ body.phone-embedded-mini-mode .phone-game-crossyroad .crossy-root .stage-card {
 body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko .phone-shell {
   width: 100%;
   max-width: 100%;
+  background: linear-gradient(180deg, #1a242d 0%, #0f1923 100%);
+}
+
+body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko {
+  background: #0f1923;
 }
 
 body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko .app-header {
@@ -9351,6 +9384,11 @@ body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko .control-bar {
 
 body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko .board-stage {
   min-height: 0;
+  background: linear-gradient(180deg, rgba(26, 36, 45, 0.98), rgba(15, 25, 35, 0.98));
+}
+
+body.phone-embedded-mini-mode #plinkoPhoneApp.phone-game-plinko #plinkoCanvas {
+  background: #1a242d;
 }
 
 body.phone-embedded-mini-mode .phone-game-dice .dice-root .main-layout,
@@ -14887,6 +14925,18 @@ body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-horse .phon
   }
 }
 
+@keyframes mines-tile-reveal-mobile {
+  0% {
+    transform: scale(0.9);
+  }
+  70% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 @keyframes mines-tile-rise {
   0% {
     transform: translateY(12px) scale(0.95);
@@ -17637,6 +17687,35 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
    CASINO GAME FIT (PHONE WEB)
    ============================ */
 @media (max-width: 980px) {
+  body.game-fullscreen:not(.phone-embedded-mini-mode) {
+    height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #appVersionTag,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #siteLegalLinks {
+    display: none !important;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-section {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+  }
+
   body.game-fullscreen:not(.phone-embedded-mini-mode) #game-exit-bar {
     height: 50px;
     padding: 0 8px;
@@ -17685,7 +17764,31 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .dragon-root,
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.casino-fullbleed > .crossy-root {
     min-height: calc(100dvh - 58px);
-    height: auto;
+    height: calc(100dvh - 58px);
+    overflow: hidden;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile,
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile .icon {
+    transform-style: flat;
+    backface-visibility: hidden;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile.revealed {
+    animation: mines-tile-reveal-mobile 220ms ease-out both !important;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile .icon {
+    transform: scale(0.78);
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile.revealed .icon {
+    transform: scale(0.96);
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .gem-svg {
+    width: 52%;
+    height: 52%;
   }
 
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.slots-fullbleed .crypto-slot-root .app-shell {
@@ -17874,19 +17977,23 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
 body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mobile-phone-app-fullbleed {
   padding: 58px 0 0 !important;
   min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mobile-phone-app-fullbleed .casino-phone-embed-shell {
   position: relative;
   width: 100%;
-  min-height: calc(100dvh - 58px);
+  min-height: 0;
+  height: calc(100dvh - 58px);
+  overflow: hidden;
   background: #050f1a;
 }
 
 body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mobile-phone-app-fullbleed .casino-phone-game-frame {
   display: block;
   width: 100%;
-  height: calc(100dvh - 58px);
+  height: 100%;
   border: 0;
   background: #050f1a;
 }
