@@ -157,6 +157,159 @@ const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
   }
 ]);
 
+const GAME_SOUND_ASSETS = Object.freeze({
+  card_deal: "Sound Effects/card_deal.mp3",
+  click: "Sound Effects/click.mp3",
+  horse_start: "Sound Effects/horse_start.mp3",
+  loss: "Sound Effects/loss.mp3",
+  mines_explosion: "Sound Effects/mines_explosion.mp3",
+  plinko_pop: "Sound Effects/plinko_pop.mp3",
+  roulette_spin: "Sound Effects/roulette_spin.mp3",
+  slide_spin: "Sound Effects/slide_spin.mp3",
+  slots_spin: "Sound Effects/slots_spin.mp3",
+  win: "Sound Effects/Win.mp3"
+});
+
+const GAME_SOUND_DEFAULTS = Object.freeze({
+  card_deal: { volume: 0.6, allowOverlap: true, throttleMs: 50 },
+  click: { volume: 0.45, allowOverlap: false, restart: true, throttleMs: 60 },
+  horse_start: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 240 },
+  loss: { volume: 0.66, allowOverlap: true, throttleMs: 150 },
+  mines_explosion: { volume: 0.78, allowOverlap: false, restart: true, throttleMs: 200 },
+  plinko_pop: { volume: 0.58, allowOverlap: true, throttleMs: 80 },
+  roulette_spin: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 300 },
+  slide_spin: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 300 },
+  slots_spin: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 300 },
+  win: { volume: 0.72, allowOverlap: true, throttleMs: 120 }
+});
+
+const gameSoundBasePool = new Map();
+const gameSoundCooldowns = new Map();
+const missingGameSoundKeys = new Set();
+const GAME_CLICK_SOUND_PATTERN = /\b(bet|spin|deal|draw|roll|drop|raise|call|cash\s*out|start|play)\b/i;
+let gameSoundArmed = false;
+
+function clampUnit(value, fallback = 1) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function armGameAudio() {
+  gameSoundArmed = true;
+}
+
+document.addEventListener("pointerdown", armGameAudio, { passive: true, once: true });
+document.addEventListener("keydown", armGameAudio, { once: true });
+
+function getGameSoundConfig(soundKey) {
+  if (!soundKey) return null;
+  const assetPath = GAME_SOUND_ASSETS[soundKey];
+  if (!assetPath) return null;
+  return {
+    key: soundKey,
+    assetPath,
+    ...GAME_SOUND_DEFAULTS[soundKey]
+  };
+}
+
+function getGameSoundBase(soundKey) {
+  if (gameSoundBasePool.has(soundKey)) return gameSoundBasePool.get(soundKey);
+  const config = getGameSoundConfig(soundKey);
+  if (!config) return null;
+
+  try {
+    const base = new Audio(encodeURI(config.assetPath));
+    base.preload = "auto";
+    base.volume = clampUnit(config.volume, 1);
+    gameSoundBasePool.set(soundKey, base);
+    return base;
+  } catch (error) {
+    if (!missingGameSoundKeys.has(soundKey)) {
+      missingGameSoundKeys.add(soundKey);
+      console.warn(`[audio] Could not initialize sound "${soundKey}".`, error);
+    }
+  }
+  return null;
+}
+
+function playGameSound(soundKey, options = {}) {
+  const config = getGameSoundConfig(soundKey);
+  if (!config) return;
+  if (!gameSoundArmed && options.requireArmed !== false) return;
+
+  const throttleMs = Math.max(0, Number(options.throttleMs ?? config.throttleMs ?? 0));
+  if (throttleMs > 0) {
+    const cooldownKey = String(options.cooldownKey || soundKey);
+    const nowMs = Date.now();
+    const coolUntil = Number(gameSoundCooldowns.get(cooldownKey) || 0);
+    if (coolUntil > nowMs) return;
+    gameSoundCooldowns.set(cooldownKey, nowMs + throttleMs);
+  }
+
+  const baseAudio = getGameSoundBase(soundKey);
+  if (!baseAudio) return;
+
+  const allowOverlap = options.allowOverlap ?? config.allowOverlap ?? true;
+  const restart = options.restart ?? config.restart ?? false;
+  const volume = clampUnit(options.volume ?? config.volume, 1);
+
+  try {
+    const target = allowOverlap ? baseAudio.cloneNode(true) : baseAudio;
+    if (!allowOverlap && restart) target.currentTime = 0;
+    target.volume = volume;
+    const playback = target.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(() => {});
+    }
+  } catch (error) {
+    if (!missingGameSoundKeys.has(soundKey)) {
+      missingGameSoundKeys.add(soundKey);
+      console.warn(`[audio] Failed to play sound "${soundKey}".`, error);
+    }
+  }
+}
+
+function getSoundTextFromElement(element) {
+  if (!element) return "";
+  const text = [
+    element.getAttribute("aria-label") || "",
+    element.textContent || "",
+    element.id || "",
+    element.className || "",
+    element.dataset?.action || "",
+    element.dataset?.betAction || "",
+    element.dataset?.betKey || ""
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.toLowerCase();
+}
+
+function maybePlayCasinoBetClickSound(target) {
+  const trigger = target?.closest?.('button, [role="button"], input[type="button"], input[type="submit"]');
+  if (!trigger || trigger.disabled) return;
+
+  const inActiveCasinoGame =
+    IS_PHONE_EMBED_MODE || (typeof activeCasinoGameKey === "string" && activeCasinoGameKey !== "lobby");
+  if (!inActiveCasinoGame) return;
+  if (activeCasinoGameKey === "horseracing" && trigger.id === "startBtn") return;
+
+  const text = getSoundTextFromElement(trigger);
+  if (!GAME_CLICK_SOUND_PATTERN.test(text)) return;
+  playGameSound("click");
+}
+
+document.addEventListener(
+  "click",
+  (event) => {
+    if (!event.isTrusted) return;
+    maybePlayCasinoBetClickSound(event.target);
+  },
+  true
+);
+
 function getHighBetRigChance(betAmount, intensity = 1) {
   const bet = Number(betAmount);
   if (!Number.isFinite(bet) || bet <= HIGH_BET_RIG_THRESHOLD) return 0;
@@ -5516,6 +5669,7 @@ function showCasinoWinPopup(amountOrOptions, fallbackMultiplier = null) {
     document.body.classList.contains("game-fullscreen") ||
     (casinoContainer && casinoContainer.children.length > 0);
   if (!inCasinoView) return autoSaved;
+  playGameSound("win");
   achievementState.stats.casinoWins += 1;
   saveAchievements();
 
@@ -6098,6 +6252,8 @@ const hiddenAdminActivityEl = document.getElementById("hiddenAdminActivity");
 const hiddenAdminActivityCollapseBtn = document.getElementById("hiddenAdminActivityCollapseBtn");
 const hiddenAdminActivityClearBtn = document.getElementById("hiddenAdminActivityClearBtn");
 const hiddenAdminFraudEl = document.getElementById("hiddenAdminFraud");
+const hiddenAdminFraudCollapseBtn = document.getElementById("hiddenAdminFraudCollapseBtn");
+const hiddenAdminFraudClearBtn = document.getElementById("hiddenAdminFraudClearBtn");
 const hiddenAdminBackupsEl = document.getElementById("hiddenAdminBackups");
 const venmoAdminCodeInputEl = document.getElementById("venmoAdminCodeInput");
 const venmoAdminUnlockBtn = document.getElementById("venmoAdminUnlockBtn");
@@ -6144,6 +6300,7 @@ let hiddenAdminPanelOpen = false;
 let hiddenAdminLivePollTimer = null;
 let hiddenAdminLivePollTick = 0;
 let hiddenAdminActivityCollapsed = false;
+let hiddenAdminFraudCollapsed = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -6887,6 +7044,27 @@ function setHiddenAdminActivityCollapsed(collapsed) {
   syncHiddenAdminActivityControls();
 }
 
+function syncHiddenAdminFraudControls() {
+  const flagCount = Array.isArray(venmoClaimState.adminFraudFlags) ? venmoClaimState.adminFraudFlags.length : 0;
+  if (hiddenAdminFraudCollapseBtn) {
+    hiddenAdminFraudCollapseBtn.textContent = hiddenAdminFraudCollapsed
+      ? `Expand (${flagCount})`
+      : `Collapse (${flagCount})`;
+    hiddenAdminFraudCollapseBtn.disabled = !venmoAdminUnlocked;
+  }
+  if (hiddenAdminFraudClearBtn) {
+    hiddenAdminFraudClearBtn.disabled = !venmoAdminUnlocked || flagCount <= 0;
+  }
+  if (hiddenAdminFraudEl) {
+    hiddenAdminFraudEl.style.display = hiddenAdminFraudCollapsed ? "none" : "";
+  }
+}
+
+function setHiddenAdminFraudCollapsed(collapsed) {
+  hiddenAdminFraudCollapsed = Boolean(collapsed);
+  syncHiddenAdminFraudControls();
+}
+
 function renderHiddenAdminActivity() {
   if (!hiddenAdminActivityEl) return;
   syncHiddenAdminActivityControls();
@@ -6936,10 +7114,12 @@ function renderHiddenAdminActivity() {
 
 function renderHiddenAdminFraudFlags() {
   if (!hiddenAdminFraudEl) return;
+  syncHiddenAdminFraudControls();
   if (!venmoAdminUnlocked) {
     hiddenAdminFraudEl.innerHTML = `<div class="hidden-admin-empty">Locked.</div>`;
     return;
   }
+  if (hiddenAdminFraudCollapsed) return;
   const flags = Array.isArray(venmoClaimState.adminFraudFlags) ? venmoClaimState.adminFraudFlags : [];
   if (!flags.length) {
     hiddenAdminFraudEl.innerHTML = `<div class="hidden-admin-empty">No fraud flags right now.</div>`;
@@ -7674,6 +7854,35 @@ async function clearHiddenAdminActivityFeed() {
   }
 }
 
+async function clearHiddenAdminFraudFlags() {
+  if (!venmoAdminUnlocked) {
+    setHiddenAdminStatus("Unlock admin first.", true);
+    return false;
+  }
+  const flagCount = Array.isArray(venmoClaimState.adminFraudFlags) ? venmoClaimState.adminFraudFlags.length : 0;
+  if (flagCount <= 0) {
+    setHiddenAdminStatus("Fraud flags are already clear.");
+    return true;
+  }
+  const confirmed = window.confirm("Clear all current Fraud Flags?");
+  if (!confirmed) return false;
+  try {
+    await venmoApiRequest(
+      "/api/admin/fraud-flags/clear",
+      getAdminRequestOptions({
+        method: "POST"
+      })
+    );
+    venmoClaimState.adminFraudFlags = [];
+    renderHiddenAdminFraudFlags();
+    setHiddenAdminStatus("Fraud flags cleared. New flags will appear as new activity is detected.");
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not clear fraud flags: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function runFullAdminReset() {
   if (!venmoAdminUnlocked) {
     setHiddenAdminStatus("Unlock admin first.", true);
@@ -7863,6 +8072,17 @@ function initHiddenAdminTrigger() {
   if (hiddenAdminActivityClearBtn) {
     hiddenAdminActivityClearBtn.addEventListener("click", () => {
       clearHiddenAdminActivityFeed();
+    });
+  }
+  if (hiddenAdminFraudCollapseBtn) {
+    hiddenAdminFraudCollapseBtn.addEventListener("click", () => {
+      setHiddenAdminFraudCollapsed(!hiddenAdminFraudCollapsed);
+      if (!hiddenAdminFraudCollapsed) renderHiddenAdminFraudFlags();
+    });
+  }
+  if (hiddenAdminFraudClearBtn) {
+    hiddenAdminFraudClearBtn.addEventListener("click", () => {
+      clearHiddenAdminFraudFlags();
     });
   }
   if (hiddenAdminOverlayEl) {
@@ -10553,6 +10773,7 @@ function loadSlots() {
     }
 
     clearRoundEffects();
+    playGameSound("slots_spin", { restart: true, allowOverlap: false });
 
     if (isFreeSpin) {
       state.freeSpins = Math.max(0, state.freeSpins - 1);
@@ -10636,6 +10857,7 @@ function loadSlots() {
       } else {
         setMessage("No win this spin.");
       }
+      playGameSound("loss");
     }
 
     renderChart();
@@ -11171,6 +11393,7 @@ function drawCard() {
   const card = blackjackDeck.pop();
   updateBlackjackDeckDisplay();
   flashBlackjackDeckDraw();
+  playGameSound("card_deal");
   return card;
 }
 
@@ -11526,6 +11749,7 @@ function endGame() {
       multiplier: totalWager > 0 ? totalPayout / totalWager : null
     });
   }
+  if (net < 0) playGameSound("loss");
   let message = "";
   let tone = "neutral";
   if (net > 0) tone = "win";
@@ -11961,6 +12185,7 @@ function loadHiLo() {
       <span class="suit" style="color:${color}">${suit}</span>
       <span class="rank bottom" style="color:${color}">${rank}</span>
     `;
+    playGameSound("card_deal");
   }
 
   function animateCurrentCard() {
@@ -12031,6 +12256,7 @@ function loadHiLo() {
     } else {
       hiloState.currentProfit = 0;
       setRoundState(false);
+      playGameSound("loss");
     }
 
     hiloState.currentCardValue = nextCard;
@@ -12116,6 +12342,8 @@ function loadHiLo() {
         amount: netProfit,
         multiplier: hiloState.betAmount > 0 ? payout / hiloState.betAmount : null
       });
+    } else if (netProfit < 0) {
+      playGameSound("loss");
     }
     hiloState.currentProfit = 0;
     setRoundState(false);
@@ -12802,6 +13030,7 @@ function loadCasinoPoker() {
       const handDelta = roundCurrency(seats[0].bank - heroStackAtHandStart);
       sessionProfit = roundCurrency(sessionProfit + handDelta);
       const heroProfit = Math.max(0, handDelta);
+      if (handDelta < 0) playGameSound("loss");
       if (heroProfit > 0.009) {
         const autoSaved = maybeAutoSaveFromCasinoWin({
           amount: heroProfit,
@@ -12903,7 +13132,11 @@ function loadCasinoPoker() {
       p.hand = [];
       if (p.bank > 0) {
         p.inHand = true;
-        p.hand = [deck.pop(), deck.pop()];
+        const firstCard = deck.pop();
+        const secondCard = deck.pop();
+        p.hand = [firstCard, secondCard];
+        playGameSound("card_deal");
+        playGameSound("card_deal");
         seatUi[i].div.classList.remove("folded", "turn-active", "winner-glow");
         renderCards(i, p.hand, p.isAi && p.inHand && phase < 4);
       } else {
@@ -12985,9 +13218,17 @@ function loadCasinoPoker() {
     });
     phase += 1;
 
-    if (phase === 1) community.push(deck.pop(), deck.pop(), deck.pop());
-    else if (phase === 2) community.push(deck.pop());
-    else if (phase === 3) community.push(deck.pop());
+    if (phase === 1) {
+      const flop = [deck.pop(), deck.pop(), deck.pop()];
+      community.push(...flop);
+      flop.forEach(() => playGameSound("card_deal"));
+    } else if (phase === 2) {
+      community.push(deck.pop());
+      playGameSound("card_deal");
+    } else if (phase === 3) {
+      community.push(deck.pop());
+      playGameSound("card_deal");
+    }
     else {
       showdown();
       return;
@@ -13723,7 +13964,11 @@ function startHand() {
     if (p.bank > 0) {
       p.inHand = true;
       p.folded = false;
-      p.hand = [p_deck.pop(), p_deck.pop()];
+      const firstCard = p_deck.pop();
+      const secondCard = p_deck.pop();
+      p.hand = [firstCard, secondCard];
+      playGameSound("card_deal");
+      playGameSound("card_deal");
 
       const ante = Math.min(10, p.bank);
       p.bank -= ante;
@@ -13824,9 +14069,17 @@ function nextPhase() {
   });
   p_phase++;
 
-  if (p_phase === 1) p_community.push(p_deck.pop(), p_deck.pop(), p_deck.pop());
-  else if (p_phase === 2) p_community.push(p_deck.pop());
-  else if (p_phase === 3) p_community.push(p_deck.pop());
+  if (p_phase === 1) {
+    const flop = [p_deck.pop(), p_deck.pop(), p_deck.pop()];
+    p_community.push(...flop);
+    flop.forEach(() => playGameSound("card_deal"));
+  } else if (p_phase === 2) {
+    p_community.push(p_deck.pop());
+    playGameSound("card_deal");
+  } else if (p_phase === 3) {
+    p_community.push(p_deck.pop());
+    playGameSound("card_deal");
+  }
   else {
     showdown();
     return;
@@ -14118,6 +14371,7 @@ function endRoundLogic(earlyWin, forceWinner = null) {
   updateUI();
   updatePokerUI();
   if (!playerWonHand) {
+    playGameSound("loss");
     triggerCasinoKickoutCheckAfterRound();
   }
   p_handInProgress = false;
@@ -14652,10 +14906,12 @@ function loadCasinoPlinkoNeon() {
 
   function resolveWin(slot, bet) {
     if (MULTIPLIERS[slot] == null) return;
+    playGameSound("plinko_pop");
 
     const multiplier = MULTIPLIERS[slot];
     const win = roundCurrency(bet * multiplier);
     const profit = roundCurrency(win - bet);
+    if (profit < 0) playGameSound("loss");
     balance = roundCurrency(balance + win);
     syncGlobalCash();
     if (profit > 0.009) {
@@ -15926,9 +16182,11 @@ class Ball {
 function resolveWin(slot, bet) {
   const multiplier = plinko.MULTIPLIERS[slot];
   if (!multiplier) return;
+  playGameSound("plinko_pop");
 
   const win = bet * multiplier;
   const profit = roundCurrency(win - bet);
+  if (profit < 0) playGameSound("loss");
   cash += win;
   if (profit > 0.009) {
     maybeAutoSaveFromCasinoWin({ amount: profit, multiplier, source: "plinko" });
@@ -17996,6 +18254,7 @@ function loadSlide() {
 
     const isWin = multiplier > 1;
     const isPush = multiplier === 1;
+    if (multiplier < 1) playGameSound("loss");
 
     if (resultMsg) {
       if (isWin) {
@@ -18027,6 +18286,7 @@ function loadSlide() {
     const fromAuto = Boolean(options.fromAuto);
     const betAmount = validateBetAmount(fromAuto);
     if (betAmount == null) return false;
+    playGameSound("slide_spin", { restart: true, allowOverlap: false });
 
     roundsPlayed += 1;
     updateBalance(-betAmount);
@@ -18224,6 +18484,8 @@ function loadHorseRacing() {
   const state = {
     balance: roundCurrency(cash),
     racing: false,
+    startPending: false,
+    startTimerId: null,
     rafId: null,
     race: null,
     leaderId: null,
@@ -18398,7 +18660,7 @@ function loadHorseRacing() {
     const pickId = getSelectedHorseId();
     const bet = getBetAmount();
     const betValid = Number.isFinite(bet) && bet > 0 && bet <= state.balance;
-    if (els.startBtn) els.startBtn.disabled = state.racing || !pickId || !betValid;
+    if (els.startBtn) els.startBtn.disabled = state.racing || state.startPending || !pickId || !betValid;
     if (els.clearBtn) els.clearBtn.disabled = state.racing;
 
     const canRebet =
@@ -18672,8 +18934,13 @@ function loadHorseRacing() {
       state.rafId = null;
     }
     state.racing = false;
+    state.startPending = false;
     state.race = null;
     state.leaderId = null;
+    if (state.startTimerId) {
+      clearTimeout(state.startTimerId);
+      state.startTimerId = null;
+    }
     resetRunwayMotion();
   }
 
@@ -18692,6 +18959,8 @@ function loadHorseRacing() {
     if (won) {
       state.balance = roundMoney(state.balance + payout);
       if (net > 0) showCasinoWinPopup({ amount: net, multiplier: picked.multiplier });
+    } else {
+      playGameSound("loss");
     }
 
     state.history.unshift({ winnerId: winner.id, pickId: picked.id, bet: race.betAmount, net });
@@ -18743,7 +19012,7 @@ function loadHorseRacing() {
   }
 
   function startRace() {
-    if (state.racing || state.destroyed) return;
+    if (state.racing || state.startPending || state.destroyed) return;
     if (!ensureCasinoBettingAllowedNow()) return;
 
     const pickId = getSelectedHorseId();
@@ -18761,26 +19030,37 @@ function loadHorseRacing() {
       setStatus("Insufficient balance for that bet.");
       return;
     }
-
-    state.lastBet = { horseId: pickId, amount: bet };
-    state.balance = roundMoney(state.balance - bet);
-    updateBalanceView();
-    syncGlobalCash();
-
-    updateLaneMetrics();
-    const winner = weightedWinnerPick();
-    state.race = buildRaceModel(winner.id, pickId, bet);
-    state.racing = true;
-
-    setResultVisible(false);
-    setRaceState("RACE IN PROGRESS");
-    if (els.leaderValue) els.leaderValue.textContent = "-";
-    setStatus("Race started. Watch the live leader as the horses battle for first.");
-
+    state.startPending = true;
     setControlsDisabled(true);
-    resetRunwayMotion();
-    applyRacePositions(0);
-    state.rafId = requestAnimationFrame(raceLoop);
+    setRaceState("STARTING");
+    setStatus("Race starting...");
+    updateButtons();
+    playGameSound("horse_start", { restart: true, allowOverlap: false });
+
+    state.startTimerId = window.setTimeout(() => {
+      state.startTimerId = null;
+      if (state.destroyed) return;
+      state.startPending = false;
+      state.lastBet = { horseId: pickId, amount: bet };
+      state.balance = roundMoney(state.balance - bet);
+      updateBalanceView();
+      syncGlobalCash();
+
+      updateLaneMetrics();
+      const winner = weightedWinnerPick();
+      state.race = buildRaceModel(winner.id, pickId, bet);
+      state.racing = true;
+
+      setResultVisible(false);
+      setRaceState("RACE IN PROGRESS");
+      if (els.leaderValue) els.leaderValue.textContent = "-";
+      setStatus("Race started. Watch the live leader as the horses battle for first.");
+
+      setControlsDisabled(true);
+      resetRunwayMotion();
+      applyRacePositions(0);
+      state.rafId = requestAnimationFrame(raceLoop);
+    }, 420);
   }
 
   function clearBet() {
@@ -21092,6 +21372,8 @@ function loadMines() {
   }
 
   function endRoundAsLoss(triggeredIndex) {
+    playGameSound("mines_explosion", { restart: true, allowOverlap: false });
+    playGameSound("loss");
     revealAllMines(triggeredIndex);
     elements.gameArea.classList.remove("board-shake");
     void elements.gameArea.offsetWidth;
@@ -21813,6 +22095,8 @@ function loadKeno() {
     const isWin = multiplier > 0;
     if (isWin) {
       game.balance = round2(game.balance + payout);
+    } else {
+      playGameSound("loss");
     }
     updateBalanceUi();
     syncGlobalCash();
@@ -22495,6 +22779,7 @@ function loadCrossyRoad() {
     }
 
     const net = round2(payout - state.bet);
+    if (reason === "crash_car" || net < 0) playGameSound("loss");
     if (net > 0) showCasinoWinPopup({ amount: net, multiplier });
     triggerCasinoKickoutCheckAfterRound();
     state.moveQueue = [];
@@ -24276,6 +24561,7 @@ function createCasinoRouletteInstance(rootEl, options = {}) {
     syncBalance();
     updateHud();
     setStatus("Spinning...");
+    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
 
     let winningNumber = Math.floor(Math.random() * 37);
     if (typeof shouldRigHighBet === "function" && shouldRigHighBet(totalBet, 1.2)) {
@@ -24308,6 +24594,7 @@ function createCasinoRouletteInstance(rootEl, options = {}) {
     } else {
       setStatus("LOST");
       hideProfitPopup();
+      playGameSound("loss");
     }
 
     updateHud();
@@ -24830,6 +25117,8 @@ function loadRoulette() {
     if (net > 0 && typeof showCasinoWinPopup === "function") {
       const multiplier = roundTotalBet > 0 ? payout / roundTotalBet : 0;
       showCasinoWinPopup({ amount: net, multiplier });
+    } else if (net < 0) {
+      playGameSound("loss");
     }
     triggerCasinoKickoutCheckAfterRound();
 
@@ -24846,6 +25135,7 @@ function loadRoulette() {
 
     state.lastRoundBets = { ...state.bets };
     state.spinning = true;
+    playGameSound("roulette_spin", { restart: true, allowOverlap: false });
     ui.spinBtn.disabled = true;
     ui.spinBtn.textContent = "SPINNING";
     ui.spinBtn.classList.add("spinning");
