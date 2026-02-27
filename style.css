@@ -8785,7 +8785,7 @@ body.phone-embedded-mini-mode .phone-game-mines .mines-root .app {
   height: 100%;
   min-height: 0;
   align-content: start;
-  padding: 0.18rem 0.28rem 0.08rem;
+  padding: 0 0.24rem 0.08rem;
 }
 
 body.phone-embedded-mini-mode .phone-game-mines .mines-root .panel {
@@ -8794,7 +8794,7 @@ body.phone-embedded-mini-mode .phone-game-mines .mines-root .panel {
 
 body.phone-embedded-mini-mode .phone-game-mines .mines-root .game-area {
   border-radius: 0;
-  padding: 0.1rem 0 0;
+  padding: 0;
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -8806,6 +8806,7 @@ body.phone-embedded-mini-mode .phone-game-mines .mines-root .game-area {
 
 body.phone-embedded-mini-mode .phone-game-mines .mines-root .grid {
   width: min(100%, 330px);
+  margin-top: -4px;
   gap: 0.42rem;
 }
 
@@ -17934,6 +17935,24 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile .icon {
     transform-style: flat;
     backface-visibility: hidden;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .app {
+    min-height: calc(100dvh - 58px);
+    height: calc(100dvh - 58px);
+    align-content: start;
+    padding: 2px 6px 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .game-area {
+    display: grid;
+    place-items: start center;
+    align-content: start;
+    padding-top: 0;
+  }
+
+  body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .grid {
+    margin-top: -6px;
   }
 
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container.mines-fullbleed .mines-root .tile.revealed {
