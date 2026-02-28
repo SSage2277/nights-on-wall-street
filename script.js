@@ -9788,7 +9788,10 @@ function loadCasinoGame(game) {
     enterCasinoGameView("Blackjack");
   }
   if (game === "poker") {
-    if (IS_PHONE_EMBED_MODE) loadAppPoker();
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const useIphonePokerLayout =
+      IS_APPLE_TOUCH_DEVICE && (IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= 980));
+    if (useIphonePokerLayout) loadAppPoker();
     else loadCasinoPoker();
     enterCasinoGameView("Poker");
   }
@@ -14813,7 +14816,9 @@ function loadAppPoker() {
   const container = document.getElementById("casino-container");
   if (!container) return;
   container.classList.add("casino-fullbleed", "poker-fullbleed");
-  const isPhoneIosModern = IS_PHONE_EMBED_MODE && IS_APPLE_TOUCH_DEVICE;
+  const pokerViewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const isPhoneIosModern =
+    IS_APPLE_TOUCH_DEVICE && (IS_PHONE_EMBED_MODE || (pokerViewportWidth > 0 && pokerViewportWidth <= 980));
 
   if (isPhoneIosModern) {
     container.innerHTML = `
