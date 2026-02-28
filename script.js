@@ -14860,6 +14860,7 @@ function loadAppPoker() {
               <button id="btnRaise" class="btn gold">Raise</button>
             </div>
           </div>
+          <div id="potInline" class="pot-inline">Pot: 0</div>
 
           <div id="dealOverlay" class="deal-overlay">
             <div id="msgOverlay" class="msg-overlay">Ready?</div>
@@ -14892,6 +14893,7 @@ function loadAppPoker() {
     btnRaise: container.querySelector("#btnRaise"),
     amtCall: container.querySelector("#amtCall"),
     raiseInput: container.querySelector("#raiseInput"),
+    potInlineEl: container.querySelector("#potInline"),
     heroCardsEl: container.querySelector("#heroCards"),
     heroStackEl: container.querySelector("#heroStack"),
     handLabelEl: container.querySelector("#handLabel"),
@@ -14913,6 +14915,7 @@ function loadAppPoker() {
     !ui.btnRaise ||
     !ui.amtCall ||
     !ui.raiseInput ||
+    !ui.potInlineEl ||
     !ui.heroCardsEl ||
     !ui.heroStackEl ||
     !ui.handLabelEl ||
@@ -15206,8 +15209,15 @@ function loadAppPoker() {
     }
   };
 
+  const syncPotInlineVisibility = () => {
+    ui.potInlineEl.classList.toggle("hidden", !ui.dealOverlay.classList.contains("hidden"));
+  };
+
   const renderUi = () => {
-    ui.potEl.textContent = Math.floor(pot);
+    const potAmount = Math.floor(pot);
+    ui.potEl.textContent = potAmount;
+    ui.potInlineEl.textContent = `Pot: ${potAmount}`;
+    syncPotInlineVisibility();
     renderCommunity();
     renderHero();
     setDealerMarker();
@@ -15516,6 +15526,7 @@ function loadAppPoker() {
     ui.dealOverlay.classList.remove("hidden");
     ui.btnDeal.classList.remove("hidden");
     ui.btnDeal.textContent = "Deal New Hand";
+    syncPotInlineVisibility();
     dealerIndex = (dealerIndex + 1) % MAX_SEATS_LOCAL;
     pendingTableRotation = true;
   };
@@ -15571,6 +15582,7 @@ function loadAppPoker() {
     ui.dealOverlay.classList.add("hidden");
     ui.btnDeal.classList.remove("hidden");
     ui.btnDeal.textContent = "Deal New Hand";
+    syncPotInlineVisibility();
     turnIndex = dealerIndex;
     findNextActivePlayer();
     nextTurn();
@@ -15596,6 +15608,7 @@ function loadAppPoker() {
     ui.controlsEl.classList.add("hidden");
     setControlsDisabled(true);
     renderUi();
+    syncPotInlineVisibility();
   };
 
   bind(ui.btnDeal, "click", startHand);

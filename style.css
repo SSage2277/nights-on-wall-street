@@ -10319,7 +10319,7 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   background: var(--panel-soft);
   padding: 8px;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr;
   align-items: center;
   gap: 8px;
 }
@@ -10399,12 +10399,7 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
 }
 
 .poker-phone-exact-root .pot {
-  min-width: 34px;
-  text-align: right;
-  font-family: "Rajdhani", "Outfit", sans-serif;
-  font-size: 48px;
-  line-height: 0.9;
-  color: #eaf3f8;
+  display: none;
 }
 
 .poker-phone-exact-root .status {
@@ -10423,37 +10418,47 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--panel-soft);
-  padding: 8px;
-  min-height: 126px;
+  padding: 6px;
+  min-height: 92px;
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .poker-phone-exact-root .controls {
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .poker-phone-exact-root .action-row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 7px;
+  gap: 5px;
 }
 
 .poker-phone-exact-root .raise-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 7px;
+  gap: 5px;
+}
+
+.poker-phone-exact-root .pot-inline {
+  min-height: 14px;
+  text-align: center;
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #b7d8f3;
 }
 
 .poker-phone-exact-root #raiseInput {
-  height: 52px;
+  height: 34px;
   border-radius: 10px;
   border: 1px solid #446175;
   background: #10283a;
   color: #edf4f8;
   font-family: "Rajdhani", "Outfit", sans-serif;
-  font-size: 24px;
+  font-size: 16px;
   font-weight: 700;
   text-align: center;
 }
@@ -10465,10 +10470,10 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
 }
 
 .poker-phone-exact-root .btn {
-  height: 52px;
+  height: 34px;
   border-radius: 10px;
   border: 1px solid transparent;
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 700;
   font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
   color: #f2f8fc;
@@ -10579,7 +10584,7 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
 
 .poker-phone-exact-root .msg-overlay {
   font-family: "Rajdhani", "Outfit", sans-serif;
-  font-size: 17px;
+  font-size: 13px;
   line-height: 1.25;
   font-weight: 700;
   text-align: center;
@@ -10592,15 +10597,15 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
 
 .poker-phone-exact-root .btn-lrg {
   width: 100%;
-  max-width: 220px;
+  max-width: 170px;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 7px 10px;
   border-radius: 10px;
   border: 0;
   background: var(--primary);
   color: #031402;
   font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
-  font-size: 20px;
+  font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
@@ -10689,15 +10694,15 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   }
 
   .poker-phone-exact-root .controls-wrap {
-    min-height: 96px;
-    padding: 6px;
-    gap: 6px;
+    min-height: 84px;
+    padding: 5px;
+    gap: 4px;
   }
 
   .poker-phone-exact-root .btn,
   .poker-phone-exact-root #raiseInput {
-    height: 42px;
-    font-size: 14px;
+    height: 31px;
+    font-size: 12px;
   }
 
   .poker-phone-exact-root .hero-meta,
@@ -10729,9 +10734,9 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   }
 
   .poker-phone-exact-root .btn-lrg {
-    max-width: 170px;
-    font-size: 16px;
-    padding: 8px 10px;
+    max-width: 155px;
+    font-size: 12px;
+    padding: 6px 8px;
   }
 }
 
