@@ -14815,33 +14815,70 @@ function loadAppPoker() {
   container.classList.add("casino-fullbleed", "poker-fullbleed");
   const isPhoneIosModern = IS_PHONE_EMBED_MODE && IS_APPLE_TOUCH_DEVICE;
 
-  container.innerHTML = `
-    <div class="poker-wrapper poker-phone-modern${isPhoneIosModern ? " poker-phone-ios" : ""}">
-      <div id="poker-table" class="poker-phone-modern-table${isPhoneIosModern ? " poker-phone-ios-table" : ""}">
-        <div class="center-area">
-          <div id="pot-wrap">Pot: $<span id="p_pot">0</span></div>
-          <div id="pot-chips" aria-hidden="true"></div>
-          <div id="comm-cards"></div>
-          <div id="poker-status">Waiting for game...</div>
-        </div>
+  if (isPhoneIosModern) {
+    container.innerHTML = `
+      <div class="poker-wrapper poker-phone-modern poker-phone-ios">
+        <main id="poker-table" class="poker-phone-modern-table poker-phone-ios-table">
+          <section id="poker-ios-seats" class="pp-ios-seats"></section>
 
-        <div id="deal-overlay">
-          <div id="msg-overlay"></div>
-          <button id="btn-deal" class="btn-lrg">Deal Hand</button>
-        </div>
+          <section class="pp-ios-board">
+            <div id="comm-cards" class="pp-ios-community"></div>
+            <div id="pot-wrap" class="pp-ios-pot">Pot: $<span id="p_pot">0</span></div>
+            <div id="pot-chips" aria-hidden="true"></div>
+          </section>
 
-        <div id="poker-controls" class="poker-hidden">
-          <button id="btn-fold" class="btn-poker red">Fold</button>
-          <button id="btn-check" class="btn-poker">Check</button>
-          <button id="btn-call" class="btn-poker">Call <span id="amt-call"></span></button>
-          <div class="raise-box">
-            <input type="number" id="raise-input" value="50" step="10">
-            <button id="btn-raise" class="btn-poker gold">Raise</button>
+          <div id="poker-status" class="pp-ios-status">Waiting for game...</div>
+
+          <section class="pp-ios-controls-wrap">
+            <div id="poker-controls" class="poker-hidden pp-ios-controls">
+              <button id="btn-fold" class="btn-poker red">Fold</button>
+              <button id="btn-check" class="btn-poker">Check</button>
+              <button id="btn-call" class="btn-poker">Call <span id="amt-call"></span></button>
+              <div class="raise-box">
+                <input type="number" id="raise-input" value="50" step="10">
+                <button id="btn-raise" class="btn-poker gold">Raise</button>
+              </div>
+            </div>
+
+            <div id="deal-overlay" class="pp-ios-deal-overlay">
+              <div id="msg-overlay"></div>
+              <button id="btn-deal" class="btn-lrg">Deal Hand</button>
+            </div>
+          </section>
+
+          <section id="poker-ios-hero" class="pp-ios-hero"></section>
+        </main>
+      </div>
+    `;
+  } else {
+    container.innerHTML = `
+      <div class="poker-wrapper poker-phone-modern">
+        <div id="poker-table" class="poker-phone-modern-table">
+          <div class="center-area">
+            <div id="pot-wrap">Pot: $<span id="p_pot">0</span></div>
+            <div id="pot-chips" aria-hidden="true"></div>
+            <div id="comm-cards"></div>
+            <div id="poker-status">Waiting for game...</div>
+          </div>
+
+          <div id="deal-overlay">
+            <div id="msg-overlay"></div>
+            <button id="btn-deal" class="btn-lrg">Deal Hand</button>
+          </div>
+
+          <div id="poker-controls" class="poker-hidden">
+            <button id="btn-fold" class="btn-poker red">Fold</button>
+            <button id="btn-check" class="btn-poker">Check</button>
+            <button id="btn-call" class="btn-poker">Call <span id="amt-call"></span></button>
+            <div class="raise-box">
+              <input type="number" id="raise-input" value="50" step="10">
+              <button id="btn-raise" class="btn-poker gold">Raise</button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  `;
+    `;
+  }
   addSageBrand(container.querySelector(".poker-wrapper"), "top-left");
 
   pk = {
@@ -14860,13 +14897,11 @@ function loadAppPoker() {
     inputRaise: document.getElementById("raise-input"),
     amtCall: document.getElementById("amt-call"),
     table: document.getElementById("poker-table"),
+    seatsHost: document.getElementById("poker-ios-seats"),
+    heroHost: document.getElementById("poker-ios-hero"),
     phoneModern: true,
     iosModern: isPhoneIosModern
   };
-  if (pk.iosModern && pk.btnFold) {
-    pk.btnFold.textContent = "↑";
-    pk.btnFold.title = "Fold";
-  }
 
   pk.btnDeal.onclick = startHand;
   pk.btnFold.onclick = () => act("Fold");
@@ -14899,8 +14934,12 @@ function loadAppPoker() {
 }
 
 function initTableLayout() {
+  pk.table.querySelectorAll(".player-seat").forEach((node) => node.remove());
+  const seatsHost = pk?.iosModern ? pk.seatsHost || pk.table : pk.table;
+  const heroHost = pk?.iosModern ? pk.heroHost || pk.table : null;
   for (let i = 0; i < MAX_SEATS; i++) {
     const isPhoneModern = Boolean(pk?.phoneModern);
+    const isIosModern = Boolean(pk?.iosModern);
     const isUserSeat = i === 0;
     const seatWidth = isPhoneModern ? (isUserSeat ? 276 : 100) : 126;
     const seatHeight = isPhoneModern ? (isUserSeat ? 178 : 136) : 160;
@@ -14908,6 +14947,9 @@ function initTableLayout() {
     div.className = "player-seat";
     if (isPhoneModern) {
       div.classList.add(isUserSeat ? "phone-user-seat" : "phone-ai-seat");
+    }
+    if (isIosModern) {
+      div.classList.add("pp-ios-seat", isUserSeat ? "pp-ios-seat-user" : "pp-ios-seat-ai");
     }
     if (i === 0) div.classList.add("is-user");
     div.innerHTML = `
@@ -14924,7 +14966,11 @@ function initTableLayout() {
     div.dataset.seatWidth = String(seatWidth);
     div.dataset.seatHeight = String(seatHeight);
 
-    pk.table.appendChild(div);
+    if (isIosModern && isUserSeat && heroHost) {
+      heroHost.appendChild(div);
+    } else {
+      seatsHost.appendChild(div);
+    }
   }
 
   layoutPokerSeats();
@@ -14932,6 +14978,17 @@ function initTableLayout() {
 
 function layoutPokerSeats() {
   if (!pk.table) return;
+
+  if (pk?.iosModern) {
+    pk.table.querySelectorAll(".player-seat").forEach((seatDiv) => {
+      seatDiv.classList.remove("seat-top");
+      seatDiv.style.left = "";
+      seatDiv.style.top = "";
+      seatDiv.style.width = "";
+      seatDiv.style.height = "";
+    });
+    return;
+  }
 
   const tableWidth = pk.table.clientWidth || 900;
   const tableHeight = pk.table.clientHeight || 600;
@@ -14992,6 +15049,14 @@ function layoutPokerSeats() {
 
 function positionPokerControlsNearUser() {
   if (!pk?.table || !pk?.controls) return;
+  if (pk?.iosModern) {
+    pk.controls.style.left = "";
+    pk.controls.style.top = "";
+    pk.controls.style.bottom = "";
+    pk.controls.style.width = "";
+    pk.controls.style.transform = "";
+    return;
+  }
   if (pk?.phoneModern) {
     pk.controls.style.left = "10px";
     pk.controls.style.top = "auto";
@@ -15176,6 +15241,7 @@ function updateLegacyPokerActionControls(player) {
   pk.btnCall.style.display = toCall === 0 ? "none" : "block";
   pk.amtCall.innerText = toCall > 0 ? `$${toCall}` : "";
   if (pk.iosModern) {
+    pk.btnFold.textContent = "Fold";
     pk.btnCheck.textContent = "Check";
     pk.btnCall.textContent = toCall > 0 ? `Call ${Math.ceil(toCall)}` : "Call";
   }
@@ -15188,10 +15254,10 @@ function updateLegacyPokerActionControls(player) {
   const maxRaiseBy = Math.max(0, Math.floor(player.bank + player.bet - p_highestBet));
 
   if (shortBy > 0) {
-    pk.btnRaise.textContent = `Raise To $${targetBet} (Need $${Math.ceil(shortBy)} more)`;
+    pk.btnRaise.textContent = pk.iosModern ? `Need +$${Math.ceil(shortBy)}` : `Raise To $${targetBet} (Need $${Math.ceil(shortBy)} more)`;
     pk.btnRaise.title = `Not enough chips to raise. Max raise by: $${maxRaiseBy}.`;
   } else {
-    pk.btnRaise.textContent = `Raise To $${targetBet}`;
+    pk.btnRaise.textContent = pk.iosModern ? `Raise ${Math.max(10, raiseBy)}` : `Raise To $${targetBet}`;
     pk.btnRaise.title = "";
   }
   pk.btnRaise.disabled = p_playerRaiseUsedThisRound;

@@ -9774,158 +9774,349 @@ body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-poker-nativ
 }
 
 body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios {
-  background: #02070d !important;
+  background: #05090f !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .sage-brand {
+  display: none !important;
 }
 
 body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-table.poker-phone-ios-table {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  padding:
+    max(8px, env(safe-area-inset-top, 0px))
+    10px
+    calc(10px + env(safe-area-inset-bottom, 0px));
   background:
-    radial-gradient(120% 82% at 50% 18%, rgba(17, 32, 50, 0.65), rgba(4, 10, 17, 0.98) 63%, #02060b 100%),
-    linear-gradient(180deg, #070f1a 0%, #02060b 100%) !important;
+    radial-gradient(circle at 48% 16%, rgba(23, 49, 74, 0.58), rgba(6, 12, 20, 0.96) 52%, #04080e 100%),
+    linear-gradient(180deg, #0a1320 0%, #04080e 100%) !important;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .center-area {
-  top: 48.5%;
-  width: calc(100% - 24px);
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-table.poker-phone-ios-table::before,
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-table.poker-phone-ios-table::after {
+  display: none;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #pot-wrap {
-  margin-bottom: 8px;
-  padding: 4px 12px;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0;
+  padding: 4px 1px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(16, 32, 47, 0.62);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transform: none !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat .speech-bubble {
+  top: -16px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-avatar {
+  width: 42px;
+  height: 42px;
+  font-size: 22px;
+  margin-bottom: 3px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-cards {
+  min-height: 34px;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-cards .poker-card {
+  width: 22px;
+  height: 32px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-cards .poker-card small {
+  font-size: 8px;
+  top: 2px;
+  left: 2px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-info {
+  max-width: none;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-name {
+  font-size: 0.66rem;
+  color: rgba(195, 216, 232, 0.86);
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-ai .p-bank {
+  font-size: 0.84rem;
+  color: #eaf4fb;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-board {
+  border-radius: 14px;
+  border: 1px solid rgba(82, 118, 146, 0.45);
+  background: rgba(8, 18, 30, 0.78);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-community {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  justify-items: center;
+  min-height: 86px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-community .poker-card {
+  width: 100%;
+  max-width: 56px;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 0.72;
+  border-radius: 11px;
+  font-size: 20px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-community .poker-card small {
+  font-size: 13px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-pot {
+  justify-self: end;
   border-radius: 999px;
-  font-size: 0.82rem;
-  color: #d8eefe;
-  border-color: rgba(86, 129, 163, 0.5);
-  background: rgba(6, 15, 24, 0.72);
+  border: 1px solid rgba(112, 149, 177, 0.5);
+  background: rgba(6, 14, 23, 0.86);
+  padding: 4px 12px;
+  color: #e6f2fb;
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #pot-chips {
   display: none;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #comm-cards {
-  min-height: 86px;
-  gap: 5px;
-  margin-bottom: 8px;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #comm-cards .poker-card {
-  width: 60px;
-  height: 84px;
-  border-radius: 12px;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #comm-cards .poker-card.card-back {
-  border: 1px solid rgba(255, 255, 255, 0.66);
-  background:
-    linear-gradient(145deg, #ff5c5c, #ef3f3f),
-    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.18) 0 4px, rgba(255, 255, 255, 0.06) 4px 8px);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-status {
-  font-size: 0.78rem;
-  color: rgba(185, 211, 229, 0.94);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-ai-seat {
-  height: 124px;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-ai-seat .p-avatar {
-  width: 48px;
-  height: 48px;
-  font-size: 26px;
-  margin-bottom: 4px;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-ai-seat .p-name {
-  font-size: 0.67rem;
-  color: rgba(188, 210, 226, 0.82);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-ai-seat .p-bank {
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-status {
+  border-radius: 10px;
+  border: 1px solid rgba(72, 108, 136, 0.48);
+  background: rgba(9, 18, 30, 0.8);
+  min-height: 34px;
+  padding: 7px 10px;
+  text-align: center;
   font-size: 0.82rem;
-  color: rgba(236, 245, 252, 0.96);
+  color: rgba(190, 214, 230, 0.96);
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat {
-  width: min(302px, 78vw);
-  height: 184px;
-  gap: 12px;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls-wrap {
+  border-radius: 12px;
+  border: 1px solid rgba(73, 109, 137, 0.46);
+  background: rgba(8, 15, 25, 0.86);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat .p-avatar {
-  display: grid !important;
-  position: absolute;
-  right: 34px;
-  bottom: 58px;
-  width: 48px;
-  height: 48px;
-  margin: 0;
-  border: 1px solid rgba(150, 181, 205, 0.44);
-  background:
-    radial-gradient(circle at 35% 28%, rgba(118, 168, 205, 0.28), rgba(27, 52, 80, 0.9) 62%),
-    linear-gradient(180deg, #274560, #182b3d);
-  font-size: 26px;
-  z-index: 2;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat .p-cards .poker-card {
-  width: 84px;
-  height: 122px;
-  border-radius: 18px;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat .p-info {
-  width: 112px;
-  border-radius: 18px;
-  padding: 10px 8px 8px;
-  background: linear-gradient(180deg, rgba(8, 16, 27, 0.94), rgba(4, 9, 15, 0.96));
-  border: 1px solid rgba(92, 127, 156, 0.45);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat .p-hand-label {
-  margin: 0 0 8px;
-  font-size: 0.63rem;
-  color: rgba(194, 222, 243, 0.94);
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .player-seat.phone-user-seat .p-bank {
-  font-size: 1.68rem;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-controls {
-  bottom: calc(148px + env(safe-area-inset-bottom, 0px)) !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  background: rgba(6, 13, 21, 0.96);
-  border: 1px solid rgba(78, 114, 144, 0.54);
-  border-radius: 18px;
-  padding: 7px;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #btn-check,
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #btn-call {
-  grid-column: 1;
-}
-
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #btn-fold {
-  grid-column: 3;
-  font-size: 1.3rem;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+  transform: none !important;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-controls .raise-box {
-  grid-column: 2;
-  display: block;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls .btn-poker {
+  min-height: 44px;
+  border-radius: 12px;
+  font-size: 0.96rem;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-controls #raise-input {
-  display: none;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls .raise-box {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: 6px;
 }
 
-body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-controls #btn-raise {
-  min-height: 46px;
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls #raise-input {
+  min-height: 42px;
+  border-radius: 10px;
+  font-size: 1rem;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-controls #btn-raise {
+  min-height: 42px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-deal-overlay {
+  position: relative;
+  inset: auto;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(67, 101, 128, 0.45);
+  background: rgba(13, 31, 47, 0.7);
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-deal-overlay #msg-overlay {
+  margin: 0;
+  text-align: center;
+  font-size: 0.95rem;
+  min-height: 1.2em;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-deal-overlay #btn-deal.btn-lrg {
   width: 100%;
+  min-width: 0;
+  padding: 11px 16px;
+  font-size: 0.95rem;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-hero {
+  min-height: 0;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user {
+  width: 100% !important;
+  max-width: none;
+  height: auto !important;
+  border-radius: 14px;
+  border: 1px solid rgba(88, 123, 151, 0.46);
+  background: rgba(12, 24, 38, 0.86);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "hand avatar"
+    "cards info";
+  column-gap: 8px;
+  row-gap: 6px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-hand-label {
+  grid-area: hand;
+  margin: 0;
+  align-self: center;
+  justify-self: start;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-avatar {
+  grid-area: avatar;
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  font-size: 22px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-cards {
+  grid-area: cards;
+  justify-content: flex-start;
+  min-height: 0;
+  margin: 0;
+  gap: 8px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-cards .poker-card {
+  width: 74px;
+  height: 106px;
+  border-radius: 16px;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-info {
+  grid-area: info;
+  width: 108px;
+  max-width: none;
+  align-self: end;
+  border-radius: 14px;
+  padding: 8px 7px;
+  background: linear-gradient(180deg, rgba(11, 20, 31, 0.96), rgba(5, 10, 18, 0.98));
+  border: 1px solid rgba(90, 126, 153, 0.48);
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-name {
+  font-size: 0.75rem;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-bank {
+  margin-top: 2px;
+  font-size: 1.34rem;
+  color: #eef8ff;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #comm-cards.pp-ios-community {
+  min-height: 86px;
+  margin: 0;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #pot-wrap.pp-ios-pot {
+  margin: 0;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-status.pp-ios-status {
+  margin: 0;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #poker-controls.pp-ios-controls {
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #deal-overlay.pp-ios-deal-overlay {
+  position: relative !important;
+  inset: auto !important;
+  z-index: 2;
+  pointer-events: auto;
+  background: rgba(13, 31, 47, 0.7) !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #deal-overlay.pp-ios-deal-overlay #msg-overlay {
+  font-size: 0.95rem !important;
+  margin: 0 !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-avatar {
+  display: grid !important;
+}
+
+body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-ios-seat-user .p-cards .poker-card + .poker-card {
+  margin-left: 0 !important;
 }
 
 body.phone-embedded-mini-mode.game-fullscreen #casino-section,
