@@ -14839,8 +14839,6 @@ function loadAppPoker() {
   container.innerHTML = `
     <div class="poker-phone-exact-root">
       <main class="phone" id="pokerTable">
-        <button type="button" class="back" id="btnPokerBack">←</button>
-
         <section class="seats" id="seats"></section>
 
         <section class="board">
@@ -14883,7 +14881,6 @@ function loadAppPoker() {
   `;
 
   const ui = {
-    backBtn: container.querySelector("#btnPokerBack"),
     seatsEl: container.querySelector("#seats"),
     communityEl: container.querySelector("#community"),
     potEl: container.querySelector("#pot"),
@@ -15601,9 +15598,6 @@ function loadAppPoker() {
     renderUi();
   };
 
-  bind(ui.backBtn, "click", () => {
-    exitCasinoGameView();
-  });
   bind(ui.btnDeal, "click", startHand);
   bind(ui.btnFold, "click", () => act("Fold"));
   bind(ui.btnCheck, "click", () => act("Check"));
