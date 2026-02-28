@@ -56,6 +56,9 @@ const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
 const ADMIN_PANEL_MOBILE_MAX_WIDTH = 980;
 const MOBILE_BANK_PANEL_MAX_WIDTH = 980;
+const IS_APPLE_TOUCH_DEVICE =
+  /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const CURRENCY_SYMBOL = "S$";
 const USERNAME_STORAGE_KEY = "nows_username_v1";
 const USERNAME_STORAGE_FALLBACK_KEYS = Object.freeze([
@@ -6175,8 +6178,6 @@ const buyBtn = document.getElementById("buy");
 const buyAllBtn = document.getElementById("buyAll");
 const sellBtn = document.getElementById("sell");
 const sellAllBtn = document.getElementById("sellAll");
-const nextBtn = document.getElementById("next");
-const pauseBtn = document.getElementById("pause");
 
 function runTradingAction(action) {
   return () => {
@@ -6192,6 +6193,49 @@ if (buyBtn) buyBtn.addEventListener("click", runTradingAction(() => buy(1)));
 if (buyAllBtn) buyAllBtn.addEventListener("click", runTradingAction(() => buyAllShares()));
 if (sellBtn) sellBtn.addEventListener("click", runTradingAction(() => sell(1)));
 if (sellAllBtn) sellAllBtn.addEventListener("click", runTradingAction(() => sell(shares)));
+
+function bindTradingCoreControlButtons() {
+  const nextButton = document.getElementById("next");
+  if (nextButton && nextButton.dataset.boundTradingNext !== "1") {
+    nextButton.addEventListener("click", runTradingAction(() => stepMarket()));
+    nextButton.dataset.boundTradingNext = "1";
+  }
+
+  const pauseButton = document.getElementById("pause");
+  if (pauseButton && pauseButton.dataset.boundTradingPause !== "1") {
+    pauseButton.addEventListener(
+      "click",
+      runTradingAction(() => {
+        autoPlay = !autoPlay;
+        pauseButton.textContent = autoPlay ? "Pause" : "Play";
+      })
+    );
+    pauseButton.dataset.boundTradingPause = "1";
+  }
+}
+
+function ensureTradingCoreControlButtons() {
+  const controls = document.getElementById("controls");
+  if (!controls) return;
+
+  const ensureButton = (id, label) => {
+    let button = document.getElementById(id);
+    if (button) return button;
+    button = document.createElement("button");
+    button.id = id;
+    button.type = "button";
+    button.textContent = label;
+    controls.appendChild(button);
+    return button;
+  };
+
+  ensureButton("next", "Next Step");
+  const pauseButton = ensureButton("pause", autoPlay ? "Pause" : "Play");
+  pauseButton.textContent = autoPlay ? "Pause" : "Play";
+  bindTradingCoreControlButtons();
+}
+
+ensureTradingCoreControlButtons();
 
 function applyCarryCost() {
   if (shares <= 0) return;
@@ -6388,12 +6432,7 @@ function drawChart() {
 // =====================================================
 // =================== CONTROLS ========================
 // =====================================================
-if (nextBtn) nextBtn.addEventListener("click", runTradingAction(() => stepMarket()));
-
-if (pauseBtn) pauseBtn.addEventListener("click", runTradingAction(() => {
-  autoPlay = !autoPlay;
-  pauseBtn.textContent = autoPlay ? "Pause" : "Play";
-}));
+bindTradingCoreControlButtons();
 
 function startMarketInterval() {
   clearInterval(marketInterval);
@@ -10529,9 +10568,9 @@ function bindPhoneActionBar(root) {
   const actionBar = document.getElementById("phoneCasinoActionbar");
   const gameKey = String(phoneEmbedUiState.gameKey || "");
   if (actionBar) {
-    actionBar.hidden = gameKey === "roulette";
+    actionBar.hidden = gameKey === "roulette" || gameKey === "poker";
   }
-  if (gameKey === "roulette") return;
+  if (gameKey === "roulette" || gameKey === "poker") return;
 
   const balanceOut = document.getElementById("phoneActionBalance");
   const betInput = document.getElementById("phoneActionBetInput");
@@ -10805,6 +10844,7 @@ function applyPhoneEmbeddedGameEnhancement(gameKey = PHONE_EMBED_GAME_PARAM) {
     shell.classList.toggle("phone-casino-shell-roulette", normalizedGameKey === "roulette");
     shell.classList.toggle("phone-casino-shell-horse", normalizedGameKey === "horseracing");
     shell.classList.toggle("phone-casino-shell-mines", normalizedGameKey === "mines");
+    shell.classList.toggle("phone-casino-shell-poker-native", normalizedGameKey === "poker");
   }
   const container = document.getElementById("casino-container");
   if (!container) return;
@@ -10812,7 +10852,8 @@ function applyPhoneEmbeddedGameEnhancement(gameKey = PHONE_EMBED_GAME_PARAM) {
   if (!root) return;
   const isPlinkoNative = normalizedGameKey === "plinko" && root.id === "plinkoPhoneApp";
   const isHorseNative = normalizedGameKey === "horseracing" && root.id === "casino-horserace-screen";
-  const isNativeLayout = isPlinkoNative || isHorseNative;
+  const isPokerNative = normalizedGameKey === "poker" && root.classList.contains("poker-wrapper");
+  const isNativeLayout = isPlinkoNative || isHorseNative || isPokerNative;
   if (shell) {
     shell.classList.toggle("phone-casino-shell-plinko-native", isPlinkoNative);
   }
@@ -14772,10 +14813,11 @@ function loadAppPoker() {
   const container = document.getElementById("casino-container");
   if (!container) return;
   container.classList.add("casino-fullbleed", "poker-fullbleed");
+  const isPhoneIosModern = IS_PHONE_EMBED_MODE && IS_APPLE_TOUCH_DEVICE;
 
   container.innerHTML = `
-    <div class="poker-wrapper poker-phone-modern">
-      <div id="poker-table" class="poker-phone-modern-table">
+    <div class="poker-wrapper poker-phone-modern${isPhoneIosModern ? " poker-phone-ios" : ""}">
+      <div id="poker-table" class="poker-phone-modern-table${isPhoneIosModern ? " poker-phone-ios-table" : ""}">
         <div class="center-area">
           <div id="pot-wrap">Pot: $<span id="p_pot">0</span></div>
           <div id="pot-chips" aria-hidden="true"></div>
@@ -14818,8 +14860,13 @@ function loadAppPoker() {
     inputRaise: document.getElementById("raise-input"),
     amtCall: document.getElementById("amt-call"),
     table: document.getElementById("poker-table"),
-    phoneModern: true
+    phoneModern: true,
+    iosModern: isPhoneIosModern
   };
+  if (pk.iosModern && pk.btnFold) {
+    pk.btnFold.textContent = "↑";
+    pk.btnFold.title = "Fold";
+  }
 
   pk.btnDeal.onclick = startHand;
   pk.btnFold.onclick = () => act("Fold");
@@ -14890,19 +14937,21 @@ function layoutPokerSeats() {
   const tableHeight = pk.table.clientHeight || 600;
   if (pk?.phoneModern) {
     const topSeatCount = Math.max(1, MAX_SEATS - 1);
-    const topRowY = Math.round(tableHeight * 0.16);
-    const topSpanLeft = tableWidth * 0.04;
-    const topSpanWidth = tableWidth * 0.92;
+    const topRowY = Math.round(tableHeight * (pk.iosModern ? 0.18 : 0.16));
+    const topSpanLeft = tableWidth * 0.035;
+    const topSpanWidth = tableWidth * 0.93;
 
     for (let i = 0; i < MAX_SEATS; i++) {
       const seatDiv = pk.table.querySelectorAll(".player-seat")[i];
       if (!seatDiv) continue;
-      const seatWidth = Number(seatDiv.dataset.seatWidth || (i === 0 ? 276 : 100));
-      const seatHeight = Number(seatDiv.dataset.seatHeight || (i === 0 ? 178 : 136));
 
       if (i === 0) {
-        const userCenterX = tableWidth * 0.36;
-        const userCenterY = tableHeight * 0.91;
+        const seatWidth = Math.round(Math.max(236, Math.min(304, tableWidth * 0.76)));
+        const seatHeight = Math.round(Math.max(166, Math.min(188, tableHeight * 0.31)));
+        seatDiv.style.width = `${seatWidth}px`;
+        seatDiv.style.height = `${seatHeight}px`;
+        const userCenterX = tableWidth * 0.34;
+        const userCenterY = tableHeight * (pk.iosModern ? 0.9 : 0.91);
         seatDiv.classList.remove("seat-top");
         seatDiv.style.left = `${Math.round(userCenterX - seatWidth / 2)}px`;
         seatDiv.style.top = `${Math.round(userCenterY - seatHeight / 2)}px`;
@@ -14912,6 +14961,10 @@ function layoutPokerSeats() {
       const topSlot = i - 1;
       const ratio = topSeatCount <= 1 ? 0.5 : (topSlot + 0.5) / topSeatCount;
       const centerX = topSpanLeft + ratio * topSpanWidth;
+      const seatWidth = Math.round(Math.max(74, Math.min(96, tableWidth * 0.18)));
+      const seatHeight = Math.round(Math.max(110, Math.min(132, tableHeight * 0.24)));
+      seatDiv.style.width = `${seatWidth}px`;
+      seatDiv.style.height = `${seatHeight}px`;
       seatDiv.classList.add("seat-top");
       seatDiv.style.left = `${Math.round(centerX - seatWidth / 2)}px`;
       seatDiv.style.top = `${Math.round(topRowY - seatHeight / 2)}px`;
@@ -14942,7 +14995,7 @@ function positionPokerControlsNearUser() {
   if (pk?.phoneModern) {
     pk.controls.style.left = "10px";
     pk.controls.style.top = "auto";
-    pk.controls.style.bottom = `calc(170px + env(safe-area-inset-bottom, 0px))`;
+    pk.controls.style.bottom = `calc(${pk.iosModern ? 154 : 170}px + env(safe-area-inset-bottom, 0px))`;
     pk.controls.style.width = "calc(100% - 20px)";
     pk.controls.style.transform = "none";
     return;
@@ -14986,6 +15039,7 @@ function initPokerGame() {
 
   fillEmptySeats(5);
   updatePokerUI();
+  renderLegacyCommunityCards();
   positionPokerControlsNearUser();
 }
 
@@ -15098,7 +15152,7 @@ function startHand() {
 
   updateUI();
   pk.dealOverlay.classList.add("poker-hidden");
-  pk.comm.innerHTML = "";
+  renderLegacyCommunityCards();
   pk.status.innerText = "Pre-Flop";
 
   p_turnIndex = p_dealerIndex;
@@ -15121,6 +15175,10 @@ function updateLegacyPokerActionControls(player) {
   pk.btnCheck.style.display = toCall > 0 ? "none" : "block";
   pk.btnCall.style.display = toCall === 0 ? "none" : "block";
   pk.amtCall.innerText = toCall > 0 ? `$${toCall}` : "";
+  if (pk.iosModern) {
+    pk.btnCheck.textContent = "Check";
+    pk.btnCall.textContent = toCall > 0 ? `Call ${Math.ceil(toCall)}` : "Call";
+  }
 
   let raiseBy = Number.parseInt(pk.inputRaise.value, 10);
   if (Number.isNaN(raiseBy) || raiseBy < 10) raiseBy = 10;
@@ -15195,8 +15253,7 @@ function nextPhase() {
     return;
   }
 
-  pk.comm.innerHTML = "";
-  p_community.forEach((c) => renderPokerCardDiv(c, pk.comm));
+  renderLegacyCommunityCards();
   pk.status.innerText = ["Pre-Flop", "Flop", "Turn", "River"][p_phase];
 
   p_turnIndex = p_dealerIndex;
@@ -15517,6 +15574,24 @@ function renderPokerCardDiv(c, target) {
   d.className = `poker-card ${c.color}`;
   d.innerHTML = `${c.v}<small>${c.s}</small>`;
   target.appendChild(d);
+}
+
+function renderLegacyCommunityCards() {
+  if (!pk?.comm) return;
+  pk.comm.innerHTML = "";
+  if (pk.phoneModern) {
+    for (let i = 0; i < 5; i++) {
+      if (i < p_community.length) {
+        renderPokerCardDiv(p_community[i], pk.comm);
+      } else {
+        const placeholder = document.createElement("div");
+        placeholder.className = "poker-card card-back";
+        pk.comm.appendChild(placeholder);
+      }
+    }
+    return;
+  }
+  p_community.forEach((c) => renderPokerCardDiv(c, pk.comm));
 }
 
 function renderPokerCards(seatIdx, cards, hideAi = false) {
