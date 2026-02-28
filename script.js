@@ -54,6 +54,8 @@ const PHONE_EMBED_GAME_TITLES = {
 const HIGH_BET_RIG_THRESHOLD = 2000;
 const HIGH_BET_RIG_BASE_CHANCE = 0.14;
 const HIGH_BET_RIG_MAX_CHANCE = 0.78;
+const ADMIN_PANEL_MOBILE_MAX_WIDTH = 980;
+const MOBILE_BANK_PANEL_MAX_WIDTH = 980;
 const CURRENCY_SYMBOL = "S$";
 const USERNAME_STORAGE_KEY = "nows_username_v1";
 const USERNAME_STORAGE_FALLBACK_KEYS = Object.freeze([
@@ -656,8 +658,12 @@ function showBannedOverlay(message = "You are banned.") {
   clearAccountMessageQueue();
   if (typeof hideFirstLaunchUsernameOverlay === "function") hideFirstLaunchUsernameOverlay();
   if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
-  const loanPanel = document.getElementById("loan-panel");
-  if (loanPanel) loanPanel.classList.remove("open");
+  if (typeof closeBankPanel === "function") {
+    closeBankPanel();
+  } else {
+    const loanPanel = document.getElementById("loan-panel");
+    if (loanPanel) loanPanel.classList.remove("open");
+  }
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
   if (messageEl) messageEl.textContent = String(message || "You are banned.");
@@ -3975,6 +3981,7 @@ function openPhone(appName = "home") {
   phoneUi.overlay.classList.remove("hidden");
   phoneUi.overlay.classList.add("phone-opening");
   phoneUi.overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("phone-overlay-open");
   setPhoneApp(appName);
   phoneOverlayAnimTimer = setTimeout(() => {
     if (phoneUi.overlay) {
@@ -4028,6 +4035,7 @@ function closePhone() {
   }
   phoneUi.overlay.classList.add("hidden");
   phoneUi.overlay.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("phone-overlay-open");
 }
 
 function getPhoneAppNameFromPanel(panel) {
@@ -5704,8 +5712,12 @@ function setMobileGameOverlayVisibility(hidden) {
 }
 
 function enterCasinoGameView(title) {
-  const bankPanel = document.getElementById("loan-panel");
-  if (bankPanel) bankPanel.classList.remove("open");
+  if (typeof closeBankPanel === "function") {
+    closeBankPanel();
+  } else {
+    const bankPanel = document.getElementById("loan-panel");
+    if (bankPanel) bankPanel.classList.remove("open");
+  }
   syncCasinoLiveFeedVisibility();
 
   if (IS_PHONE_EMBED_MODE) {
@@ -6405,6 +6417,7 @@ const casinoSection = document.getElementById("casino-section");
 
 document.getElementById("casinoBtn").onclick = () => {
   hideCasinoKickoutOverlay();
+  closeBankPanel();
   const gate = getCasinoGateState();
   if (!gate.ok) {
     alert(gate.message);
@@ -6420,6 +6433,7 @@ document.getElementById("tradingBtn").onclick =
   document.getElementById("backToTrading").onclick = () => {
     hideCasinoKickoutOverlay();
     exitCasinoGameView();
+    closeBankPanel();
     casinoSection.style.display = "none";
     tradingSection.style.display = "block";
     syncHiddenAdminTriggerVisibility();
@@ -8845,15 +8859,20 @@ function startHiddenAdminLivePolling() {
 
 function syncHiddenAdminTriggerVisibility() {
   if (!hiddenAdminTriggerEl) return;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const adminBlockedOnPhone = IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= ADMIN_PANEL_MOBILE_MAX_WIDTH);
   const tradingRoot = document.getElementById("trading-section");
   const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
-  const shouldShow = tradingVisible && !usernameGateActive && !IS_PHONE_EMBED_MODE;
+  const shouldShow = tradingVisible && !usernameGateActive && !adminBlockedOnPhone;
   hiddenAdminTriggerEl.style.display = shouldShow ? "block" : "none";
   hiddenAdminTriggerEl.style.pointerEvents = shouldShow ? "auto" : "none";
   if (!shouldShow && hiddenAdminPanelOpen) closeHiddenAdminPanel();
 }
 
 async function openHiddenAdminPanel() {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const adminBlockedOnPhone = IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= ADMIN_PANEL_MOBILE_MAX_WIDTH);
+  if (adminBlockedOnPhone) return;
   if (!hiddenAdminOverlayEl) return;
   hiddenAdminOverlayEl.classList.remove("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
@@ -9635,12 +9654,39 @@ const bankPanel = document.getElementById("loan-panel");
 const bankToggleBtn = document.getElementById("bankToggleBtn");
 const closeBankBtn = document.getElementById("closeBankBtn");
 
-function toggleBank() {
-  bankPanel.classList.toggle("open");
+function isMobileBankViewport() {
+  if (IS_PHONE_EMBED_MODE) return false;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  return viewportWidth > 0 && viewportWidth <= MOBILE_BANK_PANEL_MAX_WIDTH;
 }
 
-bankToggleBtn.onclick = toggleBank;
-closeBankBtn.onclick = toggleBank;
+function setBankPanelOpen(nextOpen) {
+  if (!bankPanel) return;
+  const shouldOpen = Boolean(nextOpen);
+  bankPanel.classList.toggle("open", shouldOpen);
+  document.body.classList.toggle("bank-open-mobile", shouldOpen && isMobileBankViewport());
+}
+
+function closeBankPanel() {
+  setBankPanelOpen(false);
+}
+
+function toggleBank() {
+  if (!bankPanel) return;
+  const currentlyOpen = bankPanel.classList.contains("open");
+  setBankPanelOpen(!currentlyOpen);
+}
+
+if (bankToggleBtn) bankToggleBtn.onclick = toggleBank;
+if (closeBankBtn) closeBankBtn.onclick = closeBankPanel;
+setBankPanelOpen(false);
+window.addEventListener("resize", () => {
+  if (!bankPanel || !bankPanel.classList.contains("open")) {
+    document.body.classList.remove("bank-open-mobile");
+    return;
+  }
+  document.body.classList.toggle("bank-open-mobile", isMobileBankViewport());
+});
 
 // =====================================================
 // =================== CASINO ==========================
@@ -9837,7 +9883,9 @@ function resetPhoneEmbeddedUi() {
   const sheetBody = document.getElementById("phoneCasinoSheetBody");
   if (sheetBody) sheetBody.innerHTML = "";
   const shell = document.querySelector(".phone-casino-shell");
-  if (shell) shell.classList.remove("phone-casino-shell-roulette", "phone-casino-shell-plinko-native");
+  if (shell) {
+    shell.classList.remove("phone-casino-shell-roulette", "phone-casino-shell-plinko-native", "phone-casino-shell-mines");
+  }
   document.querySelectorAll("#casino-section .phone-casino-outside-brand").forEach((node) => node.remove());
   const actionBar = document.getElementById("phoneCasinoActionbar");
   if (actionBar) {
@@ -10710,7 +10758,8 @@ function fitPhoneGameIntoStage(root) {
     gameKey === "roulette" ||
     gameKey === "plinko" ||
     gameKey === "horseracing" ||
-    gameKey === "mines"
+    gameKey === "mines" ||
+    gameKey === "poker"
   ) {
     root.style.position = "absolute";
     root.style.left = "0px";
@@ -10755,6 +10804,7 @@ function applyPhoneEmbeddedGameEnhancement(gameKey = PHONE_EMBED_GAME_PARAM) {
   if (shell) {
     shell.classList.toggle("phone-casino-shell-roulette", normalizedGameKey === "roulette");
     shell.classList.toggle("phone-casino-shell-horse", normalizedGameKey === "horseracing");
+    shell.classList.toggle("phone-casino-shell-mines", normalizedGameKey === "mines");
   }
   const container = document.getElementById("casino-container");
   if (!container) return;
@@ -14724,8 +14774,8 @@ function loadAppPoker() {
   container.classList.add("casino-fullbleed", "poker-fullbleed");
 
   container.innerHTML = `
-    <div class="poker-wrapper">
-      <div id="poker-table">
+    <div class="poker-wrapper poker-phone-modern">
+      <div id="poker-table" class="poker-phone-modern-table">
         <div class="center-area">
           <div id="pot-wrap">Pot: $<span id="p_pot">0</span></div>
           <div id="pot-chips" aria-hidden="true"></div>
@@ -14767,7 +14817,8 @@ function loadAppPoker() {
     btnRaise: document.getElementById("btn-raise"),
     inputRaise: document.getElementById("raise-input"),
     amtCall: document.getElementById("amt-call"),
-    table: document.getElementById("poker-table")
+    table: document.getElementById("poker-table"),
+    phoneModern: true
   };
 
   pk.btnDeal.onclick = startHand;
@@ -14801,12 +14852,16 @@ function loadAppPoker() {
 }
 
 function initTableLayout() {
-  const seatWidth = 126;
-  const seatHeight = 160;
-
   for (let i = 0; i < MAX_SEATS; i++) {
+    const isPhoneModern = Boolean(pk?.phoneModern);
+    const isUserSeat = i === 0;
+    const seatWidth = isPhoneModern ? (isUserSeat ? 276 : 100) : 126;
+    const seatHeight = isPhoneModern ? (isUserSeat ? 178 : 136) : 160;
     const div = document.createElement("div");
     div.className = "player-seat";
+    if (isPhoneModern) {
+      div.classList.add(isUserSeat ? "phone-user-seat" : "phone-ai-seat");
+    }
     if (i === 0) div.classList.add("is-user");
     div.innerHTML = `
       <div class="p-avatar">${i === 0 ? "Y" : "S"}</div>
@@ -14833,6 +14888,36 @@ function layoutPokerSeats() {
 
   const tableWidth = pk.table.clientWidth || 900;
   const tableHeight = pk.table.clientHeight || 600;
+  if (pk?.phoneModern) {
+    const topSeatCount = Math.max(1, MAX_SEATS - 1);
+    const topRowY = Math.round(tableHeight * 0.16);
+    const topSpanLeft = tableWidth * 0.04;
+    const topSpanWidth = tableWidth * 0.92;
+
+    for (let i = 0; i < MAX_SEATS; i++) {
+      const seatDiv = pk.table.querySelectorAll(".player-seat")[i];
+      if (!seatDiv) continue;
+      const seatWidth = Number(seatDiv.dataset.seatWidth || (i === 0 ? 276 : 100));
+      const seatHeight = Number(seatDiv.dataset.seatHeight || (i === 0 ? 178 : 136));
+
+      if (i === 0) {
+        const userCenterX = tableWidth * 0.36;
+        const userCenterY = tableHeight * 0.91;
+        seatDiv.classList.remove("seat-top");
+        seatDiv.style.left = `${Math.round(userCenterX - seatWidth / 2)}px`;
+        seatDiv.style.top = `${Math.round(userCenterY - seatHeight / 2)}px`;
+        continue;
+      }
+
+      const topSlot = i - 1;
+      const ratio = topSeatCount <= 1 ? 0.5 : (topSlot + 0.5) / topSeatCount;
+      const centerX = topSpanLeft + ratio * topSpanWidth;
+      seatDiv.classList.add("seat-top");
+      seatDiv.style.left = `${Math.round(centerX - seatWidth / 2)}px`;
+      seatDiv.style.top = `${Math.round(topRowY - seatHeight / 2)}px`;
+    }
+    return;
+  }
   const rx = Math.max(300, Math.min(560, tableWidth * 0.44));
   const ry = Math.max(170, Math.min(320, tableHeight * 0.4));
 
@@ -14854,6 +14939,14 @@ function layoutPokerSeats() {
 
 function positionPokerControlsNearUser() {
   if (!pk?.table || !pk?.controls) return;
+  if (pk?.phoneModern) {
+    pk.controls.style.left = "10px";
+    pk.controls.style.top = "auto";
+    pk.controls.style.bottom = `calc(170px + env(safe-area-inset-bottom, 0px))`;
+    pk.controls.style.width = "calc(100% - 20px)";
+    pk.controls.style.transform = "none";
+    return;
+  }
   const userSeat = document.getElementById("seat-cards-0")?.parentElement;
   if (!userSeat) return;
 
@@ -15487,6 +15580,7 @@ function updatePokerUI() {
   if (!pk.pot) return;
   pk.pot.innerText = p_pot;
   renderPotChips();
+  const phoneAvatarPool = ["👻", "😶", "🧠", "🦊", "🐌", "🐯", "🐸", "🦈", "🤖", "🦉"];
 
   for (let i = 0; i < MAX_SEATS; i++) {
     const p = p_seats[i];
@@ -15510,7 +15604,13 @@ function updatePokerUI() {
       bankEl.innerText = `$${Math.floor(p.bank)}`;
       seatDiv.classList.add("seat-occupied");
       seatDiv.classList.remove("seat-empty");
-      if (avatarEl) avatarEl.textContent = i === 0 ? "Y" : p.name.charAt(0).toUpperCase();
+      if (avatarEl) {
+        if (pk?.phoneModern) {
+          avatarEl.textContent = i === 0 ? "🦝" : phoneAvatarPool[(i - 1 + phoneAvatarPool.length) % phoneAvatarPool.length];
+        } else {
+          avatarEl.textContent = i === 0 ? "Y" : p.name.charAt(0).toUpperCase();
+        }
+      }
       if (handEl) {
         if (i === 0 && p.inHand && !p.folded && p.hand && p.hand.length > 0) {
           handEl.innerText = evaluatePokerHand(p.hand, p_community).name;
@@ -16271,6 +16371,7 @@ function loadPlinkoPhoneApp() {
       startBalance: roundCurrency(cash)
     }
   };
+  const pendingBoardFitTimers = new Set();
   const binHitTimers = new WeakMap();
 
   const clampLocal = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -16679,6 +16780,28 @@ function loadPlinkoPhoneApp() {
     drawBoard();
   }
 
+  function clearPendingBoardFitTimers() {
+    pendingBoardFitTimers.forEach((timerId) => clearTimeout(timerId));
+    pendingBoardFitTimers.clear();
+  }
+
+  function scheduleBoardFitPass(delayMs = 0) {
+    const timerId = setTimeout(() => {
+      pendingBoardFitTimers.delete(timerId);
+      if (!root.isConnected) return;
+      fullInitBoard();
+    }, delayMs);
+    pendingBoardFitTimers.add(timerId);
+  }
+
+  function queueBoardFit() {
+    clearPendingBoardFitTimers();
+    fullInitBoard();
+    scheduleBoardFitPass(90);
+    scheduleBoardFitPass(240);
+    scheduleBoardFitPass(520);
+  }
+
   function closeMiniIfEmbedded() {
     if (IS_PHONE_EMBED_MODE) {
       try {
@@ -16727,7 +16850,7 @@ function loadPlinkoPhoneApp() {
   bind(els.closeBtn, "click", closeMiniIfEmbedded);
   bind(els.reloadBtn, "click", () => {
     resetRound();
-    fullInitBoard();
+    queueBoardFit();
   });
   bind(els.binsRow, "pointermove", (event) => {
     const bin = event.target.closest(".bin");
@@ -16742,11 +16865,19 @@ function loadPlinkoPhoneApp() {
   const onResize = () => {
     if (state.resizeRaf) cancelAnimationFrame(state.resizeRaf);
     state.resizeRaf = requestAnimationFrame(() => {
-      fullInitBoard();
+      state.resizeRaf = 0;
+      queueBoardFit();
     });
   };
   bind(window, "resize", onResize);
   bind(window, "orientationchange", onResize);
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === "function") {
+    bind(window.visualViewport, "resize", onResize);
+  }
+  bind(window, "pageshow", queueBoardFit);
+  bind(document, "visibilitychange", () => {
+    if (document.visibilityState === "visible") queueBoardFit();
+  });
 
   const loop = (ts) => {
     if (!state.lastTs) state.lastTs = ts;
@@ -16762,7 +16893,7 @@ function loadPlinkoPhoneApp() {
   els.difficulty.value = state.difficulty;
   els.autoSpeedValue.textContent = `${Math.round(parsePositive(els.autoSpeed.value, 400))}ms`;
   updateStats();
-  fullInitBoard();
+  queueBoardFit();
   updateControls();
   state.frameRaf = requestAnimationFrame(loop);
 
@@ -16771,6 +16902,7 @@ function loadPlinkoPhoneApp() {
     if (state.frameRaf) cancelAnimationFrame(state.frameRaf);
     if (state.resizeRaf) cancelAnimationFrame(state.resizeRaf);
     if (state.hitTimer) clearTimeout(state.hitTimer);
+    clearPendingBoardFitTimers();
     cleanupFns.forEach((fn) => fn());
     container.classList.remove("casino-fullbleed", "plinko-phone-fullbleed");
   };
