@@ -9734,6 +9734,21 @@ document.querySelectorAll(".casino-game-btn").forEach((btn) => {
   btn.onclick = () => loadCasinoGame(btn.dataset.game);
 });
 
+function isPokerUnavailableOnPhone() {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  return IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= 980);
+}
+
+function syncPokerCasinoButtonVisibility() {
+  const pokerBtn = document.querySelector('#casino-games .casino-game-btn[data-game="poker"]');
+  if (!pokerBtn) return;
+  const blocked = isPokerUnavailableOnPhone();
+  pokerBtn.hidden = blocked;
+}
+
+syncPokerCasinoButtonVisibility();
+window.addEventListener("resize", syncPokerCasinoButtonVisibility);
+
 function loadCasinoGame(game) {
   syncHiddenAdminTriggerVisibility();
   activeCasinoGameKey = String(game || "lobby").toLowerCase();
@@ -9745,6 +9760,12 @@ function loadCasinoGame(game) {
   }
   if (IS_PHONE_EMBED_MODE) {
     resetPhoneEmbeddedUi();
+  }
+  if (activeCasinoGameKey === "poker" && isPokerUnavailableOnPhone()) {
+    activeCasinoGameKey = "lobby";
+    syncCasinoLiveFeedVisibility();
+    alert("Poker is desktop-only right now.");
+    return;
   }
   const casinoContainer = document.getElementById("casino-container");
   if (casinoContainer) {
