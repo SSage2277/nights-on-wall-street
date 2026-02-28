@@ -9736,7 +9736,7 @@ document.querySelectorAll(".casino-game-btn").forEach((btn) => {
 
 function isPokerUnavailableOnPhone() {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  return IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= 980);
+  return IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= 980 && !IS_APPLE_TOUCH_DEVICE);
 }
 
 function syncPokerCasinoButtonVisibility() {
@@ -9810,8 +9810,7 @@ function loadCasinoGame(game) {
   }
   if (game === "poker") {
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-    const useIphonePokerLayout =
-      IS_APPLE_TOUCH_DEVICE && (IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= 980));
+    const useIphonePokerLayout = IS_APPLE_TOUCH_DEVICE && viewportWidth > 0 && viewportWidth <= 980;
     if (useIphonePokerLayout) loadAppPoker();
     else loadCasinoPoker();
     enterCasinoGameView("Poker");
@@ -14837,124 +14836,789 @@ function loadAppPoker() {
   const container = document.getElementById("casino-container");
   if (!container) return;
   container.classList.add("casino-fullbleed", "poker-fullbleed");
-  const pokerViewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const isPhoneIosModern =
-    IS_APPLE_TOUCH_DEVICE && (IS_PHONE_EMBED_MODE || (pokerViewportWidth > 0 && pokerViewportWidth <= 980));
+  container.innerHTML = `
+    <div class="poker-phone-exact-root">
+      <main class="phone" id="pokerTable">
+        <button type="button" class="back" id="btnPokerBack">←</button>
 
-  if (isPhoneIosModern) {
-    container.innerHTML = `
-      <div class="poker-wrapper poker-phone-modern poker-phone-ios">
-        <main id="poker-table" class="poker-phone-modern-table poker-phone-ios-table">
-          <section id="poker-ios-seats" class="pp-ios-seats"></section>
+        <section class="seats" id="seats"></section>
 
-          <section class="pp-ios-board">
-            <div id="comm-cards" class="pp-ios-community"></div>
-            <div id="pot-wrap" class="pp-ios-pot">Pot: $<span id="p_pot">0</span></div>
-            <div id="pot-chips" aria-hidden="true"></div>
-          </section>
+        <section class="board">
+          <div class="community" id="community"></div>
+          <div class="pot" id="pot">0</div>
+        </section>
 
-          <div id="poker-status" class="pp-ios-status">Waiting for game...</div>
+        <div class="status" id="status">Waiting for game...</div>
 
-          <section class="pp-ios-controls-wrap">
-            <div id="poker-controls" class="poker-hidden pp-ios-controls">
-              <button id="btn-fold" class="btn-poker red">Fold</button>
-              <button id="btn-check" class="btn-poker">Check</button>
-              <button id="btn-call" class="btn-poker">Call <span id="amt-call"></span></button>
-              <div class="raise-box">
-                <input type="number" id="raise-input" value="50" step="10">
-                <button id="btn-raise" class="btn-poker gold">Raise</button>
-              </div>
+        <section class="controls-wrap">
+          <div id="controls" class="controls hidden">
+            <div class="action-row">
+              <button id="btnFold" class="btn danger">Fold</button>
+              <button id="btnCheck" class="btn">Check</button>
+              <button id="btnCall" class="btn">Call <span id="amtCall"></span></button>
             </div>
-
-            <div id="deal-overlay" class="pp-ios-deal-overlay">
-              <div id="msg-overlay"></div>
-              <button id="btn-deal" class="btn-lrg">Deal Hand</button>
-            </div>
-          </section>
-
-          <section id="poker-ios-hero" class="pp-ios-hero"></section>
-        </main>
-      </div>
-    `;
-  } else {
-    container.innerHTML = `
-      <div class="poker-wrapper poker-phone-modern">
-        <div id="poker-table" class="poker-phone-modern-table">
-          <div class="center-area">
-            <div id="pot-wrap">Pot: $<span id="p_pot">0</span></div>
-            <div id="pot-chips" aria-hidden="true"></div>
-            <div id="comm-cards"></div>
-            <div id="poker-status">Waiting for game...</div>
-          </div>
-
-          <div id="deal-overlay">
-            <div id="msg-overlay"></div>
-            <button id="btn-deal" class="btn-lrg">Deal Hand</button>
-          </div>
-
-          <div id="poker-controls" class="poker-hidden">
-            <button id="btn-fold" class="btn-poker red">Fold</button>
-            <button id="btn-check" class="btn-poker">Check</button>
-            <button id="btn-call" class="btn-poker">Call <span id="amt-call"></span></button>
-            <div class="raise-box">
-              <input type="number" id="raise-input" value="50" step="10">
-              <button id="btn-raise" class="btn-poker gold">Raise</button>
+            <div class="raise-row">
+              <input type="number" id="raiseInput" value="50" step="10" min="10" />
+              <button id="btnRaise" class="btn gold">Raise</button>
             </div>
           </div>
-        </div>
-      </div>
-    `;
+
+          <div id="dealOverlay" class="deal-overlay">
+            <div id="msgOverlay" class="msg-overlay">Ready?</div>
+            <button id="btnDeal" class="btn-lrg">Deal Hand</button>
+            <button id="btnRestart" class="btn-lrg hidden" disabled>Restart Game</button>
+          </div>
+        </section>
+
+        <section class="hero-area">
+          <div class="hero-cards" id="heroCards"></div>
+          <div class="hero-meta">
+            <div class="hand-label" id="handLabel">High Card</div>
+            <div class="hero-badge" id="heroBadge">Y</div>
+            <div class="hero-stack" id="heroStack">0</div>
+          </div>
+        </section>
+      </main>
+    </div>
+  `;
+
+  const ui = {
+    backBtn: container.querySelector("#btnPokerBack"),
+    seatsEl: container.querySelector("#seats"),
+    communityEl: container.querySelector("#community"),
+    potEl: container.querySelector("#pot"),
+    statusEl: container.querySelector("#status"),
+    controlsEl: container.querySelector("#controls"),
+    btnFold: container.querySelector("#btnFold"),
+    btnCheck: container.querySelector("#btnCheck"),
+    btnCall: container.querySelector("#btnCall"),
+    btnRaise: container.querySelector("#btnRaise"),
+    amtCall: container.querySelector("#amtCall"),
+    raiseInput: container.querySelector("#raiseInput"),
+    heroCardsEl: container.querySelector("#heroCards"),
+    heroStackEl: container.querySelector("#heroStack"),
+    handLabelEl: container.querySelector("#handLabel"),
+    heroBadgeEl: container.querySelector("#heroBadge"),
+    dealOverlay: container.querySelector("#dealOverlay"),
+    msgOverlay: container.querySelector("#msgOverlay"),
+    btnDeal: container.querySelector("#btnDeal")
+  };
+
+  if (
+    !ui.seatsEl ||
+    !ui.communityEl ||
+    !ui.potEl ||
+    !ui.statusEl ||
+    !ui.controlsEl ||
+    !ui.btnFold ||
+    !ui.btnCheck ||
+    !ui.btnCall ||
+    !ui.btnRaise ||
+    !ui.amtCall ||
+    !ui.raiseInput ||
+    !ui.heroCardsEl ||
+    !ui.heroStackEl ||
+    !ui.handLabelEl ||
+    !ui.heroBadgeEl ||
+    !ui.dealOverlay ||
+    !ui.msgOverlay ||
+    !ui.btnDeal
+  ) {
+    container.innerHTML = `<div style="padding:14px;color:#fff">Poker failed to load.</div>`;
+    return;
   }
-  addSageBrand(container.querySelector(".poker-wrapper"), "top-left");
 
-  pk = {
-    pot: document.getElementById("p_pot"),
-    chips: document.getElementById("pot-chips"),
-    status: document.getElementById("poker-status"),
-    comm: document.getElementById("comm-cards"),
-    dealOverlay: document.getElementById("deal-overlay"),
-    msgOverlay: document.getElementById("msg-overlay"),
-    btnDeal: document.getElementById("btn-deal"),
-    controls: document.getElementById("poker-controls"),
-    btnFold: document.getElementById("btn-fold"),
-    btnCheck: document.getElementById("btn-check"),
-    btnCall: document.getElementById("btn-call"),
-    btnRaise: document.getElementById("btn-raise"),
-    inputRaise: document.getElementById("raise-input"),
-    amtCall: document.getElementById("amt-call"),
-    table: document.getElementById("poker-table"),
-    seatsHost: document.getElementById("poker-ios-seats"),
-    heroHost: document.getElementById("poker-ios-hero"),
-    phoneModern: true,
-    iosModern: isPhoneIosModern
+  const MAX_SEATS_LOCAL = 6;
+  const SUITS_LOCAL = ["♠", "♥", "♦", "♣"];
+  const VALUES_LOCAL = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+  const BOT_NAMES_LOCAL = [
+    "Spike", "Butch", "Slick", "Lefty", "Tiny", "Moose", "Hawk", "Gator",
+    "Reno", "Dakota", "Brooklyn", "Jersey", "Cash", "Chance", "Joker",
+    "Bishop", "King", "Sarge", "Cap", "Tank", "Dozer", "Hammer", "Smiley",
+    "Red", "Blue", "Shadow", "Phantom", "Wolf", "Fox", "Cobra",
+    "Blaze", "Sparky", "Boomer", "Buster", "Ziggy", "Bubba", "Muggsy",
+    "Bugsy", "Vinnie", "Sal", "Ringo", "Dutch", "Cassidy", "Yankee",
+    "Rebel", "Gunner", "Pistol", "Trigger", "Nitro", "Brick"
+  ];
+  const ARCHETYPES_LOCAL = {
+    Shark: { vpip: 0.25, pfr: 0.7, bluff: 0.15, aggr: 0.7 },
+    Fish: { vpip: 0.55, pfr: 0.05, bluff: 0.05, aggr: 0.1 },
+    Station: { vpip: 0.7, pfr: 0.0, bluff: 0.0, aggr: 0.0 },
+    Maniac: { vpip: 0.8, pfr: 0.8, bluff: 0.6, aggr: 0.9 },
+    Bully: { vpip: 0.45, pfr: 0.9, bluff: 0.7, aggr: 0.8 },
+    Rock: { vpip: 0.1, pfr: 0.05, bluff: 0.0, aggr: 0.2 },
+    Nit: { vpip: 0.05, pfr: 0.02, bluff: 0.0, aggr: 0.1 },
+    Loose: { vpip: 0.5, pfr: 0.2, bluff: 0.1, aggr: 0.3 },
+    Bluffer: { vpip: 0.35, pfr: 0.5, bluff: 0.8, aggr: 0.6 }
   };
 
-  pk.btnDeal.onclick = startHand;
-  pk.btnFold.onclick = () => act("Fold");
-  pk.btnCheck.onclick = () => act("Check");
-  pk.btnCall.onclick = () => act("Call");
-  pk.btnRaise.onclick = () => act("Raise");
-  pk.inputRaise.oninput = () => {
-    const current = p_seats[p_turnIndex];
-    if (!current || current.isAi) return;
-    updateLegacyPokerActionControls(current);
+  class PhonePokerCard {
+    constructor(suit, value) {
+      this.s = suit;
+      this.v = value;
+      this.r = VALUES_LOCAL.indexOf(value) + 2;
+    }
+
+    get color() {
+      return this.s === "♥" || this.s === "♦" ? "red" : "black";
+    }
+  }
+
+  let deck = [];
+  let community = [];
+  let pot = 0;
+  let highestBet = 0;
+  let turnIndex = 0;
+  let dealerIndex = 0;
+  let phase = 0;
+  let actionsTaken = 0;
+  let pendingTableRotation = false;
+  let aiTimeoutId = null;
+  let disposed = false;
+  const seats = new Array(MAX_SEATS_LOCAL).fill(null);
+  const seatUi = {};
+  const timeouts = new Set();
+  const listeners = [];
+
+  const bind = (node, event, handler, options) => {
+    if (!node) return;
+    node.addEventListener(event, handler, options);
+    listeners.push(() => node.removeEventListener(event, handler, options));
   };
 
-  initTableLayout();
-  initPokerGame();
-
-  const onPokerResize = () => {
-    layoutPokerSeats();
-    positionPokerControlsNearUser();
+  const schedule = (fn, ms) => {
+    const id = window.setTimeout(() => {
+      timeouts.delete(id);
+      if (!disposed) fn();
+    }, ms);
+    timeouts.add(id);
+    return id;
   };
-  window.addEventListener("resize", onPokerResize);
+
+  const syncHeroCash = () => {
+    const hero = seats[0];
+    if (!hero) return;
+    cash = roundCurrency(Math.max(0, hero.bank));
+    updateUI();
+    updateBlackjackCash();
+    if (typeof updateFullscreenCash === "function") updateFullscreenCash();
+    if (typeof queuePersistFlush === "function") queuePersistFlush();
+  };
+
+  const initialFromName = (name) => {
+    const trimmed = String(name || "").trim();
+    return trimmed ? trimmed[0].toUpperCase() : "?";
+  };
+
+  const createDeck = () => {
+    const cards = [];
+    for (const suit of SUITS_LOCAL) {
+      for (const value of VALUES_LOCAL) {
+        cards.push(new PhonePokerCard(suit, value));
+      }
+    }
+    return cards;
+  };
+
+  const shuffle = (arr) => {
+    const out = [...arr];
+    for (let i = out.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  };
+
+  const generateBot = (id) => {
+    const types = Object.keys(ARCHETYPES_LOCAL);
+    const archetype = types[Math.floor(Math.random() * types.length)];
+    return {
+      id,
+      name: BOT_NAMES_LOCAL[Math.floor(Math.random() * BOT_NAMES_LOCAL.length)],
+      isAi: true,
+      bank: 500 + Math.floor(Math.random() * 1500),
+      hand: [],
+      bet: 0,
+      folded: false,
+      inHand: false,
+      reveal: false,
+      raisesThisStreet: 0,
+      style: archetype,
+      stats: ARCHETYPES_LOCAL[archetype]
+    };
+  };
+
+  const fillEmptySeats = (count) => {
+    let filled = 0;
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      if (seats[i] === null && filled < count && Math.random() < 0.8) {
+        seats[i] = generateBot(i);
+        filled += 1;
+      }
+    }
+  };
+
+  const formatHoleCards = (cards) => {
+    if (!cards || cards.length === 0) return "";
+    return cards.map((card) => `${card.v}${card.s}`).join(" ");
+  };
+
+  const renderCardMarkup = (card, isBack = false, compact = false) => {
+    if (isBack) {
+      return `<article class="card back ${compact ? "small" : ""}"></article>`;
+    }
+    return `
+      <article class="card face ${card.color} ${compact ? "small" : ""}">
+        <div class="rank">${card.v}</div>
+        <div class="suit">${card.s}</div>
+      </article>
+    `;
+  };
+
+  const evaluateHand = (hand, comm) => {
+    const all = hand.concat(comm);
+    const counts = {};
+    all.forEach((card) => {
+      counts[card.r] = (counts[card.r] || 0) + 1;
+    });
+    const ranks = all.map((card) => card.r).sort((a, b) => b - a);
+    const getKickers = (n, exclude) => ranks.filter((rank) => !exclude.includes(rank)).slice(0, n);
+    const getStraight = (cards) => {
+      const unique = [...new Set(cards.map((card) => card.r))].sort((a, b) => b - a);
+      for (let i = 0; i < unique.length - 4; i += 1) {
+        if (unique[i] - unique[i + 4] === 4) return unique[i];
+      }
+      if (unique.includes(14) && unique.includes(2) && unique.includes(3) && unique.includes(4) && unique.includes(5)) return 5;
+      return 0;
+    };
+
+    const suits = {};
+    all.forEach((card) => {
+      suits[card.s] = (suits[card.s] || 0) + 1;
+    });
+    const flushSuit = Object.keys(suits).find((suit) => suits[suit] >= 5);
+    let flushCards = [];
+    if (flushSuit) {
+      flushCards = all.filter((card) => card.s === flushSuit);
+      const sfHigh = getStraight(flushCards);
+      if (sfHigh > 0) return { tier: 8, kickers: [sfHigh], name: "Straight Flush" };
+    }
+
+    const quads = Object.keys(counts).filter((rank) => counts[rank] === 4).map(Number).sort((a, b) => b - a);
+    const trips = Object.keys(counts).filter((rank) => counts[rank] === 3).map(Number).sort((a, b) => b - a);
+    const pairs = Object.keys(counts).filter((rank) => counts[rank] === 2).map(Number).sort((a, b) => b - a);
+
+    if (quads.length > 0) return { tier: 7, kickers: [quads[0], ...getKickers(1, [quads[0]])], name: "Four of a Kind" };
+    if (trips.length > 0 && (trips.length >= 2 || pairs.length > 0)) {
+      const trip = trips[0];
+      const pair = trips.length >= 2 ? trips[1] : pairs[0];
+      return { tier: 6, kickers: [trip, pair], name: "Full House" };
+    }
+    if (flushSuit) {
+      const top5 = flushCards.map((card) => card.r).sort((a, b) => b - a).slice(0, 5);
+      return { tier: 5, kickers: top5, name: "Flush" };
+    }
+    const straightHigh = getStraight(all);
+    if (straightHigh > 0) return { tier: 4, kickers: [straightHigh], name: "Straight" };
+    if (trips.length > 0) return { tier: 3, kickers: [trips[0], ...getKickers(2, [trips[0]])], name: "Three of a Kind" };
+    if (pairs.length >= 2) return { tier: 2, kickers: [pairs[0], pairs[1], ...getKickers(1, [pairs[0], pairs[1]])], name: "Two Pair" };
+    if (pairs.length === 1) return { tier: 1, kickers: [pairs[0], ...getKickers(3, [pairs[0]])], name: "Pair" };
+    return { tier: 0, kickers: getKickers(5, []), name: "High Card" };
+  };
+
+  const compareHands = (a, b) => {
+    if (a.tier > b.tier) return 1;
+    if (b.tier > a.tier) return -1;
+    const maxLen = Math.max(a.kickers.length, b.kickers.length);
+    for (let i = 0; i < maxLen; i += 1) {
+      const ka = a.kickers[i] || 0;
+      const kb = b.kickers[i] || 0;
+      if (ka > kb) return 1;
+      if (kb > ka) return -1;
+    }
+    return 0;
+  };
+
+  const buildSeatLayout = () => {
+    ui.seatsEl.innerHTML = "";
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      const node = document.createElement("div");
+      node.className = "seat";
+      node.innerHTML = `
+        <div class="speech-bubble" id="bubble-${i}"></div>
+        <div class="avatar" id="avatar-${i}">?</div>
+        <div class="mini-cards" id="cards-${i}"></div>
+        <div class="name" id="name-${i}">Empty</div>
+        <div class="stack" id="stack-${i}">-</div>
+        <div class="style" id="style-${i}"></div>
+        <div class="dealer-dot" id="dealer-${i}">D</div>
+        <div class="fold-tag" id="fold-${i}">Fold</div>
+      `;
+      ui.seatsEl.appendChild(node);
+      seatUi[i] = {
+        root: node,
+        bubble: node.querySelector(`#bubble-${i}`),
+        avatar: node.querySelector(`#avatar-${i}`),
+        cards: node.querySelector(`#cards-${i}`),
+        name: node.querySelector(`#name-${i}`),
+        stack: node.querySelector(`#stack-${i}`),
+        style: node.querySelector(`#style-${i}`),
+        dealer: node.querySelector(`#dealer-${i}`),
+        fold: node.querySelector(`#fold-${i}`)
+      };
+    }
+  };
+
+  const renderCommunity = () => {
+    const slots = new Array(5).fill(null).map((_, index) => community[index] || null);
+    ui.communityEl.innerHTML = slots
+      .map((card) => (card ? renderCardMarkup(card) : '<article class="card back"></article>'))
+      .join("");
+  };
+
+  const renderHero = () => {
+    const hero = seats[0];
+    if (!hero) return;
+    ui.heroCardsEl.innerHTML = hero.hand.map((card) => renderCardMarkup(card)).join("");
+    ui.heroStackEl.textContent = Math.floor(hero.bank);
+    ui.heroBadgeEl.textContent = initialFromName(hero.name);
+    const all = hero.hand.concat(community);
+    if (all.length >= 5) {
+      ui.handLabelEl.textContent = evaluateHand(hero.hand, community).name;
+    } else {
+      ui.handLabelEl.textContent = "High Card";
+    }
+  };
+
+  const renderSeatCards = (player, seatIndex) => {
+    const bucket = seatUi[seatIndex]?.cards;
+    if (!bucket) return;
+    bucket.innerHTML = "";
+    if (!player || !player.inHand) return;
+    player.hand.forEach((card) => {
+      const hideAi = player.isAi && !player.reveal;
+      bucket.insertAdjacentHTML("beforeend", renderCardMarkup(card, hideAi, true));
+    });
+  };
+
+  const setDealerMarker = () => {
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      const marker = seatUi[i]?.dealer;
+      if (!marker) continue;
+      marker.classList.toggle("show", dealerIndex === i);
+    }
+  };
+
+  const renderUi = () => {
+    ui.potEl.textContent = Math.floor(pot);
+    renderCommunity();
+    renderHero();
+    setDealerMarker();
+
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      const seat = seatUi[i];
+      if (!seat) continue;
+      const player = seats[i];
+      seat.root.classList.remove("fold", "active", "winner");
+      if (!player) {
+        seat.name.textContent = "Empty";
+        seat.stack.textContent = "-";
+        seat.style.textContent = "";
+        seat.avatar.textContent = "?";
+        seat.cards.innerHTML = "";
+        seat.fold.classList.remove("show");
+        continue;
+      }
+
+      seat.name.textContent = player.name;
+      seat.stack.textContent = Math.floor(player.bank);
+      seat.style.textContent = player.style;
+      seat.avatar.textContent = initialFromName(player.name);
+      if (player.folded) {
+        seat.root.classList.add("fold");
+        seat.fold.classList.add("show");
+      } else {
+        seat.fold.classList.remove("show");
+      }
+      if (turnIndex === i) seat.root.classList.add("active");
+      renderSeatCards(player, i);
+    }
+  };
+
+  const setControlsDisabled = (disabled) => {
+    ui.btnFold.disabled = disabled;
+    ui.btnCheck.disabled = disabled;
+    ui.btnCall.disabled = disabled;
+    ui.btnRaise.disabled = disabled;
+    ui.raiseInput.disabled = disabled;
+  };
+
+  const say = (seatIndex, text) => {
+    const bubble = seatUi[seatIndex]?.bubble;
+    if (!bubble) return;
+    bubble.textContent = text;
+    bubble.classList.add("show");
+    schedule(() => bubble.classList.remove("show"), 1500);
+  };
+
+  const draw = () => deck.pop();
+
+  const findNextActivePlayer = () => {
+    let checked = 0;
+    do {
+      turnIndex = (turnIndex + 1) % MAX_SEATS_LOCAL;
+      checked += 1;
+      if (checked > MAX_SEATS_LOCAL + 2) return;
+    } while (!seats[turnIndex] || !seats[turnIndex].inHand || seats[turnIndex].folded);
+  };
+
+  const getActivePlayers = () => seats.filter((player) => player && player.inHand && !player.folded);
+
+  const nextPhase = () => {
+    actionsTaken = 0;
+    highestBet = 0;
+    seats.forEach((player) => {
+      if (!player) return;
+      player.bet = 0;
+      player.raisesThisStreet = 0;
+    });
+
+    phase += 1;
+    if (phase === 1) community.push(draw(), draw(), draw());
+    else if (phase === 2) community.push(draw());
+    else if (phase === 3) community.push(draw());
+    else {
+      endRound(false, null);
+      return;
+    }
+
+    ui.statusEl.textContent = ["Pre-Flop", "Flop", "Turn", "River"][phase];
+    turnIndex = dealerIndex;
+    findNextActivePlayer();
+    nextTurn();
+  };
+
+  const act = (action) => {
+    const player = seats[turnIndex];
+    if (!player) return;
+    actionsTaken += 1;
+
+    if (action === "Raise" && (player.raisesThisStreet || 0) >= 2) {
+      action = highestBet > player.bet ? "Call" : "Check";
+    }
+
+    if (action === "Raise") {
+      let raiseBy = Number.parseInt(ui.raiseInput.value, 10);
+      if (player.isAi) raiseBy = Math.max(20, Math.floor(pot * 0.5));
+      if (Number.isNaN(raiseBy) || raiseBy < 10) raiseBy = 10;
+
+      const target = highestBet + raiseBy;
+      const added = target - player.bet;
+      if (player.bank >= added) {
+        player.bank -= added;
+        player.bet += added;
+        pot += added;
+        highestBet = player.bet;
+        player.raisesThisStreet = (player.raisesThisStreet || 0) + 1;
+        actionsTaken = 0;
+        if (player.id !== 0) say(player.id, `Raise ${raiseBy}`);
+      } else {
+        action = "Call";
+      }
+    }
+
+    if (action === "Fold") {
+      player.folded = true;
+      if (player.id !== 0) say(player.id, "Fold");
+    } else if (action === "Check") {
+      if (player.id !== 0) say(player.id, "Check");
+    } else if (action === "Call") {
+      const amount = Math.max(0, highestBet - player.bet);
+      const pay = Math.min(amount, player.bank);
+      player.bank -= pay;
+      player.bet += pay;
+      pot += pay;
+      if (player.id !== 0) say(player.id, "Call");
+    }
+
+    syncHeroCash();
+
+    const activePlayers = getActivePlayers();
+    const allMatched = activePlayers.every((entry) => entry.bet === highestBet || entry.bank === 0);
+    if (allMatched && actionsTaken >= activePlayers.length) {
+      nextPhase();
+      return;
+    }
+    findNextActivePlayer();
+    nextTurn();
+  };
+
+  const rateHoleCards = (hand) => {
+    if (!hand || hand.length < 2) return 0;
+    const c1 = hand[0];
+    const c2 = hand[1];
+    let score = c1.r + c2.r;
+    if (c1.r === c2.r) score += 25;
+    if (c1.s === c2.s) score += 5;
+    if (Math.abs(c1.r - c2.r) === 1) score += 5;
+    return Math.min(100, score * 2);
+  };
+
+  const aiMove = (player) => {
+    const toCall = Math.max(0, highestBet - player.bet);
+    const potOdds = toCall / (pot + toCall || 1);
+    let strength = 0;
+    if (phase === 0) {
+      strength = rateHoleCards(player.hand);
+    } else {
+      const handEval = evaluateHand(player.hand, community);
+      strength = handEval.tier * 12 + (handEval.kickers[0] || 0) / 2;
+      if (handEval.tier >= 4) strength = 95;
+    }
+
+    const stats = player.stats;
+    const roll = Math.random();
+    let move = "Fold";
+
+    if (toCall === 0) {
+      if (strength > 60 || (roll < stats.bluff && strength < 30)) {
+        move = Math.random() < stats.aggr ? "Raise" : "Check";
+      } else {
+        move = "Check";
+      }
+    } else {
+      const req = potOdds * 100;
+      const perceived = strength + stats.vpip * 25;
+      if (perceived >= req) {
+        move = strength > 80 && Math.random() < stats.aggr ? "Raise" : "Call";
+      } else if (roll < stats.bluff * 0.1) {
+        move = "Raise";
+      } else {
+        move = "Fold";
+      }
+    }
+
+    if (move === "Raise" && player.bank < 20) move = "Call";
+    if (move === "Raise" && (player.raisesThisStreet || 0) >= 2) move = toCall > 0 ? "Call" : "Check";
+    act(move);
+  };
+
+  const nextTurn = () => {
+    const active = getActivePlayers();
+    if (active.length <= 1) {
+      if (active.length === 1) endRound(true, active[0]);
+      return;
+    }
+
+    renderUi();
+    const player = seats[turnIndex];
+    if (!player) {
+      findNextActivePlayer();
+      nextTurn();
+      return;
+    }
+
+    if (player.isAi) {
+      ui.controlsEl.classList.add("hidden");
+      if (aiTimeoutId) clearTimeout(aiTimeoutId);
+      aiTimeoutId = schedule(() => aiMove(player), 500 + Math.random() * 500);
+      return;
+    }
+
+    const toCall = Math.max(0, highestBet - player.bet);
+    const canRaise = (player.raisesThisStreet || 0) < 2 && player.bank >= (toCall + 10);
+    ui.controlsEl.classList.remove("hidden");
+    ui.btnCheck.classList.toggle("hidden", toCall > 0);
+    ui.btnCall.classList.toggle("hidden", toCall === 0);
+    ui.amtCall.textContent = toCall > 0 ? String(Math.ceil(toCall)) : "";
+    ui.btnRaise.disabled = !canRaise;
+  };
+
+  const handleTableRotation = () => {
+    const leaving = [];
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      const player = seats[i];
+      if (!player) continue;
+      let reason = null;
+      if (player.bank <= 0) reason = "Bust";
+      else if (player.bank >= 2500 && Math.random() < 0.25) reason = "Win";
+      else if (player.bank < 200 && Math.random() < 0.2) reason = "Low";
+      else if (Math.random() < 0.05) reason = "Rand";
+      if (reason) leaving.push({ index: i, msg: reason === "Bust" ? "I'm out!" : "Cya." });
+    }
+
+    leaving.forEach((entry) => {
+      say(entry.index, entry.msg);
+      seats[entry.index] = null;
+    });
+
+    const activeCount = seats.filter((player) => player !== null).length;
+    if (activeCount < 4) fillEmptySeats(3);
+    else if (activeCount < MAX_SEATS_LOCAL && Math.random() > 0.5) fillEmptySeats(1);
+    renderUi();
+  };
+
+  const endRound = (earlyWin, forcedWinner = null) => {
+    ui.controlsEl.classList.remove("hidden");
+    setControlsDisabled(true);
+    if (aiTimeoutId) {
+      clearTimeout(aiTimeoutId);
+      aiTimeoutId = null;
+    }
+
+    let winners = [];
+    if (forcedWinner) {
+      winners = [forcedWinner];
+      ui.statusEl.textContent = `${forcedWinner.name} wins (all folded)`;
+      const hole = formatHoleCards(forcedWinner.hand);
+      ui.msgOverlay.textContent = `Winner: ${forcedWinner.name}\nHand: Won by fold${hole ? ` (${hole})` : ""}`;
+    } else {
+      seats.forEach((player) => {
+        if (player && player.inHand && !player.folded && player.isAi) player.reveal = true;
+      });
+      const active = getActivePlayers();
+      active.forEach((player) => {
+        player.eval = evaluateHand(player.hand, community);
+      });
+      active.sort((a, b) => compareHands(b.eval, a.eval));
+      if (active.length > 0) {
+        const best = active[0].eval;
+        winners = active.filter((player) => compareHands(player.eval, best) === 0);
+        const names = winners.map((winner) => winner.name).join(" & ");
+        ui.statusEl.textContent = winners.length > 1 ? `Split Pot! ${names} with ${best.name}` : `${names} wins with ${best.name}`;
+        const winnerLines = winners.map((winner) => {
+          const hole = formatHoleCards(winner.hand);
+          return hole ? `${winner.name} (${hole})` : winner.name;
+        });
+        ui.msgOverlay.textContent =
+          winners.length > 1
+            ? `Winners:\n${winnerLines.join("\n")}\nHand: ${best.name}`
+            : `Winner: ${winnerLines[0]}\nHand: ${best.name}`;
+      }
+    }
+
+    for (let i = 1; i < MAX_SEATS_LOCAL; i += 1) {
+      if (seatUi[i]) seatUi[i].root.classList.remove("winner");
+    }
+
+    winners.forEach((winner) => {
+      if (winner.id !== 0 && seatUi[winner.id]) seatUi[winner.id].root.classList.add("winner");
+    });
+
+    if (winners.length > 0) {
+      const split = Math.floor(pot / winners.length);
+      winners.forEach((winner) => {
+        winner.bank += split;
+      });
+    } else if (!forcedWinner) {
+      ui.msgOverlay.textContent = earlyWin ? "Hand over" : "Showdown complete";
+    }
+
+    syncHeroCash();
+    renderUi();
+    ui.dealOverlay.classList.remove("hidden");
+    ui.btnDeal.classList.remove("hidden");
+    ui.btnDeal.textContent = "Deal New Hand";
+    dealerIndex = (dealerIndex + 1) % MAX_SEATS_LOCAL;
+    pendingTableRotation = true;
+  };
+
+  const startHand = () => {
+    const hero = seats[0];
+    if (!hero || hero.bank <= 0) {
+      ui.msgOverlay.textContent = "You are bust! Go trade more.";
+      ui.btnDeal.classList.add("hidden");
+      ui.dealOverlay.classList.remove("hidden");
+      return;
+    }
+
+    if (pendingTableRotation) {
+      handleTableRotation();
+      pendingTableRotation = false;
+    }
+
+    deck = shuffle(createDeck());
+    community = [];
+    pot = 0;
+    highestBet = 10;
+    phase = 0;
+    actionsTaken = 0;
+
+    ui.statusEl.textContent = "Pre-Flop";
+    ui.msgOverlay.textContent = "";
+    ui.raiseInput.value = "50";
+    setControlsDisabled(false);
+
+    for (let i = 0; i < MAX_SEATS_LOCAL; i += 1) {
+      const player = seats[i];
+      if (!player) continue;
+      if (player.bank > 0) {
+        player.inHand = true;
+        player.folded = false;
+        player.reveal = !player.isAi;
+        player.raisesThisStreet = 0;
+        player.hand = [draw(), draw()];
+        const ante = Math.min(10, player.bank);
+        player.bank -= ante;
+        player.bet = ante;
+        pot += ante;
+      } else {
+        player.inHand = false;
+        player.bet = 0;
+        player.hand = [];
+      }
+    }
+
+    syncHeroCash();
+    renderUi();
+    ui.dealOverlay.classList.add("hidden");
+    ui.btnDeal.classList.remove("hidden");
+    ui.btnDeal.textContent = "Deal New Hand";
+    turnIndex = dealerIndex;
+    findNextActivePlayer();
+    nextTurn();
+  };
+
+  const initGame = () => {
+    seats[0] = {
+      id: 0,
+      name: String(playerUsername || "You"),
+      isAi: false,
+      bank: roundCurrency(Math.max(0, Number(cash) || 0)),
+      hand: [],
+      bet: 0,
+      folded: false,
+      inHand: false,
+      reveal: true,
+      raisesThisStreet: 0,
+      style: "Human"
+    };
+    fillEmptySeats(4);
+    ui.msgOverlay.textContent = "Ready?";
+    ui.btnDeal.textContent = "Deal Hand";
+    ui.controlsEl.classList.add("hidden");
+    setControlsDisabled(true);
+    renderUi();
+  };
+
+  bind(ui.backBtn, "click", () => {
+    exitCasinoGameView();
+  });
+  bind(ui.btnDeal, "click", startHand);
+  bind(ui.btnFold, "click", () => act("Fold"));
+  bind(ui.btnCheck, "click", () => act("Check"));
+  bind(ui.btnCall, "click", () => act("Call"));
+  bind(ui.btnRaise, "click", () => act("Raise"));
+
+  buildSeatLayout();
+  initGame();
 
   activeCasinoCleanup = () => {
-    if (p_aiTimeoutId) {
-      clearTimeout(p_aiTimeoutId);
-      p_aiTimeoutId = null;
-    }
-    window.removeEventListener("resize", onPokerResize);
+    disposed = true;
+    if (aiTimeoutId) clearTimeout(aiTimeoutId);
+    timeouts.forEach((id) => clearTimeout(id));
+    timeouts.clear();
+    listeners.forEach((off) => off());
     container.classList.remove("casino-fullbleed", "poker-fullbleed");
   };
 }

@@ -10076,6 +10076,549 @@ body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-
   color: #eef8ff;
 }
 
+.poker-phone-exact-root {
+  --app-bg-1: #081827;
+  --app-bg-2: #0a2030;
+  --panel: #173245;
+  --panel-soft: #1e3e52;
+  --panel-deep: #132d3f;
+  --line: #2a4a5e;
+  --text: #e8f1f7;
+  --muted: #9bb0be;
+  --primary: #00ea00;
+  --warning: #98893a;
+  --brown: #94673c;
+  --danger: #6c3940;
+  --card-face: #f6f7fb;
+  --card-black: #1f2631;
+  --card-red: #d94d4d;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 30% 0%, #13304c 0%, #0c2236 38%, #081929 70%),
+    linear-gradient(180deg, var(--app-bg-1) 0%, var(--app-bg-2) 100%);
+}
+
+.poker-phone-exact-root .phone {
+  width: min(430px, 100vw);
+  height: 100dvh;
+  max-height: 932px;
+  padding: max(14px, env(safe-area-inset-top, 0px)) 12px max(14px, env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-rows: auto auto auto auto auto 1fr;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+  border-inline: 1px solid #173246;
+  background: linear-gradient(180deg, #102738 0%, #102c3f 100%);
+}
+
+.poker-phone-exact-root .phone::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 28%),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.012) 0, rgba(255, 255, 255, 0.012) 2px, transparent 2px, transparent 8px);
+}
+
+.poker-phone-exact-root .back,
+.poker-phone-exact-root .seats,
+.poker-phone-exact-root .board,
+.poker-phone-exact-root .status,
+.poker-phone-exact-root .controls-wrap,
+.poker-phone-exact-root .hero-area {
+  position: relative;
+  z-index: 1;
+}
+
+.poker-phone-exact-root .back {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 34px;
+  line-height: 1;
+  color: #dbe7ef;
+  background: transparent;
+  text-align: left;
+}
+
+.poker-phone-exact-root .seats {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  padding: 6px 4px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: start;
+  gap: 4px;
+}
+
+.poker-phone-exact-root .seat {
+  position: relative;
+  text-align: center;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  padding: 4px 1px;
+  transition: opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.poker-phone-exact-root .seat.fold {
+  opacity: 0.35;
+}
+
+.poker-phone-exact-root .seat.active {
+  border-color: #5f7e92;
+  background: rgba(9, 22, 31, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(194, 209, 220, 0.2);
+}
+
+.poker-phone-exact-root .seat.winner {
+  border-color: #d8be62;
+  background: rgba(152, 137, 58, 0.16);
+  box-shadow: 0 0 20px rgba(152, 137, 58, 0.35);
+  transform: scale(1.03);
+}
+
+.poker-phone-exact-root .avatar {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 6px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  text-transform: uppercase;
+  font-family: "Stardos Stencil", "Outfit", sans-serif;
+  font-size: 28px;
+  color: #f4fbff;
+  letter-spacing: 0.04em;
+  border: 1px solid #4e6f86;
+  background: radial-gradient(circle at 28% 24%, #35596f 0%, #203f53 62%, #173042 100%);
+}
+
+.poker-phone-exact-root .mini-cards {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  min-height: 39px;
+  margin-bottom: 4px;
+}
+
+.poker-phone-exact-root .name {
+  font-size: 12px;
+  color: #c2d0d9;
+  line-height: 1;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.poker-phone-exact-root .stack {
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 22px;
+  line-height: 0.95;
+  color: #f1f7fc;
+}
+
+.poker-phone-exact-root .style {
+  font-size: 9px;
+  color: #96adbb;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1;
+  min-height: 11px;
+}
+
+.poker-phone-exact-root .fold-tag {
+  position: absolute;
+  top: 23px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid #7c4f56;
+  border-radius: 8px;
+  padding: 1px 6px;
+  background: rgba(73, 30, 37, 0.9);
+  color: #ffe5e8;
+  font-size: 11px;
+  display: none;
+}
+
+.poker-phone-exact-root .fold-tag.show {
+  display: block;
+}
+
+.poker-phone-exact-root .dealer-dot {
+  position: absolute;
+  right: 3px;
+  top: 28px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: none;
+  place-items: center;
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0f2636;
+  background: #b7cad7;
+}
+
+.poker-phone-exact-root .dealer-dot.show {
+  display: grid;
+}
+
+.poker-phone-exact-root .speech-bubble {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #eff5f9;
+  color: #1b3040;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+  z-index: 4;
+}
+
+.poker-phone-exact-root .speech-bubble.show {
+  opacity: 1;
+}
+
+.poker-phone-exact-root .board {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.poker-phone-exact-root .community {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(42px, 1fr));
+  gap: 6px;
+}
+
+.poker-phone-exact-root .community .card {
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: 0.72;
+}
+
+.poker-phone-exact-root .card {
+  min-height: 82px;
+  border-radius: 10px;
+  border: 1px solid #d3dae2;
+  overflow: hidden;
+  background: var(--card-face);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.poker-phone-exact-root .card.small {
+  min-height: 38px;
+  border-radius: 7px;
+}
+
+.poker-phone-exact-root .mini-cards .card.small {
+  width: 30px;
+  min-height: 0;
+  aspect-ratio: 0.72;
+}
+
+.poker-phone-exact-root .card.back {
+  border-color: #7ea1b8;
+  background:
+    repeating-linear-gradient(45deg, rgba(83, 130, 161, 0.35) 0, rgba(83, 130, 161, 0.35) 8px, rgba(38, 76, 104, 0.35) 8px, rgba(38, 76, 104, 0.35) 16px),
+    linear-gradient(180deg, #2a4f68 0%, #1d3f56 100%);
+}
+
+.poker-phone-exact-root .card.face {
+  display: grid;
+  place-content: space-between;
+  padding: 6px 7px;
+  color: var(--card-black);
+}
+
+.poker-phone-exact-root .card.face.small {
+  padding: 2px 4px;
+}
+
+.poker-phone-exact-root .card .rank {
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.poker-phone-exact-root .card.small .rank {
+  font-size: 13px;
+}
+
+.poker-phone-exact-root .card .suit {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.poker-phone-exact-root .card.small .suit {
+  font-size: 11px;
+}
+
+.poker-phone-exact-root .card.red {
+  color: var(--card-red);
+}
+
+.poker-phone-exact-root .pot {
+  min-width: 34px;
+  text-align: right;
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 48px;
+  line-height: 0.9;
+  color: #eaf3f8;
+}
+
+.poker-phone-exact-root .status {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-deep);
+  min-height: 42px;
+  padding: 9px 10px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: #c3d2dc;
+}
+
+.poker-phone-exact-root .controls-wrap {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  padding: 8px;
+  min-height: 126px;
+  display: grid;
+  gap: 8px;
+}
+
+.poker-phone-exact-root .controls {
+  display: grid;
+  gap: 8px;
+}
+
+.poker-phone-exact-root .action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 7px;
+}
+
+.poker-phone-exact-root .raise-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.poker-phone-exact-root #raiseInput {
+  height: 52px;
+  border-radius: 10px;
+  border: 1px solid #446175;
+  background: #10283a;
+  color: #edf4f8;
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.poker-phone-exact-root #raiseInput:focus-visible {
+  outline: none;
+  border-color: #8dafc4;
+  box-shadow: 0 0 0 1px rgba(141, 175, 196, 0.45);
+}
+
+.poker-phone-exact-root .btn {
+  height: 52px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 17px;
+  font-weight: 700;
+  font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
+  color: #f2f8fc;
+  background: var(--warning);
+}
+
+.poker-phone-exact-root .btn:disabled,
+.poker-phone-exact-root #raiseInput:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.poker-phone-exact-root .btn.danger {
+  background: var(--danger);
+}
+
+.poker-phone-exact-root .btn.gold {
+  background: var(--brown);
+}
+
+.poker-phone-exact-root .hero-area {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.poker-phone-exact-root .hero-cards {
+  min-height: 164px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  display: flex;
+  align-items: flex-end;
+}
+
+.poker-phone-exact-root .hero-cards .card {
+  width: 56%;
+  min-height: 0;
+  aspect-ratio: 0.72;
+  border-radius: 20px;
+}
+
+.poker-phone-exact-root .hero-cards .card + .card {
+  margin-left: -20%;
+}
+
+.poker-phone-exact-root .hero-cards .card .rank {
+  font-size: 44px;
+}
+
+.poker-phone-exact-root .hero-cards .card .suit {
+  font-size: 38px;
+}
+
+.poker-phone-exact-root .hero-meta {
+  min-height: 164px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  padding: 12px 10px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.poker-phone-exact-root .hand-label {
+  font-size: 17px;
+  color: #b9c9d4;
+}
+
+.poker-phone-exact-root .hero-badge {
+  width: 66px;
+  height: 66px;
+  margin: 0 auto;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  text-transform: uppercase;
+  font-family: "Stardos Stencil", "Outfit", sans-serif;
+  font-size: 36px;
+  color: #f4fbff;
+  background: radial-gradient(circle at 28% 24%, #35596f 0%, #203f53 62%, #173042 100%);
+  border: 1px solid #4e6f86;
+}
+
+.poker-phone-exact-root .hero-stack {
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 44px;
+  line-height: 0.9;
+  color: #edf4f8;
+}
+
+.poker-phone-exact-root .deal-overlay {
+  position: relative;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  border: 1px solid #426276;
+  background: #112b3c;
+  padding: 10px;
+}
+
+.poker-phone-exact-root .msg-overlay {
+  font-family: "Rajdhani", "Outfit", sans-serif;
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 700;
+  text-align: center;
+  color: #edf5fb;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  white-space: pre-line;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.poker-phone-exact-root .btn-lrg {
+  width: 100%;
+  max-width: 220px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--primary);
+  color: #031402;
+  font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+.poker-phone-exact-root #btnRestart {
+  display: none !important;
+}
+
+.poker-phone-exact-root .hidden {
+  display: none !important;
+}
+
+@media (max-width: 390px) {
+  .poker-phone-exact-root .stack {
+    font-size: 20px;
+  }
+
+  .poker-phone-exact-root .btn {
+    font-size: 14px;
+  }
+
+  .poker-phone-exact-root #raiseInput {
+    font-size: 20px;
+  }
+
+  .poker-phone-exact-root .hero-meta,
+  .poker-phone-exact-root .hero-cards {
+    min-height: 152px;
+  }
+
+  .poker-phone-exact-root .btn-lrg {
+    max-width: 180px;
+    font-size: 18px;
+  }
+}
+
 body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios #comm-cards.pp-ios-community {
   min-height: 86px;
   margin: 0;
