@@ -10121,8 +10121,15 @@ body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-
 }
 
 body.game-fullscreen #casino-container.poker-fullbleed > .poker-phone-exact-root {
+  height: calc(100vh - 70px);
+  min-height: calc(100vh - 70px);
+  max-height: calc(100vh - 70px);
+  height: calc(100svh - 70px);
   height: calc(100dvh - 70px);
+  min-height: calc(100svh - 70px);
   min-height: calc(100dvh - 70px);
+  max-height: calc(100svh - 70px);
+  max-height: calc(100dvh - 70px);
   display: flex;
   justify-content: center;
   align-items: stretch;
@@ -10130,8 +10137,15 @@ body.game-fullscreen #casino-container.poker-fullbleed > .poker-phone-exact-root
 
 body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   width: 100%;
-  height: 100%;
-  min-height: 100%;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
+  max-height: 100vh;
+  max-height: 100svh;
+  max-height: 100dvh;
 }
 
 .poker-phone-exact-root .phone::before {
@@ -10634,6 +10648,160 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   .poker-phone-exact-root .btn-lrg {
     max-width: 180px;
     font-size: 18px;
+  }
+}
+
+@media (max-height: 860px) {
+  .poker-phone-exact-root .phone {
+    padding: max(8px, env(safe-area-inset-top, 0px)) 10px max(8px, env(safe-area-inset-bottom, 0px));
+    gap: 6px;
+  }
+
+  .poker-phone-exact-root .back {
+    width: 38px;
+    height: 38px;
+    font-size: 30px;
+  }
+
+  .poker-phone-exact-root .avatar {
+    width: 34px;
+    height: 34px;
+    margin: 0 auto 3px;
+    font-size: 20px;
+  }
+
+  .poker-phone-exact-root .mini-cards {
+    min-height: 30px;
+    margin-bottom: 2px;
+  }
+
+  .poker-phone-exact-root .mini-cards .card.small {
+    width: 22px;
+  }
+
+  .poker-phone-exact-root .name {
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+
+  .poker-phone-exact-root .stack {
+    font-size: 16px;
+  }
+
+  .poker-phone-exact-root .style {
+    font-size: 8px;
+    min-height: 9px;
+  }
+
+  .poker-phone-exact-root .card {
+    min-height: 66px;
+  }
+
+  .poker-phone-exact-root .pot {
+    font-size: 34px;
+  }
+
+  .poker-phone-exact-root .status {
+    min-height: 34px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+
+  .poker-phone-exact-root .controls-wrap {
+    min-height: 96px;
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .poker-phone-exact-root .btn,
+  .poker-phone-exact-root #raiseInput {
+    height: 42px;
+    font-size: 14px;
+  }
+
+  .poker-phone-exact-root .hero-meta,
+  .poker-phone-exact-root .hero-cards {
+    min-height: 122px;
+    padding: 8px;
+  }
+
+  .poker-phone-exact-root .hero-cards .card .rank {
+    font-size: 34px;
+  }
+
+  .poker-phone-exact-root .hero-cards .card .suit {
+    font-size: 30px;
+  }
+
+  .poker-phone-exact-root .hero-badge {
+    width: 52px;
+    height: 52px;
+    font-size: 28px;
+  }
+
+  .poker-phone-exact-root .hand-label {
+    font-size: 14px;
+  }
+
+  .poker-phone-exact-root .hero-stack {
+    font-size: 32px;
+  }
+
+  .poker-phone-exact-root .btn-lrg {
+    max-width: 170px;
+    font-size: 16px;
+    padding: 8px 10px;
+  }
+}
+
+@media (max-height: 760px) {
+  .poker-phone-exact-root .phone {
+    gap: 5px;
+    padding: max(6px, env(safe-area-inset-top, 0px)) 8px max(6px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .poker-phone-exact-root .seats,
+  .poker-phone-exact-root .board,
+  .poker-phone-exact-root .controls-wrap,
+  .poker-phone-exact-root .hero-cards,
+  .poker-phone-exact-root .hero-meta {
+    border-radius: 10px;
+  }
+
+  .poker-phone-exact-root .avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 17px;
+  }
+
+  .poker-phone-exact-root .stack {
+    font-size: 14px;
+  }
+
+  .poker-phone-exact-root .card {
+    min-height: 58px;
+  }
+
+  .poker-phone-exact-root .pot {
+    font-size: 28px;
+  }
+
+  .poker-phone-exact-root .hero-meta,
+  .poker-phone-exact-root .hero-cards {
+    min-height: 102px;
+    padding: 6px;
+  }
+
+  .poker-phone-exact-root .hero-cards .card .rank {
+    font-size: 28px;
+  }
+
+  .poker-phone-exact-root .hero-cards .card .suit {
+    font-size: 24px;
+  }
+
+  .poker-phone-exact-root .hero-stack {
+    font-size: 28px;
   }
 }
 
