@@ -7792,6 +7792,7 @@ body.game-fullscreen #casino-container.casino-fullbleed {
 body.game-fullscreen #casino-container.casino-fullbleed > .crypto-slot-root,
 body.game-fullscreen #casino-container.casino-fullbleed > .poker-wrapper,
 body.game-fullscreen #casino-container.casino-fullbleed > .casino-poker-classic,
+body.game-fullscreen #casino-container.casino-fullbleed > .poker-phone-exact-root,
 body.game-fullscreen #casino-container.casino-fullbleed > .dice-root,
 body.game-fullscreen #casino-container.casino-fullbleed > .slide-root,
 body.game-fullscreen #casino-container.casino-fullbleed > #casino-horserace-screen,
@@ -10093,7 +10094,10 @@ body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-
   --card-black: #1f2631;
   --card-red: #d94d4d;
   width: 100%;
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
   color: var(--text);
@@ -10103,9 +10107,9 @@ body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-
 }
 
 .poker-phone-exact-root .phone {
-  width: min(430px, 100vw);
-  height: 100dvh;
-  max-height: 932px;
+  width: min(430px, 100%);
+  height: 100%;
+  max-height: none;
   padding: max(14px, env(safe-area-inset-top, 0px)) 12px max(14px, env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-rows: auto auto auto auto auto 1fr;
@@ -10114,6 +10118,20 @@ body.phone-embedded-mini-mode .phone-game-poker.poker-phone-ios .pp-ios-seat.pp-
   overflow: hidden;
   border-inline: 1px solid #173246;
   background: linear-gradient(180deg, #102738 0%, #102c3f 100%);
+}
+
+body.game-fullscreen #casino-container.poker-fullbleed > .poker-phone-exact-root {
+  height: calc(100dvh - 70px);
+  min-height: calc(100dvh - 70px);
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+
+body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
 }
 
 .poker-phone-exact-root .phone::before {
