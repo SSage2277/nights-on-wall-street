@@ -19077,7 +19077,7 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section {
-    padding-bottom: 226px;
+    padding-bottom: 292px;
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls {
@@ -19093,7 +19093,7 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
     position: fixed;
     left: max(8px, env(safe-area-inset-left));
     right: max(8px, env(safe-area-inset-right));
-    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 120px);
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 186px);
     z-index: 13031;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
