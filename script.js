@@ -10,6 +10,8 @@ let avgCost = 0;
 let price = 100;
 let savingsBalance = 0;
 let autoSavingsPercent = 0;
+let lastTradeActionSide = "none";
+let lastTradeActionAt = 0;
 
 let autoPlay = false;
 let candles = [];
@@ -2607,6 +2609,9 @@ function buildNewsPool() {
 }
 
 const NEWS_EVENTS = buildNewsPool();
+const POSITIVE_NEWS_EVENTS = NEWS_EVENTS.filter((event) => Number(event?.direction) > 0);
+const NEGATIVE_NEWS_EVENTS = NEWS_EVENTS.filter((event) => Number(event?.direction) < 0);
+const RECENT_TRADE_NEWS_BIAS_WINDOW_MS = 90 * 1000;
 
 // Risk controls
 const BASE_SLIPPAGE = 0.001;
@@ -2631,6 +2636,66 @@ function getTradeExecutionCosts(currentShares = shares, marketPrice = price) {
     slippage: baselineSlippage + EARLY_SLIPPAGE_BONUS * earlyScale,
     fee: TRADE_FEE + EARLY_TRADE_FEE_BONUS * earlyScale
   };
+}
+
+function markRecentTradeAction(side) {
+  const normalized = String(side || "").toLowerCase();
+  if (normalized !== "buy" && normalized !== "sell") return;
+  lastTradeActionSide = normalized;
+  lastTradeActionAt = Date.now();
+}
+
+function getBiasedNewsDirectionWeights(marketPrice = price) {
+  const earlyScale = getEarlyTradingDifficultyScale(marketPrice);
+  let goodWeight = 1;
+  let badWeight = 1;
+
+  if (earlyScale <= 0) {
+    return { goodWeight, badWeight };
+  }
+
+  const marketValue = Math.max(0, shares * clampPrice(marketPrice));
+  const netWorth = Math.max(1, getNetWorth(marketPrice));
+  const exposure = clampMarket(marketValue / netWorth, 0, 1);
+
+  if (shares > 0) {
+    badWeight += (1.05 + exposure * 1.35) * earlyScale;
+    goodWeight = Math.max(0.22, goodWeight - 0.55 * earlyScale);
+  } else {
+    goodWeight += 0.9 * earlyScale;
+    badWeight = Math.max(0.3, badWeight - 0.35 * earlyScale);
+  }
+
+  const recentMs = Date.now() - lastTradeActionAt;
+  if (recentMs >= 0 && recentMs <= RECENT_TRADE_NEWS_BIAS_WINDOW_MS) {
+    const recentScale = (1 - recentMs / RECENT_TRADE_NEWS_BIAS_WINDOW_MS) * earlyScale;
+    if (lastTradeActionSide === "buy") {
+      badWeight += 1.2 * recentScale;
+    } else if (lastTradeActionSide === "sell") {
+      goodWeight += 0.95 * recentScale;
+    }
+  }
+
+  return { goodWeight, badWeight };
+}
+
+function getBiasedNewsEventChance(marketPrice = price) {
+  const earlyScale = getEarlyTradingDifficultyScale(marketPrice);
+  if (earlyScale <= 0) return NEWS_EVENT_CHANCE;
+  const chanceMultiplier = shares > 0 ? 1 + 0.85 * earlyScale : 1 + 0.28 * earlyScale;
+  return clampMarket(NEWS_EVENT_CHANCE * chanceMultiplier, 0.001, 0.05);
+}
+
+function pickBiasedNewsEvent(marketPrice = price) {
+  if (!NEWS_EVENTS.length) return null;
+  const { goodWeight, badWeight } = getBiasedNewsDirectionWeights(marketPrice);
+  const total = Math.max(0.001, goodWeight + badWeight);
+  const chooseGood = Math.random() < goodWeight / total;
+  const pool = chooseGood ? POSITIVE_NEWS_EVENTS : NEGATIVE_NEWS_EVENTS;
+  if (!pool.length) {
+    return NEWS_EVENTS[Math.floor(Math.random() * NEWS_EVENTS.length)];
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // =====================================================
@@ -6219,7 +6284,7 @@ function generateCandle() {
     close = price;
   }
 
-  if (Math.random() < NEWS_EVENT_CHANCE) {
+  if (Math.random() < getBiasedNewsEventChance(price)) {
     const preNewsPrice = price;
     triggerNews();
     const newsMove = Math.abs(Math.log(price / Math.max(preNewsPrice, PRICE_FLOOR)));
@@ -6247,7 +6312,8 @@ function generateCandle() {
 }
 
 function triggerNews() {
-  const event = NEWS_EVENTS[Math.floor(Math.random() * NEWS_EVENTS.length)];
+  const event = pickBiasedNewsEvent(price);
+  if (!event) return;
   achievementState.stats.newsSeen += 1;
   saveAchievements();
 
@@ -6281,6 +6347,7 @@ function buy(amount) {
     sharesBought++;
   }
   if (sharesBought > 0) {
+    markRecentTradeAction("buy");
     achievementState.stats.buys += sharesBought;
     saveAchievements();
     updateUI();
@@ -6301,6 +6368,7 @@ function sell(amount) {
   }
   if (shares === 0) avgCost = 0;
   if (sharesSold > 0) {
+    markRecentTradeAction("sell");
     achievementState.stats.sells += sharesSold;
     saveAchievements();
     trackBankMissionTradeClosed(realizedProfit);
@@ -6320,6 +6388,7 @@ function buyAllShares() {
     sharesBought++;
   }
   if (sharesBought > 0) {
+    markRecentTradeAction("buy");
     achievementState.stats.buys += sharesBought;
     saveAchievements();
   }
