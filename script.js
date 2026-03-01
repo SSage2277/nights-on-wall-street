@@ -111,6 +111,9 @@ let firstPlayTutorialStepIndex = 0;
 let firstPlayTutorialHighlightedTarget = null;
 let tradingLogoutBusy = false;
 let authSessionLikelyAuthenticated = false;
+let authSessionUserIsAdmin = false;
+let authSessionUserIsOwner = false;
+let authSessionUserIsPublicProfile = true;
 let authSessionWatchdogTimer = null;
 let authSessionWatchdogBusy = false;
 let lastServerBalanceUpdatedAt = 0;
@@ -676,6 +679,7 @@ function showBannedOverlay(message = "You are banned.") {
   if (!overlay) return;
   bannedOverlayActive = true;
   authSessionLikelyAuthenticated = false;
+  clearAuthRoleSnapshot();
   stopAuthSessionWatchdog();
   autoPlay = false;
   syncTradingPlayButtonLabels();
@@ -966,12 +970,14 @@ async function pollAuthSessionWatchdog() {
     }
     if (response.ok && payload?.authenticated === true) {
       authSessionLikelyAuthenticated = true;
+      if (payload?.user) applyAuthRoleSnapshotFromUser(payload.user);
       queueIncomingAdminPopups(payload?.adminPopups);
       return;
     }
     if (response.ok && payload?.authenticated === false) {
       const wasAuthenticated = authSessionLikelyAuthenticated;
       authSessionLikelyAuthenticated = false;
+      clearAuthRoleSnapshot();
       clearAccountMessageQueue();
       if (wasAuthenticated) {
         venmoAdminUnlocked = false;
@@ -1093,6 +1099,7 @@ function applyAuthenticatedProfile(
     allowLocalBalanceFallback: preferLocalBalance
   });
   authSessionLikelyAuthenticated = true;
+  applyAuthRoleSnapshotFromUser(user);
   hideBannedOverlay();
   startAuthSessionWatchdog();
   hideFirstLaunchUsernameOverlay();
@@ -1112,6 +1119,7 @@ async function hydrateAuthSessionIfPresent() {
     const payload = await venmoApiRequest("/api/auth/session");
     if (!payload?.authenticated || !payload?.user) {
       authSessionLikelyAuthenticated = false;
+      clearAuthRoleSnapshot();
       stopAuthSessionWatchdog();
       return false;
     }
@@ -1122,6 +1130,7 @@ async function hydrateAuthSessionIfPresent() {
     });
   } catch {
     authSessionLikelyAuthenticated = false;
+    clearAuthRoleSnapshot();
     stopAuthSessionWatchdog();
     return false;
   }
@@ -1155,6 +1164,7 @@ function showFirstLaunchUsernameOverlay() {
     registerUsernameInput.focus();
   }, 0);
   if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
+  if (typeof syncAdminPanelNavButton === "function") syncAdminPanelNavButton();
 }
 
 function hideFirstLaunchUsernameOverlay() {
@@ -1164,6 +1174,7 @@ function hideFirstLaunchUsernameOverlay() {
   overlay.setAttribute("aria-hidden", "true");
   usernameGateActive = false;
   if (typeof syncHiddenAdminTriggerVisibility === "function") syncHiddenAdminTriggerVisibility();
+  if (typeof syncAdminPanelNavButton === "function") syncAdminPanelNavButton();
 }
 
 function isTutorialTargetVisible(target) {
@@ -1567,6 +1578,7 @@ async function clearLocalAccountOnDevice() {
     venmoClaimState.adminMessages = [];
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
+    clearAuthRoleSnapshot();
     lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
     clearAccountMessageQueue();
@@ -2060,6 +2072,45 @@ function syncCasinoLiveFeedVisibility() {
   if (notice) notice.hidden = !showInLobby || isCasinoLiveDataEnabled();
 }
 
+function canUseAdminPanelForCurrentAccount() {
+  if (IS_PHONE_EMBED_MODE) return false;
+  return authSessionLikelyAuthenticated && authSessionUserIsAdmin && authSessionUserIsOwner;
+}
+
+function syncAdminProfileVisibilityButtons() {
+  const enabled = canUseAdminPanelForCurrentAccount();
+  if (adminProfilePublicBtn) {
+    adminProfilePublicBtn.disabled = !enabled || authSessionUserIsPublicProfile;
+    adminProfilePublicBtn.classList.toggle("is-active", enabled && authSessionUserIsPublicProfile);
+  }
+  if (adminProfilePrivateBtn) {
+    adminProfilePrivateBtn.disabled = !enabled || !authSessionUserIsPublicProfile;
+    adminProfilePrivateBtn.classList.toggle("is-active", enabled && !authSessionUserIsPublicProfile);
+  }
+}
+
+function syncAdminPanelNavButton() {
+  if (!adminPanelBtn) return;
+  const visible = canUseAdminPanelForCurrentAccount() && !usernameGateActive;
+  adminPanelBtn.classList.toggle("hidden", !visible);
+  adminPanelBtn.style.display = visible ? "" : "none";
+  syncAdminProfileVisibilityButtons();
+}
+
+function applyAuthRoleSnapshotFromUser(user) {
+  authSessionUserIsAdmin = user?.isAdmin === true;
+  authSessionUserIsOwner = user?.isOwnerAdmin === true;
+  authSessionUserIsPublicProfile = user?.isPublicProfile !== false;
+  syncAdminPanelNavButton();
+}
+
+function clearAuthRoleSnapshot() {
+  authSessionUserIsAdmin = false;
+  authSessionUserIsOwner = false;
+  authSessionUserIsPublicProfile = true;
+  syncAdminPanelNavButton();
+}
+
 function updateTradingUsernameBadge() {
   const badge = document.getElementById("tradingUsernameBadge");
   const textEl = document.getElementById("tradingUsernameText");
@@ -2072,6 +2123,7 @@ function updateTradingUsernameBadge() {
   badge.style.display = shouldShow ? "inline-flex" : "none";
   if (textEl) textEl.textContent = shouldShow ? normalized : "";
   if (logoutBtn) logoutBtn.disabled = tradingLogoutBusy;
+  syncAdminPanelNavButton();
 }
 
 async function logoutFromTradingBadge() {
@@ -2084,6 +2136,7 @@ async function logoutFromTradingBadge() {
     } catch {}
     venmoAdminUnlocked = false;
     authSessionLikelyAuthenticated = false;
+    clearAuthRoleSnapshot();
     lastServerBalanceUpdatedAt = 0;
     stopAuthSessionWatchdog();
     clearAccountMessageQueue();
@@ -6589,6 +6642,7 @@ document.querySelectorAll(".speed-btn").forEach((btn) => {
 // =====================================================
 const tradingSection = document.getElementById("trading-section");
 const casinoSection = document.getElementById("casino-section");
+const adminPanelBtn = document.getElementById("adminPanelBtn");
 
 document.getElementById("casinoBtn").onclick = () => {
   hideCasinoKickoutOverlay();
@@ -6614,6 +6668,14 @@ document.getElementById("tradingBtn").onclick =
     syncHiddenAdminTriggerVisibility();
     updateTradingUsernameBadge();
   };
+
+if (adminPanelBtn) {
+  adminPanelBtn.onclick = () => {
+    if (!canUseAdminPanelForCurrentAccount()) return;
+    closeBankPanel();
+    void openHiddenAdminPanel();
+  };
+}
 
 // ------------------ LOAN SYSTEM ------------------
 let loanPrincipal = 0;
@@ -6689,6 +6751,8 @@ const venmoAdminTrustDeviceBtn = document.getElementById("venmoAdminTrustDeviceB
 const hiddenAdminFullResetBtn = document.getElementById("hiddenAdminFullResetBtn");
 const hiddenAdminCreateBackupBtn = document.getElementById("hiddenAdminCreateBackupBtn");
 const venmoAdminClaimsEl = document.getElementById("venmoAdminClaims");
+const adminProfilePublicBtn = document.getElementById("adminProfilePublicBtn");
+const adminProfilePrivateBtn = document.getElementById("adminProfilePrivateBtn");
 const buyVipBtn = document.getElementById("buyVipBtn");
 const vipStatusTextEl = document.getElementById("vipStatusText");
 const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
@@ -6749,6 +6813,8 @@ let hiddenAdminMessagesCleared = false;
 let hiddenAdminOwnerDeviceVerified = false;
 let hiddenAdminOwnerDeviceCheckInFlight = false;
 let hiddenAdminOwnerDeviceLastCheckedAt = 0;
+let hiddenAdminSecretTapCount = 0;
+let hiddenAdminSecretLastTapAt = 0;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -9048,6 +9114,40 @@ async function runFullAdminReset() {
   }
 }
 
+async function setAccountProfileVisibility(isPublic) {
+  if (!canUseAdminPanelForCurrentAccount()) {
+    setHiddenAdminStatus("Owner admin account required.", true);
+    return false;
+  }
+  try {
+    const payload = await venmoApiRequest("/api/profile/visibility", {
+      method: "POST",
+      body: { isPublic }
+    });
+    if (payload?.user) {
+      applyAuthRoleSnapshotFromUser(payload.user);
+      if (normalizeUsername(payload.user?.username)) {
+        playerUsername = normalizeUsername(payload.user.username);
+      }
+    } else {
+      authSessionUserIsPublicProfile = Boolean(isPublic);
+      syncAdminProfileVisibilityButtons();
+    }
+    setHiddenAdminStatus(
+      isPublic
+        ? "Your account is now visible on public leaderboards."
+        : "Your account is now hidden from public leaderboards."
+    );
+    if (typeof refreshCasinoLeaderboardFromServer === "function") {
+      void refreshCasinoLeaderboardFromServer();
+    }
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not update profile visibility: ${error.message}`, true);
+    return false;
+  }
+}
+
 function closeHiddenAdminPanel() {
   if (!hiddenAdminOverlayEl) return;
   hiddenAdminOverlayEl.classList.add("hidden");
@@ -9124,42 +9224,71 @@ function syncHiddenAdminTriggerVisibility() {
   const tradingRoot = document.getElementById("trading-section");
   const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
   const iphoneEligible = isIphoneAdminViewport();
+  const ownerAdminEligible = canUseAdminPanelForCurrentAccount();
   if (iphoneEligible && !hiddenAdminOwnerDeviceVerified && !hiddenAdminOwnerDeviceCheckInFlight) {
     void refreshHiddenAdminOwnerDeviceVisibility({ force: false });
   }
-  const shouldShow = tradingVisible && !usernameGateActive && iphoneEligible;
+  const shouldShow = tradingVisible && !usernameGateActive && iphoneEligible && !ownerAdminEligible;
   if (shouldShow) syncHiddenAdminTriggerHitbox();
   hiddenAdminTriggerEl.style.display = shouldShow ? "block" : "none";
   hiddenAdminTriggerEl.style.pointerEvents = shouldShow ? "auto" : "none";
-  if (!shouldShow && hiddenAdminPanelOpen) closeHiddenAdminPanel();
+  if (!shouldShow && hiddenAdminPanelOpen && !ownerAdminEligible) closeHiddenAdminPanel();
 }
 
 function syncHiddenAdminTriggerHitbox() {
   if (!hiddenAdminTriggerEl) return;
   const anchor = document.getElementById("appVersionTag");
-  if (!anchor) return;
+  if (!anchor) {
+    hiddenAdminTriggerEl.style.left = "6px";
+    hiddenAdminTriggerEl.style.top = "6px";
+    hiddenAdminTriggerEl.style.width = "120px";
+    hiddenAdminTriggerEl.style.height = "44px";
+    return;
+  }
   const rect = anchor.getBoundingClientRect();
   const paddingX = 14;
   const paddingY = 12;
-  const left = Math.max(0, Math.round(rect.left - paddingX));
-  const top = Math.max(0, Math.round(rect.top - paddingY));
-  const width = Math.max(84, Math.round(rect.width + paddingX * 2));
-  const height = Math.max(34, Math.round(rect.height + paddingY * 2));
+  const left = Math.max(0, Math.round((rect.left || 6) - paddingX));
+  const top = Math.max(0, Math.round((rect.top || 6) - paddingY));
+  const width = Math.max(120, Math.round((rect.width || 92) + paddingX * 2));
+  const height = Math.max(44, Math.round((rect.height || 28) + paddingY * 2));
   hiddenAdminTriggerEl.style.left = `${left}px`;
   hiddenAdminTriggerEl.style.top = `${top}px`;
   hiddenAdminTriggerEl.style.width = `${width}px`;
   hiddenAdminTriggerEl.style.height = `${height}px`;
 }
 
+function handleHiddenAdminSecretTap() {
+  const now = Date.now();
+  if (now - hiddenAdminSecretLastTapAt > 1500) {
+    hiddenAdminSecretTapCount = 0;
+  }
+  hiddenAdminSecretLastTapAt = now;
+  hiddenAdminSecretTapCount += 1;
+  if (hiddenAdminSecretTapCount >= 5) {
+    hiddenAdminSecretTapCount = 0;
+    void openHiddenAdminPanel();
+  }
+}
+
 async function openHiddenAdminPanel() {
-  if (!isIphoneAdminViewport()) return;
-  const ownerEligible = await refreshHiddenAdminOwnerDeviceVisibility({ force: true });
+  const ownerAdminEligible = canUseAdminPanelForCurrentAccount();
+  if (!ownerAdminEligible && !isIphoneAdminViewport()) return;
+  const ownerEligible = ownerAdminEligible
+    ? true
+    : await refreshHiddenAdminOwnerDeviceVisibility({ force: true });
   if (!hiddenAdminOverlayEl) return;
   hiddenAdminOverlayEl.classList.remove("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
   hiddenAdminPanelOpen = true;
   await tryAutoUnlockAdminFromTrustedDevice();
-  if (ownerEligible) {
+  if (ownerAdminEligible) {
+    setHiddenAdminStatus(
+      venmoAdminUnlocked
+        ? "Admin unlocked via owner account."
+        : "Owner account verified. Unlocking admin data..."
+    );
+  } else if (ownerEligible) {
     setHiddenAdminStatus(
       venmoAdminUnlocked ? "Admin unlocked. Device verified." : "Enter admin code to unlock this device."
     );
@@ -9190,7 +9319,7 @@ async function openHiddenAdminPanel() {
     await refreshHiddenAdminActivityFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
     await refreshHiddenAdminBackupsFromServer({ silent: true });
-    setHiddenAdminStatus("Admin unlocked. Device verified.");
+    setHiddenAdminStatus(ownerAdminEligible ? "Admin unlocked via owner account." : "Admin unlocked. Device verified.");
   }
   startHiddenAdminLivePolling();
 }
@@ -9198,11 +9327,23 @@ async function openHiddenAdminPanel() {
 function initHiddenAdminTrigger() {
   if (!hiddenAdminTriggerEl || hiddenAdminTriggerEl.dataset.bound === "true") return;
   hiddenAdminTriggerEl.dataset.bound = "true";
+  syncHiddenAdminTriggerHitbox();
   hiddenAdminTriggerEl.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     openHiddenAdminPanel();
   });
+  const versionTag = document.getElementById("appVersionTag");
+  if (versionTag) {
+    versionTag.addEventListener("click", (event) => {
+      event.preventDefault();
+      handleHiddenAdminSecretTap();
+    });
+    versionTag.addEventListener("touchend", (event) => {
+      event.preventDefault();
+      handleHiddenAdminSecretTap();
+    }, { passive: false });
+  }
   if (hiddenAdminCloseBtnEl) {
     hiddenAdminCloseBtnEl.addEventListener("click", () => closeHiddenAdminPanel());
   }
@@ -9217,6 +9358,16 @@ function initHiddenAdminTrigger() {
       if (!ok) return;
       await refreshHiddenAdminDevicesFromServer({ silent: true });
       setHiddenAdminStatus("This device is trusted for admin access.");
+    });
+  }
+  if (adminProfilePublicBtn) {
+    adminProfilePublicBtn.addEventListener("click", () => {
+      void setAccountProfileVisibility(true);
+    });
+  }
+  if (adminProfilePrivateBtn) {
+    adminProfilePrivateBtn.addEventListener("click", () => {
+      void setAccountProfileVisibility(false);
     });
   }
   if (hiddenAdminFullResetBtn) {
@@ -9457,6 +9608,7 @@ function initHiddenAdminTrigger() {
   syncHiddenAdminCoreSectionControls();
   syncHiddenAdminActivityControls();
   syncHiddenAdminFraudControls();
+  syncAdminPanelNavButton();
   syncHiddenAdminTriggerVisibility();
   void refreshHiddenAdminOwnerDeviceVisibility({ force: true });
   window.addEventListener("resize", () => {

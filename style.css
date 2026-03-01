@@ -1305,6 +1305,12 @@ body {
   cursor: pointer;
 }
 
+.hidden-admin-actions-row button.is-active {
+  border-color: #5fd69c;
+  background: #113927;
+  color: #d7ffe9;
+}
+
 .hidden-admin-actions-row .hidden-admin-danger-btn {
   border-color: #7f2f3c;
   background: #3c1119;
@@ -1625,6 +1631,11 @@ h1 {
   transform: translateY(-1px);
   filter: brightness(1.06);
   border-color: #4b6a7d;
+}
+
+#adminPanelBtn {
+  border-color: #5a7b93;
+  background: linear-gradient(180deg, #324d61, #243a4b);
 }
 
 .phone-badge {

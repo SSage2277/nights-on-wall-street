@@ -17,6 +17,7 @@ const port = Number(process.env.PORT || 3000);
 const baseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const ADMIN_CODE = String(process.env.VENMO_ADMIN_CODE || "").trim() || (IS_PRODUCTION ? "" : "Sage1557");
+const ADMIN_OWNER_USERNAME_KEY = normalizeUsernameKey(process.env.ADMIN_OWNER_USERNAME || "SSage") || "ssage";
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET || "").trim();
 const RATE_LIMIT_ENABLED = String(process.env.RATE_LIMIT_ENABLED || "1").trim() !== "0";
@@ -289,6 +290,19 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseBooleanFlag(value) {
+  if (value === true || value === false) return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["1", "true", "yes", "on", "public", "show"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "private", "hide"].includes(normalized)) return false;
+  return null;
+}
+
 function mapClaimRow(row) {
   return claimWithPack({
     id: String(row.id),
@@ -333,7 +347,8 @@ function mapUserRow(row) {
     autoSavingsPercent: Math.round(toNumber(row.auto_savings_percent) * 1000) / 1000,
     balanceUpdatedAt: Number(row.balance_updated_at) || 0,
     lastSeenAt: Number(row.last_seen_at) || 0,
-    isAdmin: row.is_admin === true
+    isAdmin: row.is_admin === true,
+    isPublicProfile: row.is_public_profile !== false
   };
 }
 
@@ -415,6 +430,7 @@ async function fetchLeaderboardPlayers({ limit = LEADERBOARD_STREAM_LIMIT, playe
           ROW_NUMBER() OVER (ORDER BY balance DESC, last_seen_at DESC, player_id ASC) AS rank
         FROM users
         WHERE COALESCE(banned_at, 0) = 0
+          AND COALESCE(is_public_profile, true) = true
       )
       SELECT player_id, username, balance, last_seen_at, rank
       FROM ranked
@@ -673,6 +689,9 @@ function mapAdminUserRow(row) {
 
 function normalizeUserForClient(row) {
   const mapped = mapUserRow(row);
+  const isOwnerAdmin =
+    Boolean(ADMIN_OWNER_USERNAME_KEY) &&
+    normalizeUsernameKey(row?.username_key || mapped.username || "") === ADMIN_OWNER_USERNAME_KEY;
   return {
     playerId: mapped.playerId,
     username: mapped.username,
@@ -684,7 +703,9 @@ function normalizeUserForClient(row) {
     autoSavingsPercent: mapped.autoSavingsPercent,
     balanceUpdatedAt: mapped.balanceUpdatedAt,
     lastSeenAt: mapped.lastSeenAt,
-    isAdmin: mapped.isAdmin === true
+    isAdmin: mapped.isAdmin === true,
+    isPublicProfile: mapped.isPublicProfile !== false,
+    isOwnerAdmin
   };
 }
 
@@ -867,7 +888,7 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
     }
     const userLookup = await db.query(
       `
-        SELECT player_id, is_admin, banned_at, banned_reason
+        SELECT player_id, username_key, is_admin, banned_at, banned_reason
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -886,59 +907,37 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
       return null;
     }
 
+    const ownerAccountLogin =
+      Boolean(ADMIN_OWNER_USERNAME_KEY) &&
+      normalizeUsernameKey(user.username_key || "") === ADMIN_OWNER_USERNAME_KEY;
+    if (!ownerAccountLogin) {
+      res.status(403).json({ ok: false, error: "Owner account required for admin access." });
+      return null;
+    }
+
     let isAdmin = user.is_admin === true;
-    const enteredCode = normalizeAdminCode(getAdminCode(req));
-    const expectedCode = normalizeAdminCode(ADMIN_CODE);
-    const codeMatches = Boolean(enteredCode) && enteredCode === expectedCode;
     let bootstrap = false;
     if (!isAdmin) {
-      if (allowBootstrap && codeMatches) {
-        const activeAdminCount = await getActiveAdminUserCount();
-        if (activeAdminCount > 0) {
-          res.status(403).json({ ok: false, error: "Admin role required." });
-          return null;
-        }
-        await db.query(
-          `
-            UPDATE users
-            SET is_admin = true,
-                last_seen_at = $2
-            WHERE player_id = $1
-          `,
-          [sessionPlayerId, Date.now()]
-        );
-        isAdmin = true;
-        bootstrap = true;
-      } else {
-        res.status(403).json({ ok: false, error: "Admin role required." });
-        return null;
-      }
+      await db.query(
+        `
+          UPDATE users
+          SET is_admin = true,
+              last_seen_at = $2
+          WHERE player_id = $1
+        `,
+        [sessionPlayerId, Date.now()]
+      );
+      isAdmin = true;
+      bootstrap = allowBootstrap === true;
+    }
+    if (!isAdmin) {
+      res.status(403).json({ ok: false, error: "Admin role required." });
+      return null;
     }
 
     const deviceToken = getAdminDeviceToken(req);
     const tokenHash = deviceToken ? hashAdminDeviceToken(deviceToken) : "";
-    const ownerLockLookup = await db.query(
-      `
-        SELECT token_hash, player_id
-        FROM admin_trusted_devices
-        WHERE owner_lock = true
-          AND revoked_at = 0
-        ORDER BY id DESC
-        LIMIT 1
-      `
-    );
-    const ownerLock = ownerLockLookup.rowCount ? ownerLockLookup.rows[0] : null;
-    const ownerTokenHash = ownerLock ? String(ownerLock.token_hash || "") : "";
-    const ownerPlayerId = ownerLock ? sanitizePlayerId(ownerLock.player_id) : "";
-    const ownerLockEnabled = Boolean(ownerTokenHash);
-
-    if (ownerLockEnabled) {
-      if (!tokenHash || tokenHash !== ownerTokenHash || !ownerPlayerId || ownerPlayerId !== sessionPlayerId) {
-        res.status(403).json({ ok: false, error: "Admin panel is locked to the owner device only." });
-        return null;
-      }
-    }
-
+    let trustedDevice = null;
     if (tokenHash) {
       const trustedLookup = await db.query(
         `
@@ -953,30 +952,8 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
       );
       if (trustedLookup.rowCount) {
         await touchTrustedAdminDeviceByHash(tokenHash, sessionPlayerId, req);
-        return {
-          ok: true,
-          playerId: sessionPlayerId,
-          bootstrap,
-          trustedCount: await getTrustedAdminDeviceCount(),
-          token: deviceToken,
-          tokenHash,
-          isAdmin: true,
-          viaTrustedDevice: true,
-          viaCode: false,
-          ownerLockEnabled,
-          device: mapAdminDeviceRow(trustedLookup.rows[0])
-        };
+        trustedDevice = mapAdminDeviceRow(trustedLookup.rows[0]);
       }
-    }
-
-    if (ownerLockEnabled) {
-      res.status(403).json({ ok: false, error: "Admin panel is locked to the owner device only." });
-      return null;
-    }
-
-    if (!codeMatches) {
-      res.status(401).json({ ok: false, error: "Trusted admin device required. Enter admin code." });
-      return null;
     }
     const trustedCount = await getTrustedAdminDeviceCount();
     return {
@@ -987,10 +964,11 @@ async function requireAdminAccess(req, res, { allowBootstrap = false } = {}) {
       token: deviceToken,
       tokenHash,
       isAdmin: true,
-      viaTrustedDevice: false,
-      viaCode: true,
-      ownerLockEnabled,
-      device: null
+      viaTrustedDevice: Boolean(trustedDevice),
+      viaCode: false,
+      viaSession: true,
+      ownerLockEnabled: false,
+      device: trustedDevice
     };
   } catch (error) {
     console.error("Failed admin access validation", error);
@@ -1398,7 +1376,7 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1414,6 +1392,24 @@ app.get("/api/auth/session", async (req, res) => {
       req.session.destroy(() => {});
       res.status(403).json({ ok: false, authenticated: false, error: "Account is banned." });
       return;
+    }
+    if (
+      normalizeUsernameKey(lookup.rows[0]?.username_key || "") === ADMIN_OWNER_USERNAME_KEY &&
+      lookup.rows[0]?.is_admin !== true
+    ) {
+      const ownerPromote = await db.query(
+        `
+          UPDATE users
+          SET is_admin = true,
+              last_seen_at = $2
+          WHERE player_id = $1
+          RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile
+        `,
+        [playerId, Date.now()]
+      );
+      if (ownerPromote.rowCount) {
+        lookup.rows[0] = ownerPromote.rows[0];
+      }
     }
     const adminPopups = await fetchUnreadAdminPopupsForPlayer(playerId, { limit: 3 });
     res.json({
@@ -1443,7 +1439,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
     const existingByUsername = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1467,11 +1463,12 @@ app.post("/api/auth/register", async (req, res) => {
                 username_key = $2,
                 password_hash = $3,
                 email = NULL,
-                last_seen_at = $4
+                last_seen_at = $4,
+                is_admin = CASE WHEN $6 THEN true ELSE COALESCE(is_admin, false) END
             WHERE player_id = $5
-            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
+            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile
           `,
-          [username, usernameKey, replacementHash, Date.now(), existing.player_id]
+          [username, usernameKey, replacementHash, Date.now(), existing.player_id, usernameKey === ADMIN_OWNER_USERNAME_KEY]
         );
         req.session.playerId = sanitizePlayerId(updated.rows[0]?.player_id || existing.player_id);
         queueLeaderboardUpdate("register");
@@ -1498,11 +1495,11 @@ app.post("/api/auth/register", async (req, res) => {
     const playerId = `u_${crypto.randomUUID().replace(/-/g, "")}`;
     const upsert = await db.query(
       `
-        INSERT INTO users (player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, balance_updated_at)
-        VALUES ($1, $2, $3, NULL, $4, $5, 0, 0, 0, 0, $6, $6)
-        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
+        INSERT INTO users (player_id, username, username_key, email, password_hash, is_admin, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, balance_updated_at)
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, 0, 0, 0, 0, $7, $7)
+        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile
       `,
-      [playerId, username, usernameKey, passwordHash, INITIAL_ACCOUNT_BALANCE, Date.now()]
+      [playerId, username, usernameKey, passwordHash, usernameKey === ADMIN_OWNER_USERNAME_KEY, INITIAL_ACCOUNT_BALANCE, Date.now()]
     );
     req.session.playerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
     queueLeaderboardUpdate("register");
@@ -1537,7 +1534,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1564,27 +1561,44 @@ app.post("/api/auth/login", async (req, res) => {
       res.status(401).json({ ok: false, error: "Invalid username or password." });
       return;
     }
-    await db.query(
-      `
-        UPDATE users
-        SET last_seen_at = $1
-        WHERE player_id = $2
-      `,
-      [Date.now(), user.player_id]
-    );
-    req.session.playerId = sanitizePlayerId(user.player_id);
+    if (usernameKey === ADMIN_OWNER_USERNAME_KEY && user.is_admin !== true) {
+      const promoteOwner = await db.query(
+        `
+          UPDATE users
+          SET is_admin = true,
+              last_seen_at = $2
+          WHERE player_id = $1
+          RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile
+        `,
+        [user.player_id, Date.now()]
+      );
+      if (promoteOwner.rowCount) {
+        lookup.rows[0] = promoteOwner.rows[0];
+      }
+    } else {
+      await db.query(
+        `
+          UPDATE users
+          SET last_seen_at = $1
+          WHERE player_id = $2
+        `,
+        [Date.now(), user.player_id]
+      );
+    }
+    const loggedInUser = lookup.rows[0] || user;
+    req.session.playerId = sanitizePlayerId(loggedInUser.player_id);
     queueLeaderboardUpdate("login");
     recordAdminActivity({
       eventType: "login",
-      playerId: user.player_id,
-      username: sanitizeUsername(user.username) || username,
+      playerId: loggedInUser.player_id,
+      username: sanitizeUsername(loggedInUser.username) || username,
       details: {
         ip: getRequestIp(req)
       }
     });
-    const sessionPlayerId = sanitizePlayerId(user.player_id);
+    const sessionPlayerId = sanitizePlayerId(loggedInUser.player_id);
     const adminPopups = await fetchUnreadAdminPopupsForPlayer(sessionPlayerId, { limit: 3 });
-    res.json({ ok: true, user: normalizeUserForClient(user), adminPopups });
+    res.json({ ok: true, user: normalizeUserForClient(loggedInUser), adminPopups });
   } catch (error) {
     console.error("Failed to login", error);
     res.status(500).json({ ok: false, error: "Could not login." });
@@ -1609,6 +1623,42 @@ app.post("/api/auth/logout", (req, res) => {
     res.clearCookie("nows.sid");
     res.json({ ok: true });
   });
+});
+
+app.post("/api/profile/visibility", async (req, res) => {
+  try {
+    const playerId = getSessionPlayerId(req);
+    if (!playerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    const isPublic = parseBooleanFlag(req.body?.isPublic);
+    if (isPublic === null) {
+      res.status(400).json({ ok: false, error: "Invalid visibility value." });
+      return;
+    }
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE users
+        SET is_public_profile = $2,
+            last_seen_at = $3
+        WHERE player_id = $1
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile
+      `,
+      [playerId, isPublic, now]
+    );
+    if (!updated.rowCount) {
+      req.session.destroy(() => {});
+      res.status(404).json({ ok: false, error: "Session account not found." });
+      return;
+    }
+    queueLeaderboardUpdate("profile-visibility");
+    res.json({ ok: true, user: normalizeUserForClient(updated.rows[0]) });
+  } catch (error) {
+    console.error("Failed to update profile visibility", error);
+    res.status(500).json({ ok: false, error: "Could not update profile visibility." });
+  }
 });
 
 app.post("/api/messages/:id/ack", async (req, res) => {
@@ -2056,7 +2106,7 @@ app.post("/api/claims/credits/:id/ack", async (req, res) => {
             SET savings_balance = LEAST($1, COALESCE(savings_balance, 0) + $2),
                 balance_updated_at = $3
             WHERE player_id = $4
-            RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+            RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin, is_public_profile
           `,
           [MAX_ACCOUNT_SAVINGS, creditedAmount, now, playerId]
         );
@@ -2072,7 +2122,7 @@ app.post("/api/claims/credits/:id/ack", async (req, res) => {
     if (!userRow) {
       const userLookup = await client.query(
         `
-          SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin
+          SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, is_admin, is_public_profile
           FROM users
           WHERE player_id = $1
           LIMIT 1
@@ -2150,7 +2200,7 @@ app.post("/api/users/sync", async (req, res) => {
     }
     const currentLookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, sync_guard_bypass_until
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile, sync_guard_bypass_until
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -2247,7 +2297,7 @@ app.post("/api/users/sync", async (req, res) => {
             last_seen_at = $9,
             balance_updated_at = CASE WHEN $10 THEN $9 ELSE COALESCE(balance_updated_at, 0) END
         WHERE player_id = $1
-        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile
       `,
       [playerId, username, usernameKey, nextBalance, nextShares, nextAvgCost, nextSavingsBalance, nextAutoSavingsPercent, now, hasPortfolioPayload]
     );
@@ -4465,6 +4515,7 @@ async function ensureSchema() {
       password_hash TEXT,
       email_verified_at BIGINT NOT NULL DEFAULT 0,
       is_admin BOOLEAN NOT NULL DEFAULT false,
+      is_public_profile BOOLEAN NOT NULL DEFAULT true,
       balance NUMERIC(14,2) NOT NULL DEFAULT 0,
       shares INTEGER NOT NULL DEFAULT 0,
       avg_cost NUMERIC(14,4) NOT NULL DEFAULT 0,
@@ -4548,6 +4599,10 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS is_admin BOOLEAN
   `);
   await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS is_public_profile BOOLEAN
+  `);
+  await db.query(`
     UPDATE users
     SET username_key = lower(username),
         email_verified_at = COALESCE(email_verified_at, 0),
@@ -4561,7 +4616,8 @@ async function ensureSchema() {
         muted_until = COALESCE(muted_until, 0),
         muted_reason = COALESCE(muted_reason, ''),
         sync_guard_bypass_until = COALESCE(sync_guard_bypass_until, 0),
-        is_admin = COALESCE(is_admin, false)
+        is_admin = COALESCE(is_admin, false),
+        is_public_profile = COALESCE(is_public_profile, true)
     WHERE username_key IS NULL OR username_key = ''
        OR email_verified_at IS NULL
        OR shares IS NULL
@@ -4575,6 +4631,7 @@ async function ensureSchema() {
        OR muted_reason IS NULL
        OR sync_guard_bypass_until IS NULL
        OR is_admin IS NULL
+       OR is_public_profile IS NULL
   `);
   await db.query(`
     ALTER TABLE users
@@ -4591,6 +4648,14 @@ async function ensureSchema() {
   await db.query(`
     ALTER TABLE users
     ALTER COLUMN is_admin SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ALTER COLUMN is_public_profile SET DEFAULT true
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ALTER COLUMN is_public_profile SET NOT NULL
   `);
   await db.query(`
     CREATE INDEX IF NOT EXISTS users_username_key_idx
