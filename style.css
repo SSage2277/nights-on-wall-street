@@ -1114,17 +1114,17 @@ body {
 
 .hidden-admin-trigger {
   position: fixed;
-  top: 6px;
-  left: 8px;
-  width: 92px;
-  height: 28px;
+  top: max(6px, env(safe-area-inset-top));
+  left: max(6px, env(safe-area-inset-left));
+  width: 104px;
+  height: 30px;
   border: 0;
   border-radius: 8px;
   padding: 0;
   background: transparent;
   opacity: 0;
   z-index: 16000;
-  cursor: default;
+  cursor: pointer;
   pointer-events: auto;
 }
 
@@ -1350,8 +1350,8 @@ body {
 }
 
 @media (max-width: 980px) {
-  .hidden-admin-trigger,
-  .hidden-admin-overlay {
+  body.phone-embedded-mini-mode .hidden-admin-trigger,
+  body.phone-embedded-mini-mode .hidden-admin-overlay {
     display: none !important;
     pointer-events: none !important;
   }

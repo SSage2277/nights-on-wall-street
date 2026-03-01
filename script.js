@@ -9127,24 +9127,48 @@ function syncHiddenAdminTriggerVisibility() {
   if (iphoneEligible && !hiddenAdminOwnerDeviceVerified && !hiddenAdminOwnerDeviceCheckInFlight) {
     void refreshHiddenAdminOwnerDeviceVisibility({ force: false });
   }
-  const shouldShow = tradingVisible && !usernameGateActive && iphoneEligible && hiddenAdminOwnerDeviceVerified;
+  const shouldShow = tradingVisible && !usernameGateActive && iphoneEligible;
+  if (shouldShow) syncHiddenAdminTriggerHitbox();
   hiddenAdminTriggerEl.style.display = shouldShow ? "block" : "none";
   hiddenAdminTriggerEl.style.pointerEvents = shouldShow ? "auto" : "none";
   if (!shouldShow && hiddenAdminPanelOpen) closeHiddenAdminPanel();
 }
 
+function syncHiddenAdminTriggerHitbox() {
+  if (!hiddenAdminTriggerEl) return;
+  const anchor = document.getElementById("appVersionTag");
+  if (!anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const paddingX = 14;
+  const paddingY = 12;
+  const left = Math.max(0, Math.round(rect.left - paddingX));
+  const top = Math.max(0, Math.round(rect.top - paddingY));
+  const width = Math.max(84, Math.round(rect.width + paddingX * 2));
+  const height = Math.max(34, Math.round(rect.height + paddingY * 2));
+  hiddenAdminTriggerEl.style.left = `${left}px`;
+  hiddenAdminTriggerEl.style.top = `${top}px`;
+  hiddenAdminTriggerEl.style.width = `${width}px`;
+  hiddenAdminTriggerEl.style.height = `${height}px`;
+}
+
 async function openHiddenAdminPanel() {
   if (!isIphoneAdminViewport()) return;
-  const eligible = await refreshHiddenAdminOwnerDeviceVisibility({ force: true });
-  if (!eligible) return;
+  const ownerEligible = await refreshHiddenAdminOwnerDeviceVisibility({ force: true });
   if (!hiddenAdminOverlayEl) return;
   hiddenAdminOverlayEl.classList.remove("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
   hiddenAdminPanelOpen = true;
   await tryAutoUnlockAdminFromTrustedDevice();
-  setHiddenAdminStatus(
-    venmoAdminUnlocked ? "Admin unlocked. Device verified." : "Enter admin code to unlock this device."
-  );
+  if (ownerEligible) {
+    setHiddenAdminStatus(
+      venmoAdminUnlocked ? "Admin unlocked. Device verified." : "Enter admin code to unlock this device."
+    );
+  } else {
+    setHiddenAdminStatus(
+      "This iPhone is not owner-locked yet. Enter admin code, trust this iPhone, then set Owner Lock in Devices.",
+      true
+    );
+  }
   renderVenmoAdminClaims();
   renderHiddenAdminStats();
   renderHiddenAdminHealth();
