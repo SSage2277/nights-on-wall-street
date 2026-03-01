@@ -2420,51 +2420,51 @@ function getSavingsProfitAvailable(marketPrice = price) {
 const CANDLE_WIDTH = 6;
 const CANDLES_PER_STEP = 5;
 const TICKS_PER_CANDLE = 8;
-const NEWS_EVENT_CHANCE = 0.006;
+const NEWS_EVENT_CHANCE = 0.012;
 const MAX_VOLUME = 180;
-const PRICE_FLOOR = 0.01;
-const PRICE_CAP = 200;
+const PRICE_FLOOR = 0.001;
+const PRICE_CAP = 300;
 
 const MARKET_REGIMES = {
   calm: {
-    drift: 0.000005,
-    volTarget: 0.00075,
-    jumpProbability: 0.0005,
-    jumpScale: 0.0015,
-    minDuration: 220,
-    maxDuration: 420
+    drift: 0.00002,
+    volTarget: 0.0022,
+    jumpProbability: 0.002,
+    jumpScale: 0.006,
+    minDuration: 180,
+    maxDuration: 320
   },
   balanced: {
-    drift: 0.000012,
-    volTarget: 0.0011,
-    jumpProbability: 0.001,
-    jumpScale: 0.002,
-    minDuration: 180,
-    maxDuration: 340
+    drift: 0.00003,
+    volTarget: 0.0036,
+    jumpProbability: 0.003,
+    jumpScale: 0.009,
+    minDuration: 140,
+    maxDuration: 260
   },
   bull: {
-    drift: 0.000065,
-    volTarget: 0.00145,
-    jumpProbability: 0.0012,
-    jumpScale: 0.0025,
-    minDuration: 150,
-    maxDuration: 280
+    drift: 0.00018,
+    volTarget: 0.0052,
+    jumpProbability: 0.004,
+    jumpScale: 0.012,
+    minDuration: 120,
+    maxDuration: 230
   },
   bear: {
-    drift: -0.000075,
-    volTarget: 0.0017,
-    jumpProbability: 0.0015,
-    jumpScale: 0.0028,
-    minDuration: 150,
-    maxDuration: 280
+    drift: -0.0002,
+    volTarget: 0.006,
+    jumpProbability: 0.0045,
+    jumpScale: 0.013,
+    minDuration: 120,
+    maxDuration: 230
   },
   panic: {
-    drift: -0.00004,
-    volTarget: 0.0028,
-    jumpProbability: 0.0034,
-    jumpScale: 0.006,
-    minDuration: 70,
-    maxDuration: 140
+    drift: -0.00012,
+    volTarget: 0.009,
+    jumpProbability: 0.007,
+    jumpScale: 0.022,
+    minDuration: 50,
+    maxDuration: 120
   }
 };
 
@@ -6166,27 +6166,29 @@ function generateCandle() {
     updateMarketRegime();
     const regime = MARKET_REGIMES[marketModel.regime] || MARKET_REGIMES.balanced;
 
-    const fairValueShock = randomNormal() * 0.00035 + regime.drift * 0.3;
+    const fairValueShock = randomNormal() * 0.0014 + regime.drift * 0.75;
     marketModel.fairValue = clampPrice(marketModel.fairValue * Math.exp(fairValueShock));
 
-    const volPull = (regime.volTarget - marketModel.volatility) * 0.08;
-    const momentumShock = Math.abs(marketModel.momentum) * 0.16;
-    marketModel.volatility = clampMarket(marketModel.volatility + volPull + momentumShock, 0.00045, 0.0065);
+    const volPull = (regime.volTarget - marketModel.volatility) * 0.14;
+    const momentumShock = Math.abs(marketModel.momentum) * 0.24;
+    marketModel.volatility = clampMarket(marketModel.volatility + volPull + momentumShock, 0.0012, 0.022);
 
     const innovation = randomNormal() * marketModel.volatility;
-    marketModel.momentum = marketModel.momentum * 0.82 + innovation * 0.92;
-    const momentumTerm = marketModel.momentum * 0.18;
-    const meanReversion = ((marketModel.fairValue - price) / Math.max(price, PRICE_FLOOR)) * 0.045;
+    const jumpShock = Math.random() < regime.jumpProbability ? randomNormal() * regime.jumpScale : 0;
+    marketModel.momentum = marketModel.momentum * 0.74 + (innovation + jumpShock * 0.4) * 0.96;
+    const momentumTerm = marketModel.momentum * 0.34;
+    const meanReversion = ((marketModel.fairValue - price) / Math.max(price, PRICE_FLOOR)) * 0.02;
     const logReturn =
       regime.drift +
       innovation +
+      jumpShock +
       momentumTerm +
       meanReversion +
       marketModel.newsShock +
       marketModel.newsDrift;
 
-    marketModel.newsShock *= 0.84;
-    marketModel.newsDrift *= 0.95;
+    marketModel.newsShock *= 0.88;
+    marketModel.newsDrift *= 0.97;
 
     price = clampPrice(price * Math.exp(logReturn));
     candleAbsMove += Math.abs(logReturn);
