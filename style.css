@@ -19077,12 +19077,12 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section {
-    padding-bottom: 292px;
+    padding-bottom: 378px;
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 72px);
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 138px);
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls #next,
@@ -19110,7 +19110,7 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
     position: fixed;
     left: max(8px, env(safe-area-inset-left));
     right: max(8px, env(safe-area-inset-right));
-    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 186px);
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 252px);
     z-index: 13031;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -19168,6 +19168,14 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   body.phone-overlay-open:not(.phone-embedded-mini-mode) #trading-section #controls,
   body.phone-overlay-open:not(.phone-embedded-mini-mode) #trading-section #speed-controls,
   body.phone-overlay-open:not(.phone-embedded-mini-mode) #iphoneTradingControlBar {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  body.bank-open-mobile:not(.phone-embedded-mini-mode) #trading-section #controls,
+  body.bank-open-mobile:not(.phone-embedded-mini-mode) #trading-section #speed-controls,
+  body.bank-open-mobile:not(.phone-embedded-mini-mode) #iphoneTradingControlBar {
     opacity: 0;
     pointer-events: none;
     visibility: hidden;
