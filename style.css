@@ -10495,11 +10495,12 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
 }
 
 .poker-phone-exact-root .hero-area {
-  margin-top: auto;
+  margin-top: 0;
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
   gap: 10px;
   align-items: end;
+  transform: translateY(-12px);
 }
 
 .poker-phone-exact-root .hero-cards {
@@ -10509,7 +10510,7 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   border: 1px solid var(--line);
   background: var(--panel-soft);
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .poker-phone-exact-root .hero-cards .card {
@@ -10538,7 +10539,7 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   background: var(--panel-soft);
   padding: 12px 10px;
   display: grid;
-  align-content: center;
+  align-content: start;
   gap: 8px;
   text-align: center;
 }
@@ -10711,6 +10712,10 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
     padding: 8px;
   }
 
+  .poker-phone-exact-root .hero-area {
+    transform: translateY(-16px);
+  }
+
   .poker-phone-exact-root .hero-cards .card .rank {
     font-size: 34px;
   }
@@ -10776,6 +10781,10 @@ body.phone-embedded-mini-mode #casino-container > .poker-phone-exact-root {
   .poker-phone-exact-root .hero-cards {
     min-height: 102px;
     padding: 6px;
+  }
+
+  .poker-phone-exact-root .hero-area {
+    transform: translateY(-18px);
   }
 
   .poker-phone-exact-root .hero-cards .card .rank {
