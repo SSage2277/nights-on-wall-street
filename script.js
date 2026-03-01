@@ -79,6 +79,9 @@ const USERNAME_SETUP_DONE_FALLBACK_KEYS = Object.freeze([
 const GUEST_MODE_STORAGE_KEY = "nows_guest_mode_v1";
 const FIRST_PLAY_TUTORIAL_VERSION = 2;
 const FIRST_PLAY_TUTORIAL_SEEN_STORAGE_KEY = `nows_first_play_tutorial_seen_v${FIRST_PLAY_TUTORIAL_VERSION}`;
+const SITE_VISITOR_ID_STORAGE_KEY = "nows_site_visitor_id_v1";
+const SITE_VISIT_LAST_SENT_STORAGE_KEY = "nows_site_visit_last_sent_v1";
+const SITE_VISIT_CLIENT_COOLDOWN_MS = 5 * 60 * 1000;
 const ADMIN_DEVICE_TOKEN_STORAGE_KEY = "nows_admin_device_token_v1";
 const ADMIN_DEVICE_LABEL_STORAGE_KEY = "nows_admin_device_label_v1";
 const LOANS_ENABLED = false;
@@ -6692,6 +6695,7 @@ const VENMO_PLAYER_ID_STORAGE_KEY = "venmo_claim_player_id_v1";
 const VENMO_LOCAL_CREDITED_STORAGE_KEY = "venmo_claim_credited_local_v1";
 const VENMO_CLAIM_POLL_MS = 10000;
 const HIDDEN_ADMIN_LIVE_POLL_MS = 1000;
+const HIDDEN_ADMIN_OWNER_DEVICE_CHECK_MS = 30000;
 const USER_PROFILE_SYNC_INTERVAL_MS = 1200;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
@@ -6742,6 +6746,9 @@ let hiddenAdminDevicesCleared = false;
 let hiddenAdminFeedbackCleared = false;
 let hiddenAdminBackupsCleared = false;
 let hiddenAdminMessagesCleared = false;
+let hiddenAdminOwnerDeviceVerified = false;
+let hiddenAdminOwnerDeviceCheckInFlight = false;
+let hiddenAdminOwnerDeviceLastCheckedAt = 0;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -6929,6 +6936,51 @@ function getVenmoClaimPlayerId() {
     localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, generated);
   } catch {}
   return generated;
+}
+
+function getOrCreateSiteVisitorId() {
+  try {
+    const existing = String(localStorage.getItem(SITE_VISITOR_ID_STORAGE_KEY) || "").trim();
+    if (existing) return existing;
+  } catch {}
+  let generated = "";
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    generated = `v_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  } else {
+    generated = `v_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+  }
+  try {
+    localStorage.setItem(SITE_VISITOR_ID_STORAGE_KEY, generated);
+  } catch {}
+  return generated;
+}
+
+async function trackSiteVisit() {
+  if (IS_PHONE_EMBED_MODE) return;
+  if (window.location.protocol !== "http:" && window.location.protocol !== "https:") return;
+  const now = Date.now();
+  let lastSentAt = 0;
+  try {
+    lastSentAt = Number(localStorage.getItem(SITE_VISIT_LAST_SENT_STORAGE_KEY) || 0) || 0;
+  } catch {}
+  if (lastSentAt > 0 && now - lastSentAt < SITE_VISIT_CLIENT_COOLDOWN_MS) return;
+  try {
+    localStorage.setItem(SITE_VISIT_LAST_SENT_STORAGE_KEY, String(now));
+  } catch {}
+
+  const visitorId = getOrCreateSiteVisitorId();
+  if (!visitorId) return;
+  try {
+    await venmoApiRequest("/api/visits", {
+      method: "POST",
+      body: {
+        visitorId,
+        playerId: String(venmoClaimPlayerId || "").trim(),
+        username: String(playerUsername || "").trim(),
+        path: window.location.pathname || "/"
+      }
+    });
+  } catch {}
 }
 
 function loadVenmoLocalCreditedClaimIds() {
@@ -7435,6 +7487,9 @@ function renderHiddenAdminStats() {
     ["Users", Number(stats.totalUsers) || 0],
     ["Users Banned", Number(stats.bannedUsers) || 0],
     ["Active (24h)", Number(stats.activeUsers24h) || 0],
+    ["Site Visits (All-time)", Number(stats.siteVisitsTotal) || 0],
+    ["Site Visits (24h)", Number(stats.siteVisits24h) || 0],
+    ["Unique Visitors (24h)", Number(stats.uniqueVisitors24h) || 0],
     ["Claims Pending", Number(stats.pendingClaims) || 0],
     ["Claims Approved", Number(stats.approvedClaims) || 0],
     ["Live Wins (24h)", Number(stats.liveWins24h) || 0],
@@ -9029,22 +9084,59 @@ function startHiddenAdminLivePolling() {
   }, HIDDEN_ADMIN_LIVE_POLL_MS);
 }
 
+function isIphoneAdminViewport() {
+  if (IS_PHONE_EMBED_MODE) return false;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  return IS_APPLE_TOUCH_DEVICE && viewportWidth > 0 && viewportWidth <= ADMIN_PANEL_MOBILE_MAX_WIDTH;
+}
+
+async function refreshHiddenAdminOwnerDeviceVisibility({ force = false } = {}) {
+  if (!isIphoneAdminViewport()) {
+    hiddenAdminOwnerDeviceVerified = false;
+    syncHiddenAdminTriggerVisibility();
+    return false;
+  }
+  const now = Date.now();
+  if (hiddenAdminOwnerDeviceCheckInFlight) return hiddenAdminOwnerDeviceVerified;
+  if (!force && now - hiddenAdminOwnerDeviceLastCheckedAt < HIDDEN_ADMIN_OWNER_DEVICE_CHECK_MS) {
+    return hiddenAdminOwnerDeviceVerified;
+  }
+
+  hiddenAdminOwnerDeviceCheckInFlight = true;
+  hiddenAdminOwnerDeviceLastCheckedAt = now;
+  try {
+    const payload = await venmoApiRequest(
+      buildAdminApiUrl("/api/admin/device/owner-check"),
+      getAdminRequestOptions({ method: "GET" })
+    );
+    hiddenAdminOwnerDeviceVerified = payload?.ownerDevice === true && payload?.triggerVisible === true;
+  } catch {
+    hiddenAdminOwnerDeviceVerified = false;
+  } finally {
+    hiddenAdminOwnerDeviceCheckInFlight = false;
+    syncHiddenAdminTriggerVisibility();
+  }
+  return hiddenAdminOwnerDeviceVerified;
+}
+
 function syncHiddenAdminTriggerVisibility() {
   if (!hiddenAdminTriggerEl) return;
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const adminBlockedOnPhone = IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= ADMIN_PANEL_MOBILE_MAX_WIDTH);
   const tradingRoot = document.getElementById("trading-section");
   const tradingVisible = Boolean(tradingRoot && tradingRoot.style.display !== "none");
-  const shouldShow = tradingVisible && !usernameGateActive && !adminBlockedOnPhone;
+  const iphoneEligible = isIphoneAdminViewport();
+  if (iphoneEligible && !hiddenAdminOwnerDeviceVerified && !hiddenAdminOwnerDeviceCheckInFlight) {
+    void refreshHiddenAdminOwnerDeviceVisibility({ force: false });
+  }
+  const shouldShow = tradingVisible && !usernameGateActive && iphoneEligible && hiddenAdminOwnerDeviceVerified;
   hiddenAdminTriggerEl.style.display = shouldShow ? "block" : "none";
   hiddenAdminTriggerEl.style.pointerEvents = shouldShow ? "auto" : "none";
   if (!shouldShow && hiddenAdminPanelOpen) closeHiddenAdminPanel();
 }
 
 async function openHiddenAdminPanel() {
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const adminBlockedOnPhone = IS_PHONE_EMBED_MODE || (viewportWidth > 0 && viewportWidth <= ADMIN_PANEL_MOBILE_MAX_WIDTH);
-  if (adminBlockedOnPhone) return;
+  if (!isIphoneAdminViewport()) return;
+  const eligible = await refreshHiddenAdminOwnerDeviceVisibility({ force: true });
+  if (!eligible) return;
   if (!hiddenAdminOverlayEl) return;
   hiddenAdminOverlayEl.classList.remove("hidden");
   hiddenAdminOverlayEl.setAttribute("aria-hidden", "false");
@@ -9342,6 +9434,12 @@ function initHiddenAdminTrigger() {
   syncHiddenAdminActivityControls();
   syncHiddenAdminFraudControls();
   syncHiddenAdminTriggerVisibility();
+  void refreshHiddenAdminOwnerDeviceVisibility({ force: true });
+  window.addEventListener("resize", () => {
+    hiddenAdminOwnerDeviceLastCheckedAt = 0;
+    syncHiddenAdminTriggerVisibility();
+    void refreshHiddenAdminOwnerDeviceVisibility({ force: false });
+  });
 }
 
 async function submitVenmoClaim() {
@@ -9467,6 +9565,7 @@ async function claimApprovedVenmoCredits({ silent = true } = {}) {
 function initVenmoClaimWorkflow() {
   venmoAdminDeviceToken = loadOrCreateAdminDeviceToken();
   venmoClaimPlayerId = getVenmoClaimPlayerId();
+  trackSiteVisit();
   loadVenmoLocalCreditedClaimIds();
   syncCurrentUserProfileToServer({ force: true });
   renderVenmoClaimStatus();

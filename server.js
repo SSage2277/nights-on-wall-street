@@ -77,6 +77,8 @@ const MAX_BALANCE_AUDIT_EVENTS = 10000;
 const MAX_ADMIN_BACKUPS = 15;
 const MAX_ADMIN_POPUP_MESSAGES = 3000;
 const MAX_ADMIN_POPUP_MESSAGE_READS = 300000;
+const MAX_SITE_VISIT_EVENTS = 500000;
+const SITE_VISIT_SERVER_COOLDOWN_MS = 30 * 60 * 1000;
 const leaderboardStreamClients = new Set();
 let leaderboardBroadcastTimer = null;
 
@@ -98,6 +100,29 @@ function sanitizeUsername(value) {
   if (!normalized) return "";
   if (normalized.length < 3 || normalized.length > 16) return "";
   return normalized;
+}
+
+function sanitizeVisitorId(value) {
+  const visitorId = String(value || "").trim();
+  if (!visitorId) return "";
+  if (!/^[a-zA-Z0-9_-]{8,120}$/.test(visitorId)) return "";
+  return visitorId;
+}
+
+function sanitizeVisitPath(value) {
+  let rawPath = String(value || "").trim();
+  if (!rawPath) return "/";
+  if (/^https?:\/\//i.test(rawPath)) {
+    try {
+      rawPath = new URL(rawPath).pathname || "/";
+    } catch {
+      rawPath = "/";
+    }
+  }
+  rawPath = rawPath.split("?")[0].split("#")[0].trim();
+  if (!rawPath) return "/";
+  if (!rawPath.startsWith("/")) rawPath = `/${rawPath}`;
+  return rawPath.slice(0, 180);
 }
 
 function normalizeUsernameKey(value) {
@@ -1313,6 +1338,53 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "claims", database: "postgres" });
 });
 
+app.post("/api/visits", async (req, res) => {
+  try {
+    const now = Date.now();
+    const requestIp = getRequestIp(req) || "";
+    const requestUserAgent = getRequestUserAgent(req);
+    const visitorFromBody = sanitizeVisitorId(req.body?.visitorId);
+    const visitorFallbackHash = crypto
+      .createHash("sha256")
+      .update(`${requestIp}|${requestUserAgent}`)
+      .digest("hex")
+      .slice(0, 40);
+    const visitorId = visitorFromBody || `anon_${visitorFallbackHash}`;
+    const playerId = sanitizePlayerId(req.body?.playerId || getSessionPlayerId(req));
+    const username = sanitizeUsername(req.body?.username);
+    const visitPath = sanitizeVisitPath(req.body?.path || req.headers.referer || "/");
+
+    const latest = await db.query(
+      `
+        SELECT visited_at
+        FROM site_visit_events
+        WHERE visitor_id = $1
+        ORDER BY visited_at DESC, id DESC
+        LIMIT 1
+      `,
+      [visitorId]
+    );
+    const lastVisitedAt = Number(latest.rows?.[0]?.visited_at) || 0;
+    if (lastVisitedAt > 0 && now - lastVisitedAt < SITE_VISIT_SERVER_COOLDOWN_MS) {
+      res.json({ ok: true, counted: false, visitedAt: lastVisitedAt });
+      return;
+    }
+
+    await db.query(
+      `
+        INSERT INTO site_visit_events (visitor_id, player_id, username, path, ip, user_agent, visited_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [visitorId, playerId, username, visitPath, requestIp, requestUserAgent, now]
+    );
+    void trimTableById({ tableName: "site_visit_events", maxRows: MAX_SITE_VISIT_EVENTS });
+    res.json({ ok: true, counted: true, visitedAt: now });
+  } catch (error) {
+    console.error("Failed to track visit", error);
+    res.status(500).json({ ok: false, error: "Could not track visit." });
+  }
+});
+
 function getSessionPlayerId(req) {
   return sanitizePlayerId(req.session?.playerId);
 }
@@ -2206,6 +2278,63 @@ app.post("/api/users/sync", async (req, res) => {
     }
     console.error("Failed to sync user profile", error);
     res.status(500).json({ ok: false, error: "Could not sync user profile." });
+  }
+});
+
+app.get("/api/admin/device/owner-check", async (req, res) => {
+  try {
+    const userAgent = String(getRequestUserAgent(req) || "").toLowerCase();
+    const isIphoneUserAgent = userAgent.includes("iphone");
+    const deviceToken = getAdminDeviceToken(req);
+    const tokenHash = deviceToken ? hashAdminDeviceToken(deviceToken) : "";
+    if (!isIphoneUserAgent || !tokenHash) {
+      res.json({ ok: true, ownerDevice: false, triggerVisible: false });
+      return;
+    }
+
+    const deviceLookup = await db.query(
+      `
+        SELECT player_id, revoked_at, owner_lock
+        FROM admin_trusted_devices
+        WHERE token_hash = $1
+        LIMIT 1
+      `,
+      [tokenHash]
+    );
+    if (!deviceLookup.rowCount) {
+      res.json({ ok: true, ownerDevice: false, triggerVisible: false });
+      return;
+    }
+    const device = deviceLookup.rows[0];
+    const ownerLocked = device.owner_lock === true && Number(device.revoked_at) <= 0;
+    if (!ownerLocked) {
+      res.json({ ok: true, ownerDevice: false, triggerVisible: false });
+      return;
+    }
+    const ownerPlayerId = sanitizePlayerId(device.player_id);
+    if (!ownerPlayerId) {
+      res.json({ ok: true, ownerDevice: false, triggerVisible: false });
+      return;
+    }
+    const ownerUserLookup = await db.query(
+      `
+        SELECT is_admin, banned_at
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [ownerPlayerId]
+    );
+    if (!ownerUserLookup.rowCount) {
+      res.json({ ok: true, ownerDevice: false, triggerVisible: false });
+      return;
+    }
+    const ownerUser = ownerUserLookup.rows[0];
+    const ownerIsValid = ownerUser.is_admin === true && !isBannedTimestamp(ownerUser.banned_at);
+    res.json({ ok: true, ownerDevice: ownerIsValid, triggerVisible: ownerIsValid });
+  } catch (error) {
+    console.error("Failed owner device check", error);
+    res.status(500).json({ ok: false, error: "Could not verify owner device." });
   }
 });
 
@@ -4128,6 +4257,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
     const claimsDeleted = await client.query("DELETE FROM claims");
     const feedbackDeleted = await client.query("DELETE FROM feedback_submissions");
     const winsDeleted = await client.query("DELETE FROM live_wins");
+    const visitsDeleted = await client.query("DELETE FROM site_visit_events");
     const verificationDeleted = await client.query("DELETE FROM email_verification_codes");
     const popupReadsDeleted = await client.query("DELETE FROM admin_popup_message_reads");
     const popupMessagesDeleted = await client.query("DELETE FROM admin_popup_messages");
@@ -4196,6 +4326,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
         claimsDeleted: claimsDeleted.rowCount,
         feedbackDeleted: feedbackDeleted.rowCount,
         liveWinsDeleted: winsDeleted.rowCount,
+        visitsDeleted: visitsDeleted.rowCount,
         popupMessagesDeleted: popupMessagesDeleted.rowCount
       }
     });
@@ -4206,6 +4337,7 @@ app.post("/api/admin/system/reset", async (req, res) => {
         claimsDeleted: claimsDeleted.rowCount,
         feedbackDeleted: feedbackDeleted.rowCount,
         liveWinsDeleted: winsDeleted.rowCount,
+        visitsDeleted: visitsDeleted.rowCount,
         popupMessagesDeleted: popupMessagesDeleted.rowCount,
         popupReadsDeleted: popupReadsDeleted.rowCount,
         pendingVerificationsDeleted: verificationDeleted.rowCount,
@@ -4260,6 +4392,14 @@ app.get("/api/admin/stats", async (req, res) => {
             COUNT(*) FILTER (WHERE revoked_at = 0)::int AS trusted_devices_active,
             COUNT(*) FILTER (WHERE revoked_at > 0)::int AS trusted_devices_banned
           FROM admin_trusted_devices
+        ),
+        visit_totals AS (
+          SELECT
+            COUNT(*)::int AS site_visits_total,
+            COUNT(*) FILTER (WHERE visited_at >= $1)::int AS site_visits_24h,
+            COUNT(DISTINCT visitor_id)::int AS unique_visitors_total,
+            COUNT(DISTINCT visitor_id) FILTER (WHERE visited_at >= $1)::int AS unique_visitors_24h
+          FROM site_visit_events
         )
         SELECT
           user_totals.total_users,
@@ -4275,8 +4415,12 @@ app.get("/api/admin/stats", async (req, res) => {
           win_totals.live_wins_24h,
           win_totals.live_win_amount_24h,
           device_totals.trusted_devices_active,
-          device_totals.trusted_devices_banned
-        FROM user_totals, claim_totals, win_totals, device_totals
+          device_totals.trusted_devices_banned,
+          visit_totals.site_visits_total,
+          visit_totals.site_visits_24h,
+          visit_totals.unique_visitors_total,
+          visit_totals.unique_visitors_24h
+        FROM user_totals, claim_totals, win_totals, device_totals, visit_totals
       `,
       [dayAgo]
     );
@@ -4297,7 +4441,11 @@ app.get("/api/admin/stats", async (req, res) => {
         liveWins24h: Number(row.live_wins_24h) || 0,
         liveWinAmount24h: Math.round(toNumber(row.live_win_amount_24h) * 100) / 100,
         trustedDevicesActive: Number(row.trusted_devices_active) || 0,
-        trustedDevicesBanned: Number(row.trusted_devices_banned) || 0
+        trustedDevicesBanned: Number(row.trusted_devices_banned) || 0,
+        siteVisitsTotal: Number(row.site_visits_total) || 0,
+        siteVisits24h: Number(row.site_visits_24h) || 0,
+        uniqueVisitorsTotal: Number(row.unique_visitors_total) || 0,
+        uniqueVisitors24h: Number(row.unique_visitors_24h) || 0
       },
       trustedDevice: adminAccess.device || null
     });
@@ -4845,6 +4993,68 @@ async function ensureSchema() {
     INSERT INTO admin_fraud_flags_state (id, cleared_at, cleared_by, updated_at)
     VALUES (1, 0, '', 0)
     ON CONFLICT (id) DO NOTHING
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS site_visit_events (
+      id BIGSERIAL PRIMARY KEY,
+      visitor_id TEXT NOT NULL,
+      player_id TEXT NOT NULL DEFAULT '',
+      username TEXT NOT NULL DEFAULT '',
+      path TEXT NOT NULL DEFAULT '/',
+      ip TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      visited_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS visitor_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS player_id TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS username TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS path TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS ip TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS user_agent TEXT
+  `);
+  await db.query(`
+    ALTER TABLE site_visit_events
+    ADD COLUMN IF NOT EXISTS visited_at BIGINT
+  `);
+  await db.query(`
+    UPDATE site_visit_events
+    SET visitor_id = COALESCE(NULLIF(visitor_id, ''), 'unknown'),
+        player_id = COALESCE(player_id, ''),
+        username = COALESCE(username, ''),
+        path = COALESCE(NULLIF(path, ''), '/'),
+        ip = COALESCE(ip, ''),
+        user_agent = COALESCE(user_agent, ''),
+        visited_at = COALESCE(visited_at, 0)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS site_visit_events_visited_idx
+    ON site_visit_events (visited_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS site_visit_events_visitor_visited_idx
+    ON site_visit_events (visitor_id, visited_at DESC, id DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS site_visit_events_player_visited_idx
+    ON site_visit_events (player_id, visited_at DESC, id DESC)
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS system_runtime_events (
