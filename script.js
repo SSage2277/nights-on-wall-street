@@ -11370,21 +11370,19 @@ function loadSlots() {
       ui.reels.appendChild(reelEl);
       ui.reelEls.push(reelEl);
       ui.reelStrips.push(strip);
-      strip.style.transform = "translateY(0px)";
+      strip.style.transform = "translate3d(0, 0px, 0)";
+      strip.style.transition = "none";
     });
   }
 
   function getCellHeight() {
-    const firstStrip = ui.reelStrips[0];
-    const firstSymbol = firstStrip ? firstStrip.querySelector(".symbol") : null;
-    if (firstSymbol) {
-      const symbolHeight = firstSymbol.getBoundingClientRect().height;
-      if (Number.isFinite(symbolHeight) && symbolHeight > 0) return symbolHeight;
+    const reelHeight = ui.reels?.getBoundingClientRect?.().height || 0;
+    if (Number.isFinite(reelHeight) && reelHeight > 0) {
+      return reelHeight / ROW_COUNT;
     }
     const firstReel = ui.reelEls[0];
-    if (!firstReel) return 120;
-    const reelHeight = firstReel.getBoundingClientRect().height;
-    return reelHeight > 0 ? reelHeight / ROW_COUNT : 120;
+    const fallbackHeight = firstReel ? firstReel.getBoundingClientRect().height : 0;
+    return fallbackHeight > 0 ? fallbackHeight / ROW_COUNT : 120;
   }
 
   function normalizeReelTransforms() {
@@ -11393,7 +11391,8 @@ function loadSlots() {
       const strip = ui.reelStrips[reelIndex];
       if (!strip) return;
       const offset = Math.round(index * cellHeight * 1000) / 1000;
-      strip.style.transform = `translateY(${-offset}px)`;
+      strip.style.transition = "none";
+      strip.style.transform = `translate3d(0, ${-offset}px, 0)`;
     });
   }
 
@@ -11823,48 +11822,55 @@ function loadSlots() {
     const animations = stopIndices.map((targetIndex, reelIndex) => {
       const reel = ui.reelEls[reelIndex];
       const strip = ui.reelStrips[reelIndex];
+      if (!reel || !strip) return Promise.resolve();
       const reelLength = state.reels[reelIndex].length;
       const startIndex = state.currentIndices[reelIndex];
       const normalizedDelta = (targetIndex - startIndex + reelLength) % reelLength;
       const travel = 4 * reelLength + normalizedDelta;
       const delay = reelIndex * 150;
       const duration = 980 + reelIndex * 190;
-      reel.classList.add("is-spinning");
+      const startOffsetPx = Math.round(startIndex * cellHeight * 1000) / 1000;
+      const endOffsetPx = Math.round((startIndex + travel) * cellHeight * 1000) / 1000;
 
       return new Promise((resolve) => {
-        let startTime = 0;
-        function frame(now) {
-          if (destroyed || session !== spinSession) {
-            reel.classList.remove("is-spinning");
-            resolve();
-            return;
-          }
-
-          if (startTime === 0) startTime = now;
-          const elapsed = now - startTime - delay;
-          if (elapsed < 0) {
-            window.requestAnimationFrame(frame);
-            return;
-          }
-
-          const progress = Math.min(elapsed / duration, 1);
-          const eased = easeOutBack(progress);
-          const offset = startIndex + travel * eased;
-          const offsetPx = Math.round(offset * cellHeight * 1000) / 1000;
-          strip.style.transform = `translateY(${-offsetPx}px)`;
-
-          if (progress < 1) {
-            window.requestAnimationFrame(frame);
-            return;
-          }
-
+        const finalize = () => {
           state.currentIndices[reelIndex] = targetIndex;
           const snappedOffset = Math.round(targetIndex * cellHeight * 1000) / 1000;
-          strip.style.transform = `translateY(${-snappedOffset}px)`;
+          strip.style.transition = "none";
+          strip.style.transform = `translate3d(0, ${-snappedOffset}px, 0)`;
           reel.classList.remove("is-spinning");
           resolve();
+        };
+
+        if (destroyed || session !== spinSession) {
+          finalize();
+          return;
         }
-        window.requestAnimationFrame(frame);
+
+        reel.classList.add("is-spinning");
+        strip.style.transition = "none";
+        strip.style.transform = `translate3d(0, ${-startOffsetPx}px, 0)`;
+        void strip.offsetHeight;
+
+        const transitionListener = (event) => {
+          if (event.target !== strip || event.propertyName !== "transform") return;
+          strip.removeEventListener("transitionend", transitionListener);
+          finalize();
+        };
+
+        setTrackedTimeout(() => {
+          if (destroyed || session !== spinSession) {
+            finalize();
+            return;
+          }
+          strip.addEventListener("transitionend", transitionListener);
+          strip.style.transition = `transform ${duration}ms cubic-bezier(0.22, 0.74, 0.18, 1)`;
+          strip.style.transform = `translate3d(0, ${-endOffsetPx}px, 0)`;
+          setTrackedTimeout(() => {
+            strip.removeEventListener("transitionend", transitionListener);
+            finalize();
+          }, duration + 100);
+        }, delay);
       });
     });
 
@@ -15030,13 +15036,18 @@ function loadAppPoker() {
   };
 
   const generateBot = (id) => {
+    const hero = seats[0];
+    const heroBank = Math.max(200, Number(hero?.bank ?? cash) || 1000);
+    const nearHeroLow = Math.max(150, Math.floor(heroBank * 0.65));
+    const nearHeroHigh = Math.max(nearHeroLow + 1, Math.floor(heroBank * 1.35));
+    const nearHeroBank = nearHeroLow + Math.floor(Math.random() * (nearHeroHigh - nearHeroLow + 1));
     const types = Object.keys(ARCHETYPES_LOCAL);
     const archetype = types[Math.floor(Math.random() * types.length)];
     return {
       id,
       name: BOT_NAMES_LOCAL[Math.floor(Math.random() * BOT_NAMES_LOCAL.length)],
       isAi: true,
-      bank: 500 + Math.floor(Math.random() * 1500),
+      bank: nearHeroBank,
       hand: [],
       bet: 0,
       folded: false,
@@ -22472,6 +22483,22 @@ function loadCrash() {
     ctx.restore();
   }
 
+  function drawBaselineGuide(left, rightX, y) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(188, 222, 248, 0.42)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(rightX, y);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(240, 248, 255, 0.92)";
+    ctx.beginPath();
+    ctx.arc(left, y, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function traceSmoothCurve(points, startWithMove = true) {
     if (points.length < 2) return;
     if (startWithMove) ctx.moveTo(points[0].x, points[0].y);
@@ -22491,21 +22518,32 @@ function loadCrash() {
   }
 
   function drawCurve(dt = 1 / 60) {
+    const mobileCrashViewport =
+      !IS_PHONE_EMBED_MODE &&
+      (window.innerWidth || document.documentElement.clientWidth || 0) > 0 &&
+      (window.innerWidth || document.documentElement.clientWidth || 0) <= 430;
+
     const w = game.canvasWidth;
     const h = game.canvasHeight;
     const left = 74;
     const right = 30;
     const top = 26;
-    const bottom = 48;
+    const bottom = mobileCrashViewport ? 62 : 48;
+    const baselineLift = mobileCrashViewport ? 12 : 0;
     const plotWidth = w - left - right;
-    const plotHeight = h - top - bottom;
+    const plotHeight = h - top - bottom - baselineLift;
 
     ctx.clearRect(0, 0, w, h);
+    if (plotWidth <= 10 || plotHeight <= 10) return;
 
     if (game.points.length < 2) {
+      const yMin = 1;
       const baseMMax = 3;
-      const { ticks, yDecimals } = buildYAxisTicks(1, baseMMax);
+      const { ticks, yDecimals } = buildYAxisTicks(yMin, baseMMax);
       drawGrid(left, top, plotWidth, plotHeight, ticks, baseMMax);
+      if (mobileCrashViewport) {
+        drawBaselineGuide(left, left + plotWidth, top + plotHeight);
+      }
       drawAxisLabels(left, top, plotWidth, plotHeight, 0, TIME_WINDOW_SECONDS, baseMMax, ticks, yDecimals);
       return;
     }
@@ -22529,8 +22567,9 @@ function loadCrash() {
 
     const yLerp = 1 - Math.exp(-CAMERA_Y_DAMPING * dt);
     game.viewMMax += (game.viewMMaxTarget - game.viewMMax) * yLerp;
+    const yMin = 1;
     const mMax = Math.max(2.5, game.viewMMax);
-    const { ticks, yDecimals } = buildYAxisTicks(1, mMax);
+    const { ticks, yDecimals } = buildYAxisTicks(yMin, mMax);
 
     drawGrid(left, top, plotWidth, plotHeight, ticks, mMax);
 
@@ -22552,7 +22591,7 @@ function loadCrash() {
 
     const mapped = visiblePoints.map((point) => {
       const normalizedT = Math.max(0, Math.min((point.t - tMin) / tSpan, 1));
-      const normalizedM = Math.max(0, Math.min((point.m - 1) / (mMax - 1), 1));
+      const normalizedM = Math.max(0, Math.min((point.m - yMin) / Math.max(mMax - yMin, 0.0001), 1));
       return {
         x: left + normalizedT * plotWidth,
         y: top + (1 - normalizedM) * plotHeight
@@ -22587,6 +22626,10 @@ function loadCrash() {
     ctx.arc(last.x, last.y, 8, 0, Math.PI * 2);
     ctx.fillStyle = game.state === "crashed" ? "#ff4d4d" : "#f7fcff";
     ctx.fill();
+
+    if (mobileCrashViewport) {
+      drawBaselineGuide(left, left + plotWidth, baseline);
+    }
 
     drawAxisLabels(left, top, plotWidth, plotHeight, tMin, tMax, mMax, ticks, yDecimals);
   }
