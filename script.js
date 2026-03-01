@@ -675,6 +675,7 @@ function showBannedOverlay(message = "You are banned.") {
   authSessionLikelyAuthenticated = false;
   stopAuthSessionWatchdog();
   autoPlay = false;
+  syncTradingPlayButtonLabels();
   clearAccountMessageQueue();
   if (typeof hideFirstLaunchUsernameOverlay === "function") hideFirstLaunchUsernameOverlay();
   if (hiddenAdminPanelOpen && typeof closeHiddenAdminPanel === "function") closeHiddenAdminPanel();
@@ -2577,6 +2578,7 @@ const ACHIEVEMENT_CASH_REWARD_MIN = 10;
 const ACHIEVEMENT_CASH_REWARD_MAX = 150;
 const ACHIEVEMENT_BASE_CASH_MIN = 40;
 const ACHIEVEMENT_BASE_CASH_MAX = 2000;
+const ACHIEVEMENT_UNLOCK_TOAST_MS = 2000;
 const achievementState = {
   unlocked: {},
   stats: {
@@ -2590,6 +2592,10 @@ const achievementState = {
     peakCash: 1000
   }
 };
+let achievementUnlockToastEl = null;
+let achievementUnlockToastTimer = null;
+const achievementUnlockToastQueue = [];
+let achievementUnlockToastShowing = false;
 
 const ACHIEVEMENTS = [
   {
@@ -2879,6 +2885,54 @@ function renderAchievements() {
   achievementsListEl.appendChild(fragment);
 }
 
+function getAchievementUnlockToastEl() {
+  if (achievementUnlockToastEl && document.body.contains(achievementUnlockToastEl)) {
+    return achievementUnlockToastEl;
+  }
+  const toast = document.createElement("div");
+  toast.className = "achievement-unlock-toast";
+  toast.setAttribute("aria-live", "polite");
+  document.body.appendChild(toast);
+  achievementUnlockToastEl = toast;
+  return toast;
+}
+
+function queueAchievementUnlockToast(message) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  achievementUnlockToastQueue.push(text);
+  if (achievementUnlockToastShowing) return;
+  showNextAchievementUnlockToast();
+}
+
+function showNextAchievementUnlockToast() {
+  if (achievementUnlockToastQueue.length === 0) {
+    achievementUnlockToastShowing = false;
+    return;
+  }
+
+  const toast = getAchievementUnlockToastEl();
+  achievementUnlockToastShowing = true;
+
+  if (achievementUnlockToastTimer) {
+    clearTimeout(achievementUnlockToastTimer);
+    achievementUnlockToastTimer = null;
+  }
+
+  toast.textContent = achievementUnlockToastQueue.shift();
+  toast.classList.remove("show");
+  void toast.offsetWidth;
+  toast.classList.add("show");
+
+  achievementUnlockToastTimer = setTimeout(() => {
+    toast.classList.remove("show");
+    achievementUnlockToastTimer = setTimeout(() => {
+      achievementUnlockToastTimer = null;
+      showNextAchievementUnlockToast();
+    }, 180);
+  }, ACHIEVEMENT_UNLOCK_TOAST_MS);
+}
+
 function updateAchievements(currentNet) {
   achievementState.stats.peakCash = Math.max(achievementState.stats.peakCash, cash);
   achievementState.stats.peakNet = Math.max(achievementState.stats.peakNet, currentNet);
@@ -2890,6 +2944,7 @@ function updateAchievements(currentNet) {
       achievementState.unlocked[achievement.id] = Date.now();
       if (!achievement.skipUnlockNotification) {
         pushPhoneNotification("achievement", `Achievement unlocked: ${achievement.title}`);
+        queueAchievementUnlockToast(`🏆 Achievement unlocked: ${achievement.title}`);
       }
       unlockedNew = true;
     }
@@ -6207,6 +6262,64 @@ function runTradingAction(action) {
   };
 }
 
+function isIphoneDayTradingViewport() {
+  if (IS_PHONE_EMBED_MODE) return false;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  return IS_APPLE_TOUCH_DEVICE && viewportWidth > 0 && viewportWidth <= 980;
+}
+
+function syncTradingPlayButtonLabels() {
+  const label = autoPlay ? "Pause" : "Play";
+  const pauseButton = document.getElementById("pause");
+  if (pauseButton) pauseButton.textContent = label;
+  const iphonePlayButton = document.getElementById("iphoneTradingPlayBtn");
+  if (iphonePlayButton) iphonePlayButton.textContent = label;
+}
+
+function syncIphoneTradingControlBar() {
+  const enabled = isIphoneDayTradingViewport();
+  document.body.classList.toggle("iphone-day-trading-controls", enabled);
+
+  let bar = document.getElementById("iphoneTradingControlBar");
+  if (!enabled) {
+    if (bar) bar.remove();
+    return;
+  }
+
+  const tradingSection = document.getElementById("trading-section");
+  if (!tradingSection) return;
+
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "iphoneTradingControlBar";
+    bar.innerHTML = `
+      <button id="iphoneTradingNextBtn" type="button">Next Step</button>
+      <button id="iphoneTradingPlayBtn" type="button">Play</button>
+    `;
+    tradingSection.appendChild(bar);
+  }
+
+  const nextButton = document.getElementById("iphoneTradingNextBtn");
+  if (nextButton && nextButton.dataset.boundTradingNext !== "1") {
+    nextButton.addEventListener("click", runTradingAction(() => stepMarket()));
+    nextButton.dataset.boundTradingNext = "1";
+  }
+
+  const playButton = document.getElementById("iphoneTradingPlayBtn");
+  if (playButton && playButton.dataset.boundTradingPause !== "1") {
+    playButton.addEventListener(
+      "click",
+      runTradingAction(() => {
+        autoPlay = !autoPlay;
+        syncTradingPlayButtonLabels();
+      })
+    );
+    playButton.dataset.boundTradingPause = "1";
+  }
+
+  syncTradingPlayButtonLabels();
+}
+
 if (buyBtn) buyBtn.addEventListener("click", runTradingAction(() => buy(1)));
 if (buyAllBtn) buyAllBtn.addEventListener("click", runTradingAction(() => buyAllShares()));
 if (sellBtn) sellBtn.addEventListener("click", runTradingAction(() => sell(1)));
@@ -6225,7 +6338,7 @@ function bindTradingCoreControlButtons() {
       "click",
       runTradingAction(() => {
         autoPlay = !autoPlay;
-        pauseButton.textContent = autoPlay ? "Pause" : "Play";
+        syncTradingPlayButtonLabels();
       })
     );
     pauseButton.dataset.boundTradingPause = "1";
@@ -6248,12 +6361,14 @@ function ensureTradingCoreControlButtons() {
   };
 
   ensureButton("next", "Next Step");
-  const pauseButton = ensureButton("pause", autoPlay ? "Pause" : "Play");
-  pauseButton.textContent = autoPlay ? "Pause" : "Play";
+  ensureButton("pause", autoPlay ? "Pause" : "Play");
   bindTradingCoreControlButtons();
+  syncTradingPlayButtonLabels();
+  syncIphoneTradingControlBar();
 }
 
 ensureTradingCoreControlButtons();
+window.addEventListener("resize", syncIphoneTradingControlBar);
 
 function applyCarryCost() {
   if (shares <= 0) return;
@@ -24116,6 +24231,7 @@ function loadKeno() {
   }
 
   function revealDrawNumber(number) {
+    playGameSound("keno", { restart: true, allowOverlap: true, throttleMs: 0 });
     const tile = ui.grid?.querySelector(`[data-number="${number}"]`);
     if (tile) {
       if (game.selected.has(number)) tile.classList.add("match");
@@ -24239,7 +24355,6 @@ function loadKeno() {
     syncGlobalCash();
 
     const draw = generateDraw(game.selected, bet, game.isAutoRunning);
-    playGameSound("keno", { restart: true, allowOverlap: false });
     if (ui.instantDraw?.checked) {
       draw.forEach((number) => revealDrawNumber(number));
     } else {
