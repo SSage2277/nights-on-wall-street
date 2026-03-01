@@ -168,30 +168,42 @@ const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
 ]);
 
 const GAME_SOUND_ASSETS = Object.freeze({
+  big_win: "Sound Effects/big_win.mp3",
+  cashout: "Sound Effects/cashout.mp3",
   car_screech: "Sound Effects/car_screech.mp3",
   card_deal: "Sound Effects/card_deal.mp3",
   chicken: "Sound Effects/chicken.mp3",
   chicken_dead: "Sound Effects/chicken_dead.mp3",
   click: "Sound Effects/click.mp3",
+  dragon_tower: "Sound Effects/dragon_tower.mp3",
   horse_start: "Sound Effects/horse_start.mp3",
+  keno: "Sound Effects/keno.mp3",
   loss: "Sound Effects/loss.mp3",
+  mines: "Sound Effects/Mines.mp3",
   mines_explosion: "Sound Effects/mines_explosion.mp3",
+  plinko_multiplier: "Sound Effects/plinko_multiplier.mp3",
   plinko_pop: "Sound Effects/plinko_pop.mp3",
   roulette_spin: "Sound Effects/roulette_spin.mp3",
   slide_spin: "Sound Effects/slide_spin.mp3",
   slots_spin: "Sound Effects/slots_spin.mp3",
-  win: "Sound Effects/Win.mp3"
+  win: "Sound Effects/big_win.mp3"
 });
 
 const GAME_SOUND_DEFAULTS = Object.freeze({
+  big_win: { volume: 0.82, allowOverlap: true, throttleMs: 260 },
+  cashout: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 120 },
   car_screech: { volume: 0.62, allowOverlap: false, restart: true, throttleMs: 180 },
   card_deal: { volume: 0.6, allowOverlap: true, throttleMs: 50 },
   chicken: { volume: 0.62, allowOverlap: false, restart: true, throttleMs: 90 },
   chicken_dead: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 220 },
   click: { volume: 0.45, allowOverlap: false, restart: true, throttleMs: 60 },
+  dragon_tower: { volume: 0.64, allowOverlap: true, throttleMs: 80 },
   horse_start: { volume: 0.72, allowOverlap: false, restart: true, throttleMs: 240 },
+  keno: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 120 },
   loss: { volume: 0.66, allowOverlap: true, throttleMs: 150 },
+  mines: { volume: 0.62, allowOverlap: true, throttleMs: 90 },
   mines_explosion: { volume: 0.78, allowOverlap: false, restart: true, throttleMs: 200 },
+  plinko_multiplier: { volume: 0.66, allowOverlap: true, throttleMs: 70 },
   plinko_pop: { volume: 0.58, allowOverlap: true, throttleMs: 80 },
   roulette_spin: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 300 },
   slide_spin: { volume: 0.66, allowOverlap: false, restart: true, throttleMs: 300 },
@@ -314,6 +326,11 @@ function maybePlayCasinoBetClickSound(target) {
 
   const text = getSoundTextFromElement(trigger);
   if (!GAME_CLICK_SOUND_PATTERN.test(text)) return;
+  const currentGameKey = String(activeCasinoGameKey || PHONE_EMBED_GAME_PARAM || "").toLowerCase();
+  if (currentGameKey === "plinko") {
+    playGameSound("plinko_pop");
+    return;
+  }
   playGameSound("click");
 }
 
@@ -5900,12 +5917,18 @@ function showCasinoWinPopup(amountOrOptions, fallbackMultiplier = null) {
   });
 
   const mult = Number(options.multiplier);
+  const isBigWin =
+    options.bigWin === true ||
+    (Number.isFinite(mult) && mult >= 10) ||
+    winAmount >= 500;
+  const requestedSound = typeof options.soundKey === "string" ? options.soundKey.trim().toLowerCase() : "";
+  const soundKey = requestedSound || (isBigWin ? "big_win" : "");
   const casinoContainer = document.getElementById("casino-container");
   const inCasinoView =
     document.body.classList.contains("game-fullscreen") ||
     (casinoContainer && casinoContainer.children.length > 0);
   if (!inCasinoView) return autoSaved;
-  playGameSound("win");
+  if (soundKey) playGameSound(soundKey);
   achievementState.stats.casinoWins += 1;
   saveAchievements();
 
@@ -5915,11 +5938,6 @@ function showCasinoWinPopup(amountOrOptions, fallbackMultiplier = null) {
   const multEl = popup.querySelector(".casino-win-mult");
   const amountEl = popup.querySelector(".casino-win-amount");
   if (!multEl || !amountEl) return autoSaved;
-
-  const isBigWin =
-    options.bigWin === true ||
-    (Number.isFinite(mult) && mult >= 10) ||
-    winAmount >= 500;
 
   if (casinoWinCountupRafId) {
     cancelAnimationFrame(casinoWinCountupRafId);
@@ -13471,6 +13489,7 @@ function loadHiLo() {
 
   function cashout() {
     if (!hiloState.gameActive) return;
+    playGameSound("cashout", { restart: true, allowOverlap: false });
     const payout = hiloState.currentProfit;
     const netProfit = payout - hiloState.betAmount;
     cash += hiloState.currentProfit;
@@ -16880,9 +16899,9 @@ function loadCasinoPlinkoNeon() {
     }
   }
 
-  function resolveWin(slot, bet) {
-    if (MULTIPLIERS[slot] == null) return;
-    playGameSound("plinko_pop");
+function resolveWin(slot, bet) {
+  if (MULTIPLIERS[slot] == null) return;
+  playGameSound("plinko_multiplier");
 
     const multiplier = MULTIPLIERS[slot];
     const win = roundCurrency(bet * multiplier);
@@ -18198,7 +18217,7 @@ class Ball {
 function resolveWin(slot, bet) {
   const multiplier = plinko.MULTIPLIERS[slot];
   if (!multiplier) return;
-  playGameSound("plinko_pop");
+  playGameSound("plinko_multiplier");
 
   const win = bet * multiplier;
   const profit = roundCurrency(win - bet);
@@ -19362,6 +19381,7 @@ function loadDragonTower() {
     }
 
     if (!win) lastOutcome = "loss";
+    if (!win) playGameSound("loss");
     if (uiMode === "manual") cashBtn.disabled = true;
 
     multiplier = 1;
@@ -19375,6 +19395,7 @@ function loadDragonTower() {
 
   function cashOut() {
     if (!gameActive || destroyed) return;
+    playGameSound("cashout", { restart: true, allowOverlap: false });
 
     if (scheduledCashoutId) {
       window.clearTimeout(scheduledCashoutId);
@@ -19395,7 +19416,9 @@ function loadDragonTower() {
     }
 
     updateBalance();
-    if (netProfit > 0) showCasinoWinPopup({ amount: netProfit, multiplier });
+    if (netProfit > 0) {
+      showCasinoWinPopup({ amount: netProfit, multiplier });
+    }
     message(`Won $${win.toFixed(2)}`);
     endGame(true);
   }
@@ -19416,6 +19439,7 @@ function loadDragonTower() {
     revealRow(rowIndex, colIndex);
 
     if (towerData[rowIndex][colIndex]) {
+      playGameSound("dragon_tower");
       growMultiplier();
       rowElements[rowIndex]?.classList.remove("active");
 
@@ -19771,6 +19795,7 @@ function loadDice() {
         gameState.balance -= gameState.currentBet;
         resultPopup.classList.add("lose");
         rollBtn.style.backgroundColor = "#ff4d4d";
+        playGameSound("loss");
       }
 
       syncGlobalCash();
@@ -22446,10 +22471,13 @@ function loadCrash() {
 
     for (const value of yTicks) {
       const normalized = (value - 1) / Math.max(mMax - 1, 0.0001);
-      const centerY = top + (1 - normalized) * plotHeight;
       const label = `${value.toFixed(yDecimals)}x`;
       const boxWidth = Math.max(48, ctx.measureText(label).width + 16);
       const boxHeight = 24;
+      const rawCenterY = top + (1 - normalized) * plotHeight;
+      const minCenterY = top + boxHeight / 2 + 1;
+      const maxCenterY = top + plotHeight - boxHeight / 2 - 1;
+      const centerY = Math.min(maxCenterY, Math.max(minCenterY, rawCenterY));
       const boxX = 12;
       const boxY = centerY - boxHeight / 2;
 
@@ -22520,18 +22548,19 @@ function loadCrash() {
   function drawCurve(dt = 1 / 60) {
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const compactMobileViewport = viewportWidth > 0 && viewportWidth <= 430;
-    const mobileCrashViewport =
-      compactMobileViewport &&
-      (IS_PHONE_EMBED_MODE || document.body.classList.contains("phone-embedded-mini-mode"));
-    const mobileCrashBaselineViewport = compactMobileViewport;
+    const touchLikeViewport =
+      IS_PHONE_EMBED_MODE ||
+      (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches);
+    const mobileCrashBaselineViewport = viewportWidth > 0 && viewportWidth <= 980 && touchLikeViewport;
+    const mobileCrashViewport = compactMobileViewport && mobileCrashBaselineViewport;
 
     const w = game.canvasWidth;
     const h = game.canvasHeight;
     const left = 74;
     const right = 30;
     const top = 26;
-    const bottom = mobileCrashViewport ? 118 : mobileCrashBaselineViewport ? 62 : 48;
-    const baselineLift = mobileCrashViewport ? 0 : mobileCrashBaselineViewport ? 12 : 0;
+    const bottom = mobileCrashViewport ? 118 : mobileCrashBaselineViewport ? 92 : 48;
+    const baselineLift = mobileCrashBaselineViewport ? 10 : 0;
     const plotWidth = w - left - right;
     const plotHeight = h - top - bottom - baselineLift;
 
@@ -22737,11 +22766,14 @@ function loadCrash() {
 
   function settleCashout(trigger = "manual") {
     if (game.state !== "running" || game.playerCashedOut) return;
+    playGameSound("cashout", { restart: true, allowOverlap: false });
 
     const payout = game.currentBet * game.multiplier;
     const netProfit = payout - game.currentBet;
     game.balance += payout;
-    if (netProfit > 0) showCasinoWinPopup({ amount: netProfit, multiplier: game.multiplier });
+    if (netProfit > 0) {
+      showCasinoWinPopup({ amount: netProfit, multiplier: game.multiplier });
+    }
     syncGlobalCash();
     updateBalanceDisplay();
     triggerCasinoKickoutCheckAfterRound();
@@ -23485,6 +23517,7 @@ function loadMines() {
   function handleGemReveal() {
     state.gemsFound += 1;
     state.multiplier = calculateMultiplier(state.gemsFound, state.mines);
+    playGameSound("mines");
     animateMultiplier();
     updateStatsUI();
 
@@ -23521,10 +23554,13 @@ function loadMines() {
   }
 
   function endRoundAsCashOut(customMessage) {
+    playGameSound("cashout", { restart: true, allowOverlap: false });
     const payout = state.currentBet * state.multiplier;
     const netProfit = payout - state.currentBet;
     state.balance += payout;
-    if (netProfit > 0) showCasinoWinPopup({ amount: netProfit, multiplier: state.multiplier });
+    if (netProfit > 0) {
+      showCasinoWinPopup({ amount: netProfit, multiplier: state.multiplier });
+    }
     syncGlobalCash();
 
     disableGrid();
@@ -24203,6 +24239,7 @@ function loadKeno() {
     syncGlobalCash();
 
     const draw = generateDraw(game.selected, bet, game.isAutoRunning);
+    playGameSound("keno", { restart: true, allowOverlap: false });
     if (ui.instantDraw?.checked) {
       draw.forEach((number) => revealDrawNumber(number));
     } else {
@@ -24905,7 +24942,14 @@ function loadCrossyRoad() {
 
     const net = round2(payout - state.bet);
     if (reason === "crash_car" || net < 0) playGameSound("loss");
-    if (net > 0) showCasinoWinPopup({ amount: net, multiplier });
+    if (net > 0) {
+      if (reason === "cashout") {
+        playGameSound("cashout", { restart: true, allowOverlap: false });
+        showCasinoWinPopup({ amount: net, multiplier });
+      } else {
+        showCasinoWinPopup({ amount: net, multiplier });
+      }
+    }
     triggerCasinoKickoutCheckAfterRound();
     state.moveQueue = [];
     state.nextMoveAt = 0;

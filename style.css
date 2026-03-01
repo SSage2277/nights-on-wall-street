@@ -15935,8 +15935,8 @@ body.phone-embedded-mini-mode .phone-casino-shell.phone-casino-shell-horse .phon
   }
 
   body.game-fullscreen:not(.phone-embedded-mini-mode) #casino-container > .crash-root .display-area {
-    min-height: 320px;
-    padding-bottom: 8px;
+    min-height: 360px;
+    padding-bottom: 22px;
   }
 }
 
