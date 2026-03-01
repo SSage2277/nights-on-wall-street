@@ -22518,18 +22518,20 @@ function loadCrash() {
   }
 
   function drawCurve(dt = 1 / 60) {
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const compactMobileViewport = viewportWidth > 0 && viewportWidth <= 430;
     const mobileCrashViewport =
-      !IS_PHONE_EMBED_MODE &&
-      (window.innerWidth || document.documentElement.clientWidth || 0) > 0 &&
-      (window.innerWidth || document.documentElement.clientWidth || 0) <= 430;
+      compactMobileViewport &&
+      (IS_PHONE_EMBED_MODE || document.body.classList.contains("phone-embedded-mini-mode"));
+    const mobileCrashBaselineViewport = compactMobileViewport;
 
     const w = game.canvasWidth;
     const h = game.canvasHeight;
     const left = 74;
     const right = 30;
     const top = 26;
-    const bottom = mobileCrashViewport ? 62 : 48;
-    const baselineLift = mobileCrashViewport ? 12 : 0;
+    const bottom = mobileCrashViewport ? 118 : mobileCrashBaselineViewport ? 62 : 48;
+    const baselineLift = mobileCrashViewport ? 0 : mobileCrashBaselineViewport ? 12 : 0;
     const plotWidth = w - left - right;
     const plotHeight = h - top - bottom - baselineLift;
 
@@ -22541,7 +22543,7 @@ function loadCrash() {
       const baseMMax = 3;
       const { ticks, yDecimals } = buildYAxisTicks(yMin, baseMMax);
       drawGrid(left, top, plotWidth, plotHeight, ticks, baseMMax);
-      if (mobileCrashViewport) {
+      if (mobileCrashBaselineViewport) {
         drawBaselineGuide(left, left + plotWidth, top + plotHeight);
       }
       drawAxisLabels(left, top, plotWidth, plotHeight, 0, TIME_WINDOW_SECONDS, baseMMax, ticks, yDecimals);
@@ -22627,7 +22629,7 @@ function loadCrash() {
     ctx.fillStyle = game.state === "crashed" ? "#ff4d4d" : "#f7fcff";
     ctx.fill();
 
-    if (mobileCrashViewport) {
+    if (mobileCrashBaselineViewport) {
       drawBaselineGuide(left, left + plotWidth, baseline);
     }
 
