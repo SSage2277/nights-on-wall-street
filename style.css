@@ -1507,6 +1507,84 @@ body {
   border-top: 1px solid #22364a;
 }
 
+.hidden-admin-visits-chart {
+  margin: 0 8px 8px;
+  border: 1px solid #25435a;
+  border-radius: 10px;
+  background: rgba(8, 24, 38, 0.72);
+  padding: 8px 10px 10px;
+}
+
+.hidden-admin-visits-chart-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 7px;
+}
+
+.hidden-admin-visits-chart-title {
+  color: #d9edff;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.hidden-admin-visits-chart-peak {
+  color: #8fb3cf;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.hidden-admin-visits-bars {
+  height: 124px;
+  border: 1px solid #213a50;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(12, 33, 51, 0.75), rgba(7, 22, 36, 0.9));
+  padding: 10px 8px 8px;
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 3px;
+  align-items: end;
+}
+
+.hidden-admin-visits-bar-wrap {
+  height: 100%;
+  display: flex;
+  align-items: end;
+}
+
+.hidden-admin-visits-bar {
+  width: 100%;
+  min-height: 4px;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, #2f6285, #1f4661);
+  opacity: 0.45;
+}
+
+.hidden-admin-visits-bar.is-active {
+  background: linear-gradient(180deg, #3aa8ff, #2d6db1);
+  opacity: 0.95;
+}
+
+.hidden-admin-visits-axis {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  color: #7f9bb2;
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.hidden-admin-visits-axis span:nth-child(2),
+.hidden-admin-visits-axis span:nth-child(3),
+.hidden-admin-visits-axis span:nth-child(4) {
+  text-align: center;
+}
+
+.hidden-admin-visits-axis span:last-child {
+  text-align: right;
+}
+
 .site-legal-links {
   position: fixed;
   right: 10px;

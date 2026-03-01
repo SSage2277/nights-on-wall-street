@@ -4410,7 +4410,10 @@ app.get("/api/admin/stats", async (req, res) => {
   try {
     const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
     if (!adminAccess) return;
+    const HOUR_MS = 60 * 60 * 1000;
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const currentHourStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+    const timelineStart = currentHourStart - 23 * HOUR_MS;
     const totals = await db.query(
       `
         WITH user_totals AS (
@@ -4474,7 +4477,34 @@ app.get("/api/admin/stats", async (req, res) => {
       `,
       [dayAgo]
     );
+    const hourlyTimeline = await db.query(
+      `
+        WITH hours AS (
+          SELECT ($1::bigint + (gs.idx * $2::bigint))::bigint AS bucket_ms
+          FROM generate_series(0, 23) AS gs(idx)
+        ),
+        visit_hourly AS (
+          SELECT
+            (((visited_at / $2::bigint)::bigint) * $2::bigint)::bigint AS bucket_ms,
+            COUNT(*)::int AS visits
+          FROM site_visit_events
+          WHERE visited_at >= $1
+          GROUP BY 1
+        )
+        SELECT
+          h.bucket_ms,
+          COALESCE(v.visits, 0)::int AS visits
+        FROM hours h
+        LEFT JOIN visit_hourly v ON v.bucket_ms = h.bucket_ms
+        ORDER BY h.bucket_ms ASC
+      `,
+      [timelineStart, HOUR_MS]
+    );
     const row = totals.rows[0] || {};
+    const siteVisits24hTimeline = (hourlyTimeline.rows || []).map((point) => ({
+      hourStart: Number(point.bucket_ms) || 0,
+      visits: Number(point.visits) || 0
+    }));
     res.json({
       ok: true,
       stats: {
@@ -4495,7 +4525,8 @@ app.get("/api/admin/stats", async (req, res) => {
         siteVisitsTotal: Number(row.site_visits_total) || 0,
         siteVisits24h: Number(row.site_visits_24h) || 0,
         uniqueVisitorsTotal: Number(row.unique_visitors_total) || 0,
-        uniqueVisitors24h: Number(row.unique_visitors_24h) || 0
+        uniqueVisitors24h: Number(row.unique_visitors_24h) || 0,
+        siteVisits24hTimeline
       },
       trustedDevice: adminAccess.device || null
     });

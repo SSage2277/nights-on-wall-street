@@ -2611,6 +2611,27 @@ const NEWS_EVENTS = buildNewsPool();
 // Risk controls
 const BASE_SLIPPAGE = 0.001;
 const TRADE_FEE = 0.002;
+const EARLY_TRADING_PROFIT_TARGET = 500;
+const EARLY_SLIPPAGE_BONUS = 0.0016;
+const EARLY_TRADE_FEE_BONUS = 0.0024;
+
+function getEarlyTradingDifficultyScale(marketPrice = price) {
+  const targetNetWorth = BASE_NET_WORTH + EARLY_TRADING_PROFIT_TARGET;
+  const currentNetWorth = getNetWorth(marketPrice);
+  const progress = clampMarket((currentNetWorth - BASE_NET_WORTH) / Math.max(1, EARLY_TRADING_PROFIT_TARGET), 0, 1);
+  if (currentNetWorth >= targetNetWorth) return 0;
+  return 1 - progress;
+}
+
+function getTradeExecutionCosts(currentShares = shares, marketPrice = price) {
+  const normalizedShares = Math.max(0, Math.floor(Number(currentShares) || 0));
+  const baselineSlippage = BASE_SLIPPAGE * (1 + normalizedShares / 50);
+  const earlyScale = getEarlyTradingDifficultyScale(marketPrice);
+  return {
+    slippage: baselineSlippage + EARLY_SLIPPAGE_BONUS * earlyScale,
+    fee: TRADE_FEE + EARLY_TRADE_FEE_BONUS * earlyScale
+  };
+}
 
 // =====================================================
 // =================== UI ELEMENTS =====================
@@ -6251,8 +6272,8 @@ function triggerNews() {
 function buy(amount) {
   let sharesBought = 0;
   for (let i = 0; i < amount; i++) {
-    const slippage = BASE_SLIPPAGE * (1 + shares / 50);
-    const cost = price * (1 + slippage + TRADE_FEE);
+    const { slippage, fee } = getTradeExecutionCosts(shares, price);
+    const cost = price * (1 + slippage + fee);
     if (cash < cost) break;
     avgCost = (avgCost * shares + cost) / (shares + 1);
     cash -= cost;
@@ -6271,8 +6292,8 @@ function sell(amount) {
   let realizedProfit = 0;
   amount = Math.min(amount, shares);
   for (let i = 0; i < amount; i++) {
-    const slippage = BASE_SLIPPAGE * (1 + shares / 50);
-    const revenue = price * (1 - slippage - TRADE_FEE);
+    const { slippage, fee } = getTradeExecutionCosts(shares, price);
+    const revenue = price * (1 - slippage - fee);
     realizedProfit += revenue - avgCost;
     cash += revenue;
     shares--;
@@ -6290,8 +6311,8 @@ function sell(amount) {
 function buyAllShares() {
   let sharesBought = 0;
   while (true) {
-    const slippage = BASE_SLIPPAGE * (1 + shares / 50);
-    const cost = price * (1 + slippage + TRADE_FEE);
+    const { slippage, fee } = getTradeExecutionCosts(shares, price);
+    const cost = price * (1 + slippage + fee);
     if (cash < cost) break;
     avgCost = (avgCost * shares + cost) / (shares + 1);
     cash -= cost;
@@ -7572,7 +7593,58 @@ function renderHiddenAdminStats() {
       </div>
     `)
     .join("");
-  hiddenAdminStatsEl.innerHTML = `<div class="hidden-admin-stats-grid">${cards}</div>`;
+  const now = Date.now();
+  const hourMs = 60 * 60 * 1000;
+  const rawTimeline = Array.isArray(stats.siteVisits24hTimeline) ? stats.siteVisits24hTimeline : [];
+  const fallbackStart = now - (23 * hourMs);
+  const timeline = rawTimeline.length
+    ? rawTimeline.slice(-24).map((point, idx, arr) => ({
+        hourStart:
+          Number(point?.hourStart) > 0
+            ? Number(point.hourStart)
+            : fallbackStart + (idx * hourMs) + Math.max(0, (24 - arr.length)) * hourMs,
+        visits: Math.max(0, Number(point?.visits) || 0)
+      }))
+    : Array.from({ length: 24 }, (_, idx) => ({
+        hourStart: fallbackStart + (idx * hourMs),
+        visits: 0
+      }));
+  const peakVisits = timeline.reduce((max, point) => Math.max(max, point.visits), 0);
+  const timelineBars = timeline
+    .map((point) => {
+      const ratio = peakVisits > 0 ? point.visits / peakVisits : 0;
+      const heightPercent = point.visits > 0 ? Math.max(12, Math.round(ratio * 100)) : 6;
+      const hourLabel = new Date(point.hourStart).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const title = `${hourLabel} — ${point.visits} visit${point.visits === 1 ? "" : "s"}`;
+      return `
+        <div class="hidden-admin-visits-bar-wrap">
+          <div
+            class="hidden-admin-visits-bar ${point.visits > 0 ? "is-active" : ""}"
+            style="height:${heightPercent}%"
+            title="${escapeHtml(title)}"
+            aria-label="${escapeHtml(title)}"
+          ></div>
+        </div>
+      `;
+    })
+    .join("");
+  const visitsChart = `
+    <div class="hidden-admin-visits-chart">
+      <div class="hidden-admin-visits-chart-header">
+        <div class="hidden-admin-visits-chart-title">Site Visits Timeline (Last 24h)</div>
+        <div class="hidden-admin-visits-chart-peak">Peak: ${escapeHtml(String(peakVisits))}/hr</div>
+      </div>
+      <div class="hidden-admin-visits-bars">${timelineBars}</div>
+      <div class="hidden-admin-visits-axis">
+        <span>-24h</span>
+        <span>-18h</span>
+        <span>-12h</span>
+        <span>-6h</span>
+        <span>Now</span>
+      </div>
+    </div>
+  `;
+  hiddenAdminStatsEl.innerHTML = `<div class="hidden-admin-stats-grid">${cards}</div>${visitsChart}`;
 }
 
 function renderHiddenAdminHealth() {
