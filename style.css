@@ -19082,11 +19082,28 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 72px);
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls #next,
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #controls #pause {
     display: none !important;
+  }
+
+  body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #buy {
+    order: 1;
+  }
+
+  body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #sell {
+    order: 2;
+  }
+
+  body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #buyAll {
+    order: 3;
+  }
+
+  body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #sellAll {
+    order: 4;
   }
 
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #iphoneTradingControlBar {
@@ -19125,6 +19142,10 @@ body.game-fullscreen #casino-container.casino-roulette-classic-fullbleed > #casi
   body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #iphoneTradingPlayBtn {
     background: linear-gradient(180deg, #6c8ca3, #4b6577);
     border-color: rgba(108, 140, 163, 0.4);
+  }
+
+  body.iphone-day-trading-controls:not(.phone-embedded-mini-mode) #trading-section #speed-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   body:not(.phone-embedded-mini-mode) #trading-section #speed-controls {
