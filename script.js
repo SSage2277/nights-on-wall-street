@@ -7607,6 +7607,7 @@ function renderHiddenAdminUsers() {
       const pendingClaims = Number(user.pendingClaims) || 0;
       const wins = Number(user.totalWins) || 0;
       const lastSeen = formatDateTime(user.lastSeenAt);
+      const lastIp = escapeHtml(String(user.lastIp || "").trim() || "—");
       const bannedAt = Number(user.bannedAt) || 0;
       const mutedUntil = Number(user.mutedUntil) || 0;
       const isBanned = bannedAt > 0;
@@ -7635,6 +7636,7 @@ function renderHiddenAdminUsers() {
           <td>${pendingClaims}</td>
           <td>${wins}</td>
           <td>${lastSeen}</td>
+          <td>${lastIp}</td>
           <td>
             <button type="button" data-user-action="message" data-player-id="${playerId}">Message</button>
             <button type="button" data-user-action="set-balance" data-player-id="${playerId}" data-current-balance="${(Number(user.balance) || 0).toFixed(2)}">Set Balance</button>
@@ -7674,12 +7676,13 @@ function renderHiddenAdminUsers() {
           <th>Pending</th>
           <th>Wins</th>
           <th>Last Seen</th>
+          <th>Last IP</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="hidden-admin-footnote">Passwords are securely hashed and never shown in plaintext.</div>
+    <div class="hidden-admin-footnote">Passwords are securely hashed and never shown in plaintext. Last IP uses latest tracked visit for that account.</div>
   `;
 }
 

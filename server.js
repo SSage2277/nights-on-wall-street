@@ -672,6 +672,7 @@ function mapAdminUserRow(row) {
   const base = mapUserRow(row);
   return {
     ...base,
+    lastIp: String(row.last_ip || "").slice(0, 128),
     isAdmin: row.is_admin === true,
     hasPassword: row.has_password === true,
     bannedAt: Number(row.banned_at) || 0,
@@ -2453,6 +2454,7 @@ app.get("/api/admin/users", async (req, res) => {
           u.savings_balance,
           u.auto_savings_percent,
           u.last_seen_at,
+          COALESCE(visits.last_ip, '') AS last_ip,
           u.is_admin,
           u.banned_at,
           u.banned_reason,
@@ -2475,6 +2477,16 @@ app.get("/api/admin/users", async (req, res) => {
           FROM claims
           GROUP BY player_id
         ) claims ON claims.player_id = u.player_id
+        LEFT JOIN LATERAL (
+          SELECT
+            sve.ip AS last_ip,
+            sve.visited_at
+          FROM site_visit_events sve
+          WHERE sve.player_id = u.player_id
+            AND COALESCE(sve.ip, '') <> ''
+          ORDER BY sve.visited_at DESC, sve.id DESC
+          LIMIT 1
+        ) visits ON TRUE
         LEFT JOIN (
           SELECT
             player_id,
