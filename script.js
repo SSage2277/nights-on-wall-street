@@ -1452,12 +1452,13 @@ async function submitFirstLaunchUsername() {
     try {
       const payload = await venmoApiRequest("/api/auth/login", {
         method: "POST",
-        body: { username, password }
+        body: { username, password },
+        onRetry: ({ attempt, maxAttempts }) => {
+          setFirstLaunchUsernameError(`Connecting to server... (${attempt}/${maxAttempts})`);
+        }
       });
       const sessionReady = await ensureAuthSessionReady(payload?.user?.playerId || "");
-      if (!sessionReady) {
-        throw new Error("Login session was not saved. Open the live site and try again.");
-      }
+      if (!sessionReady) console.warn("Auth session confirmation timed out after login; continuing.");
       const ok = applyAuthenticatedProfile(payload?.user, {
         useServerBalance: true,
         preferLocalBalance: false,
@@ -1470,7 +1471,24 @@ async function submitFirstLaunchUsername() {
       if (loginPasswordInput) loginPasswordInput.value = "";
       return true;
     } catch (error) {
-      setFirstLaunchUsernameError(String(error?.message || "Could not login right now."));
+      const status = Number(error?.status);
+      const errorMessage = String(error?.message || "");
+      const lowerError = errorMessage.toLowerCase();
+      if (
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        errorMessage.includes("(502)") ||
+        errorMessage.includes("(503)") ||
+        errorMessage.includes("(504)") ||
+        lowerError.includes("failed to fetch") ||
+        lowerError.includes("networkerror") ||
+        lowerError.includes("load failed")
+      ) {
+        setFirstLaunchUsernameError("Server is waking up. Please wait a few seconds, then try again.");
+      } else {
+        setFirstLaunchUsernameError(errorMessage || "Could not login right now.");
+      }
       if (loginPasswordInput) loginPasswordInput.focus();
       return false;
     } finally {
@@ -1499,12 +1517,13 @@ async function submitFirstLaunchUsername() {
         username: candidate,
         password,
         balance: roundCurrency(cash)
+      },
+      onRetry: ({ attempt, maxAttempts }) => {
+        setFirstLaunchUsernameError(`Connecting to server... (${attempt}/${maxAttempts})`);
       }
     });
     const sessionReady = await ensureAuthSessionReady(payload?.user?.playerId || "");
-    if (!sessionReady) {
-      throw new Error("Account created, but login session was not saved. Open the live site and login.");
-    }
+    if (!sessionReady) console.warn("Auth session confirmation timed out after registration; continuing.");
     const ok = applyAuthenticatedProfile(payload?.user, {
       useServerBalance: true,
       preferLocalBalance: false,
@@ -1520,6 +1539,22 @@ async function submitFirstLaunchUsername() {
   } catch (error) {
     const message = String(error?.message || "");
     const lowerMessage = message.toLowerCase();
+    const status = Number(error?.status);
+    if (
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      message.includes("(502)") ||
+      message.includes("(503)") ||
+      message.includes("(504)") ||
+      lowerMessage.includes("failed to fetch") ||
+      lowerMessage.includes("networkerror") ||
+      lowerMessage.includes("load failed")
+    ) {
+      setFirstLaunchUsernameError("Server is waking up. Please wait a few seconds, then try again.");
+      if (registerUsernameInput) registerUsernameInput.focus();
+      return false;
+    }
     if (lowerMessage.includes("account already exists for this player")) {
       try {
         localStorage.removeItem(VENMO_PLAYER_ID_STORAGE_KEY);
@@ -7289,6 +7324,8 @@ async function venmoApiRequest(path, options = {}) {
   const config = { ...options };
   const skipFallback = config.skipFallback === true;
   delete config.skipFallback;
+  const onRetry = typeof config.onRetry === "function" ? config.onRetry : null;
+  delete config.onRetry;
   if (!config.credentials) config.credentials = "include";
   if (config.body && typeof config.body !== "string") {
     config.body = JSON.stringify(config.body);
@@ -7310,33 +7347,78 @@ async function venmoApiRequest(path, options = {}) {
   if (allowFallback) {
     urlsToTry.push(`${VENMO_API_FALLBACK_BASE}${path}`);
   }
+  const method = String(config.method || "GET").toUpperCase();
+  const normalizedPath = String(path || "").toLowerCase();
+  const isAuthRetryPath =
+    normalizedPath === "/api/auth/login" ||
+    normalizedPath === "/api/auth/register" ||
+    normalizedPath === "/api/auth/session";
+  const maxAttempts = isAuthRetryPath ? 8 : 1;
   let lastError = new Error("Request failed");
 
-  for (const url of urlsToTry) {
-    try {
-      const response = await fetch(url, config);
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.ok === false) {
-        const requestError = new Error(payload?.error || `Request failed (${response.status})`);
-        requestError.details = payload;
-        requestError.status = response.status;
-        if (isBannedAccountErrorMessage(requestError.message)) {
-          showBannedOverlay("You are banned.");
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let shouldRetry = false;
+    for (const url of urlsToTry) {
+      try {
+        const response = await fetch(url, config);
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.ok === false) {
+          const requestError = new Error(payload?.error || `Request failed (${response.status})`);
+          requestError.details = payload;
+          requestError.status = response.status;
+          if (isBannedAccountErrorMessage(requestError.message)) {
+            showBannedOverlay("You are banned.");
+          }
+          lastError = requestError;
+          const retryableStatus = response.status === 502 || response.status === 503 || response.status === 504;
+          if (isAuthRetryPath && retryableStatus) {
+            shouldRetry = true;
+            continue;
+          }
+          throw requestError;
         }
-        lastError = requestError;
-        continue;
+        return payload;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const errorMessage = String(lastError.message || "").toLowerCase();
+        const retryableNetworkError =
+          errorMessage.includes("failed to fetch") ||
+          errorMessage.includes("networkerror") ||
+          errorMessage.includes("load failed");
+        const retryableStatus =
+          Number(lastError.status) === 502 ||
+          Number(lastError.status) === 503 ||
+          Number(lastError.status) === 504;
+        if (isAuthRetryPath && (retryableStatus || retryableNetworkError)) {
+          shouldRetry = true;
+          continue;
+        }
+        throw lastError;
       }
-      return payload;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
     }
+
+    if (!shouldRetry || attempt >= maxAttempts - 1) break;
+    const waitMs = Math.min(3600, Math.round(300 * Math.pow(1.55, attempt) + Math.random() * 140));
+    if (onRetry) {
+      try {
+        onRetry({
+          attempt: attempt + 1,
+          maxAttempts,
+          waitMs,
+          path,
+          method,
+          error: lastError
+        });
+      } catch {}
+    }
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
   throw lastError;
 }
 
 async function ensureAuthSessionReady(expectedPlayerId = "") {
   const safeExpectedId = String(expectedPlayerId || "").trim();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
       const sessionPayload = await venmoApiRequest("/api/auth/session", { skipFallback: true });
       const sessionPlayerId = String(sessionPayload?.user?.playerId || "").trim();
@@ -7344,7 +7426,7 @@ async function ensureAuthSessionReady(expectedPlayerId = "") {
         return true;
       }
     } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1200, 180 + attempt * 120)));
   }
   return false;
 }
