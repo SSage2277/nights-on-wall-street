@@ -12,6 +12,8 @@ let savingsBalance = 0;
 let autoSavingsPercent = 0;
 let lastTradeActionSide = "none";
 let lastTradeActionAt = 0;
+let pendingTradeNewsDirection = 0;
+let pendingTradeNewsBursts = 0;
 
 let autoPlay = false;
 let candles = [];
@@ -2612,6 +2614,7 @@ const NEWS_EVENTS = buildNewsPool();
 const POSITIVE_NEWS_EVENTS = NEWS_EVENTS.filter((event) => Number(event?.direction) > 0);
 const NEGATIVE_NEWS_EVENTS = NEWS_EVENTS.filter((event) => Number(event?.direction) < 0);
 const RECENT_TRADE_NEWS_BIAS_WINDOW_MS = 90 * 1000;
+const POST_TRADE_NEWS_MAX_BURSTS = 3;
 
 // Risk controls
 const BASE_SLIPPAGE = 0.001;
@@ -2643,6 +2646,20 @@ function markRecentTradeAction(side) {
   if (normalized !== "buy" && normalized !== "sell") return;
   lastTradeActionSide = normalized;
   lastTradeActionAt = Date.now();
+  const earlyScale = getEarlyTradingDifficultyScale(price);
+  if (earlyScale <= 0) {
+    pendingTradeNewsBursts = 0;
+    pendingTradeNewsDirection = 0;
+    return;
+  }
+  const burstCount = clampMarket(1 + Math.floor(earlyScale * 2.4), 1, POST_TRADE_NEWS_MAX_BURSTS);
+  if (normalized === "buy") {
+    pendingTradeNewsDirection = -1;
+    pendingTradeNewsBursts = burstCount;
+  } else if (normalized === "sell") {
+    pendingTradeNewsDirection = 1;
+    pendingTradeNewsBursts = Math.max(1, burstCount - 1);
+  }
 }
 
 function getBiasedNewsDirectionWeights(marketPrice = price) {
@@ -2659,20 +2676,22 @@ function getBiasedNewsDirectionWeights(marketPrice = price) {
   const exposure = clampMarket(marketValue / netWorth, 0, 1);
 
   if (shares > 0) {
-    badWeight += (1.05 + exposure * 1.35) * earlyScale;
-    goodWeight = Math.max(0.22, goodWeight - 0.55 * earlyScale);
+    badWeight += (1.6 + exposure * 2.1) * earlyScale;
+    goodWeight = Math.max(0.14, goodWeight - 0.78 * earlyScale);
   } else {
-    goodWeight += 0.9 * earlyScale;
-    badWeight = Math.max(0.3, badWeight - 0.35 * earlyScale);
+    goodWeight += 1.25 * earlyScale;
+    badWeight = Math.max(0.22, badWeight - 0.55 * earlyScale);
   }
 
   const recentMs = Date.now() - lastTradeActionAt;
   if (recentMs >= 0 && recentMs <= RECENT_TRADE_NEWS_BIAS_WINDOW_MS) {
     const recentScale = (1 - recentMs / RECENT_TRADE_NEWS_BIAS_WINDOW_MS) * earlyScale;
     if (lastTradeActionSide === "buy") {
-      badWeight += 1.2 * recentScale;
+      badWeight += 2.35 * recentScale;
+      goodWeight = Math.max(0.1, goodWeight - 0.55 * recentScale);
     } else if (lastTradeActionSide === "sell") {
-      goodWeight += 0.95 * recentScale;
+      goodWeight += 1.95 * recentScale;
+      badWeight = Math.max(0.1, badWeight - 0.45 * recentScale);
     }
   }
 
@@ -2682,12 +2701,18 @@ function getBiasedNewsDirectionWeights(marketPrice = price) {
 function getBiasedNewsEventChance(marketPrice = price) {
   const earlyScale = getEarlyTradingDifficultyScale(marketPrice);
   if (earlyScale <= 0) return NEWS_EVENT_CHANCE;
-  const chanceMultiplier = shares > 0 ? 1 + 0.85 * earlyScale : 1 + 0.28 * earlyScale;
-  return clampMarket(NEWS_EVENT_CHANCE * chanceMultiplier, 0.001, 0.05);
+  const chanceMultiplier = shares > 0 ? 1.4 + 1.9 * earlyScale : 1.12 + 0.9 * earlyScale;
+  return clampMarket(NEWS_EVENT_CHANCE * chanceMultiplier, 0.002, 0.09);
 }
 
-function pickBiasedNewsEvent(marketPrice = price) {
+function pickBiasedNewsEvent(marketPrice = price, preferredDirection = 0) {
   if (!NEWS_EVENTS.length) return null;
+  if (preferredDirection > 0 && POSITIVE_NEWS_EVENTS.length) {
+    return POSITIVE_NEWS_EVENTS[Math.floor(Math.random() * POSITIVE_NEWS_EVENTS.length)];
+  }
+  if (preferredDirection < 0 && NEGATIVE_NEWS_EVENTS.length) {
+    return NEGATIVE_NEWS_EVENTS[Math.floor(Math.random() * NEGATIVE_NEWS_EVENTS.length)];
+  }
   const { goodWeight, badWeight } = getBiasedNewsDirectionWeights(marketPrice);
   const total = Math.max(0.001, goodWeight + badWeight);
   const chooseGood = Math.random() < goodWeight / total;
@@ -6284,7 +6309,20 @@ function generateCandle() {
     close = price;
   }
 
-  if (Math.random() < getBiasedNewsEventChance(price)) {
+  const earlyScale = getEarlyTradingDifficultyScale(price);
+  const canTriggerForcedNews = pendingTradeNewsBursts > 0 && pendingTradeNewsDirection !== 0 && earlyScale > 0;
+  const forcedNewsChance = clampMarket(0.52 + earlyScale * 0.34, 0.45, 0.93);
+  if (canTriggerForcedNews && Math.random() < forcedNewsChance) {
+    const preNewsPrice = price;
+    triggerNews(pendingTradeNewsDirection);
+    pendingTradeNewsBursts = Math.max(0, pendingTradeNewsBursts - 1);
+    if (pendingTradeNewsBursts === 0) pendingTradeNewsDirection = 0;
+    const newsMove = Math.abs(Math.log(price / Math.max(preNewsPrice, PRICE_FLOOR)));
+    candleAbsMove += newsMove * 1.8;
+    high = Math.max(high, price);
+    low = Math.min(low, price);
+    close = price;
+  } else if (Math.random() < getBiasedNewsEventChance(price)) {
     const preNewsPrice = price;
     triggerNews();
     const newsMove = Math.abs(Math.log(price / Math.max(preNewsPrice, PRICE_FLOOR)));
@@ -6311,8 +6349,8 @@ function generateCandle() {
   if (candles.length > maxCandles) candles.shift();
 }
 
-function triggerNews() {
-  const event = pickBiasedNewsEvent(price);
+function triggerNews(preferredDirection = 0) {
+  const event = pickBiasedNewsEvent(price, preferredDirection);
   if (!event) return;
   achievementState.stats.newsSeen += 1;
   saveAchievements();
