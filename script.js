@@ -2427,7 +2427,7 @@ const TICKS_PER_CANDLE = 8;
 const NEWS_EVENT_CHANCE = 0.012;
 const MAX_VOLUME = 180;
 const PRICE_FLOOR = 0.001;
-const PRICE_CAP = 300;
+const PRICE_CAP = 200;
 
 const MARKET_REGIMES = {
   calm: {
@@ -2619,16 +2619,24 @@ const POST_TRADE_NEWS_MAX_BURSTS = 3;
 // Risk controls
 const BASE_SLIPPAGE = 0.001;
 const TRADE_FEE = 0.002;
-const EARLY_TRADING_PROFIT_TARGET = 500;
-const EARLY_SLIPPAGE_BONUS = 0.0016;
-const EARLY_TRADE_FEE_BONUS = 0.0024;
+const HARD_TRADING_NET_WORTH_THRESHOLD = 2000;
+const HARD_TRADING_FULL_INTENSITY_NET_WORTH = 2800;
+const HARD_MODE_PRICE_FLOOR = 80;
+const HARD_MODE_PRICE_CAP = 130;
+const EARLY_SLIPPAGE_BONUS = 0.0032;
+const EARLY_TRADE_FEE_BONUS = 0.0048;
 
 function getEarlyTradingDifficultyScale(marketPrice = price) {
-  const targetNetWorth = BASE_NET_WORTH + EARLY_TRADING_PROFIT_TARGET;
-  const currentNetWorth = getNetWorth(marketPrice);
-  const progress = clampMarket((currentNetWorth - BASE_NET_WORTH) / Math.max(1, EARLY_TRADING_PROFIT_TARGET), 0, 1);
-  if (currentNetWorth >= targetNetWorth) return 0;
-  return 1 - progress;
+  const rawPrice = Number(marketPrice);
+  const safePrice = Number.isFinite(rawPrice) ? rawPrice : price;
+  const currentNetWorth = roundCurrency(cash + savingsBalance + shares * safePrice);
+  if (currentNetWorth <= HARD_TRADING_NET_WORTH_THRESHOLD) return 0;
+  return clampMarket(
+    (currentNetWorth - HARD_TRADING_NET_WORTH_THRESHOLD) /
+      Math.max(1, HARD_TRADING_FULL_INTENSITY_NET_WORTH - HARD_TRADING_NET_WORTH_THRESHOLD),
+    0,
+    1
+  );
 }
 
 function getTradeExecutionCosts(currentShares = shares, marketPrice = price) {
@@ -6229,8 +6237,17 @@ function clampMarket(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function clampPrice(value) {
-  return clampMarket(value, PRICE_FLOOR, PRICE_CAP);
+function getActivePriceBounds(marketPrice = price) {
+  const hardScale = getEarlyTradingDifficultyScale(marketPrice);
+  if (hardScale > 0) {
+    return { floor: HARD_MODE_PRICE_FLOOR, cap: HARD_MODE_PRICE_CAP };
+  }
+  return { floor: PRICE_FLOOR, cap: PRICE_CAP };
+}
+
+function clampPrice(value, marketPrice = price) {
+  const { floor, cap } = getActivePriceBounds(marketPrice);
+  return clampMarket(value, floor, cap);
 }
 
 function randomNormal() {

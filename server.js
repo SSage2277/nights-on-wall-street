@@ -2253,6 +2253,7 @@ app.post("/api/users/sync", async (req, res) => {
       const serverBalanceUpdatedAt = Number(current.balance_updated_at) || 0;
       const syncGuardBypassUntil = Number(current.sync_guard_bypass_until) || 0;
       const syncGuardBypassed = syncGuardBypassUntil > now;
+      const syncGuardFlags = [];
       if (clientBalanceUpdatedAt > 0 && serverBalanceUpdatedAt > 0 && clientBalanceUpdatedAt < serverBalanceUpdatedAt) {
         res.status(409).json({
           ok: false,
@@ -2267,20 +2268,35 @@ app.post("/api/users/sync", async (req, res) => {
       const allowedSharesIncrease = getSyncAllowedIncrease(elapsedMs, SHARES_SYNC_BURST_UP, SHARES_SYNC_UP_PER_MIN);
 
       if (!syncGuardBypassed && nextBalance > currentBalance + allowedBalanceIncrease) {
-        res.status(409).json({
-          ok: false,
-          error: "Balance update rejected by server guard.",
-          user: normalizeUserForClient(current)
+        syncGuardFlags.push({
+          field: "balance",
+          currentValue: currentBalance,
+          attemptedValue: nextBalance,
+          allowedIncrease: Math.round(allowedBalanceIncrease * 100) / 100
         });
-        return;
       }
       if (!syncGuardBypassed && nextShares > currentShares + allowedSharesIncrease) {
-        res.status(409).json({
-          ok: false,
-          error: "Share update rejected by server guard.",
-          user: normalizeUserForClient(current)
+        syncGuardFlags.push({
+          field: "shares",
+          currentValue: currentShares,
+          attemptedValue: nextShares,
+          allowedIncrease: Math.floor(allowedSharesIncrease)
         });
-        return;
+      }
+      if (syncGuardFlags.length) {
+        recordSystemRuntimeEvent({
+          kind: "sync_guard_flag",
+          path: "/api/users/sync",
+          statusCode: 200,
+          playerId,
+          message: "Sync guard flag recorded (no auto block).",
+          details: {
+            username,
+            syncGuardBypassed,
+            elapsedMs,
+            flags: syncGuardFlags
+          }
+        });
       }
     }
 
@@ -2783,6 +2799,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
     const now = Date.now();
     const dayAgo = now - 24 * 60 * 60 * 1000;
     const tenMinutesAgo = now - 10 * 60 * 1000;
+    const fifteenMinutesAgo = now - 15 * 60 * 1000;
     const fraudStateResult = await db.query(
       `
         SELECT cleared_at
@@ -2794,6 +2811,7 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
     const clearedAt = Number(fraudStateResult.rows?.[0]?.cleared_at) || 0;
     const dayWindowStart = Math.max(dayAgo, clearedAt);
     const tenMinuteWindowStart = Math.max(tenMinutesAgo, clearedAt);
+    const fifteenMinuteWindowStart = Math.max(fifteenMinutesAgo, clearedAt);
     const flags = [];
 
     const claimSpam = await db.query(
@@ -2887,6 +2905,44 @@ app.get("/api/admin/fraud-flags", async (req, res) => {
         username: sanitizeUsername(row.username) || "Unknown",
         value: Number(row.event_count) || 0,
         note: "Very frequent balance updates in 10 minutes",
+        createdAt: Number(row.last_at) || 0
+      });
+    }
+
+    const syncGuardFlags = await db.query(
+      `
+        WITH grouped AS (
+          SELECT
+            player_id,
+            COUNT(*)::int AS hit_count,
+            MAX(created_at)::bigint AS last_at
+          FROM system_runtime_events
+          WHERE created_at >= $1
+            AND kind = 'sync_guard_flag'
+            AND COALESCE(player_id, '') <> ''
+          GROUP BY player_id
+          HAVING COUNT(*) >= 3
+        )
+        SELECT
+          g.player_id,
+          COALESCE(u.username, '') AS username,
+          g.hit_count,
+          g.last_at
+        FROM grouped g
+        LEFT JOIN users u ON u.player_id = g.player_id
+        ORDER BY g.last_at DESC, g.hit_count DESC
+        LIMIT 40
+      `,
+      [fifteenMinuteWindowStart]
+    );
+    for (const row of syncGuardFlags.rows) {
+      flags.push({
+        type: "sync_guard_flag",
+        severity: "medium",
+        playerId: String(row.player_id || ""),
+        username: sanitizeUsername(row.username) || "Unknown",
+        value: Number(row.hit_count) || 0,
+        note: "Repeated abnormal portfolio sync spikes (auto block disabled).",
         createdAt: Number(row.last_at) || 0
       });
     }
