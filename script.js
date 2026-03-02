@@ -1081,7 +1081,8 @@ function applyAuthenticatedProfile(
   {
     useServerBalance = true,
     preferLocalBalance = false,
-    adminPopups = []
+    adminPopups = [],
+    guestModeOverride = null
   } = {}
 ) {
   const username = normalizeUsername(user?.username);
@@ -1093,7 +1094,8 @@ function applyAuthenticatedProfile(
     lastServerBalanceUpdatedAt = 0;
     phoneState.balanceUpdatedAt = 0;
   }
-  setGuestModeEnabled(false);
+  const isGuestAccount = guestModeOverride === true || (guestModeOverride !== false && user?.isGuest === true);
+  setGuestModeEnabled(isGuestAccount);
   venmoClaimPlayerId = playerId;
   try {
     localStorage.setItem(VENMO_PLAYER_ID_STORAGE_KEY, playerId);
@@ -1107,7 +1109,7 @@ function applyAuthenticatedProfile(
   hideBannedOverlay();
   startAuthSessionWatchdog();
   hideFirstLaunchUsernameOverlay();
-  showFirstPlayTutorialIfNeeded({ playerId, scope: "account" });
+  showFirstPlayTutorialIfNeeded({ playerId, scope: isGuestAccount ? "guest" : "account" });
   queueIncomingAdminPopups(adminPopups);
   setFirstLaunchUsernameError("");
   if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
@@ -1417,19 +1419,37 @@ async function submitFirstLaunchUsername() {
     }
     setFirstLaunchAuthBusy(true);
     try {
-      if (!saveUsername(guestUsername)) {
-        setFirstLaunchUsernameError("Could not save guest username.");
+      if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
+      const payload = await venmoApiRequest("/api/auth/guest", {
+        method: "POST",
+        body: {
+          username: guestUsername,
+          playerId: String(venmoClaimPlayerId || "").trim(),
+          balance: roundCurrency(cash)
+        },
+        onRetry: ({ attempt, maxAttempts }) => {
+          setFirstLaunchUsernameError(`Connecting to server... (${attempt}/${maxAttempts})`);
+        }
+      });
+      const sessionReady = await ensureAuthSessionReady(payload?.user?.playerId || "");
+      if (!sessionReady) console.warn("Guest session confirmation timed out; continuing.");
+      const ok = applyAuthenticatedProfile(payload?.user, {
+        useServerBalance: true,
+        preferLocalBalance: true,
+        adminPopups: payload?.adminPopups,
+        guestModeOverride: true
+      });
+      if (!ok) {
+        setFirstLaunchUsernameError("Guest session started but profile data was invalid.");
         return false;
       }
-      setGuestModeEnabled(true);
       clearAccountMessageQueue();
-      hideFirstLaunchUsernameOverlay();
-      setFirstLaunchUsernameError("");
-      if (!venmoClaimPlayerId) venmoClaimPlayerId = getVenmoClaimPlayerId();
-      showFirstPlayTutorialIfNeeded({ playerId: venmoClaimPlayerId, scope: "guest" });
-      if (typeof initVenmoClaimWorkflow === "function") initVenmoClaimWorkflow();
-      if (typeof updateUI === "function") updateUI();
       return true;
+    } catch (error) {
+      const message = String(error?.message || "");
+      setFirstLaunchUsernameError(message || "Could not start guest mode right now.");
+      if (guestUsernameInput) guestUsernameInput.focus();
+      return false;
     } finally {
       setFirstLaunchAuthBusy(false);
     }
@@ -1795,9 +1815,10 @@ function renderCasinoLeaderboard() {
     const isYou = Boolean(currentIdentity && entryIdentity && currentIdentity === entryIdentity);
     if (isYou) li.classList.add("is-you");
     const rankNumber = Number(entry?.rank) > 0 ? Number(entry.rank) : index + 1;
+    const displayName = entry.isGuest ? `${entry.username || "Player"} (guest)` : (entry.username || "Player");
     li.innerHTML = `
       <span class="rank">${formatLeaderboardRank(rankNumber)}</span>
-      <span class="name">${escapeHtml(entry.username || "Player")}</span>
+      <span class="name">${escapeHtml(displayName)}</span>
       <span class="amt">${formatCurrency(entry.balance)}</span>
     `;
     frag.appendChild(li);
@@ -1817,9 +1838,12 @@ function renderCasinoLeaderboard() {
 
     const currentRow = document.createElement("li");
     currentRow.className = "is-you is-you-outside-top";
+    const currentDisplayName = currentEntry.isGuest
+      ? `${currentEntry.username || "You"} (guest)`
+      : (currentEntry.username || "You");
     currentRow.innerHTML = `
       <span class="rank">${formatLeaderboardRank(Number(currentEntry.rank) || CASINO_LEADERBOARD_LIMIT + 1)}</span>
-      <span class="name">${escapeHtml(currentEntry.username || "You")}</span>
+      <span class="name">${escapeHtml(currentDisplayName)}</span>
       <span class="amt">${formatCurrency(currentEntry.balance)}</span>
     `;
     frag.appendChild(currentRow);
@@ -1857,6 +1881,7 @@ function normalizeCasinoLeaderboardEntry(entry) {
   return {
     playerId: String(entry?.playerId || ""),
     username,
+    isGuest: entry?.isGuest === true,
     balance,
     lastSeenAt: Number(entry?.lastSeenAt) || 0,
     rank: Number.isFinite(rankRaw) && rankRaw > 0 ? Math.floor(rankRaw) : 0
@@ -2653,13 +2678,17 @@ const POST_TRADE_NEWS_MAX_BURSTS = 3;
 
 // Risk controls
 const BASE_SLIPPAGE = 0.001;
-const TRADE_FEE = 0.002;
 const HARD_TRADING_NET_WORTH_THRESHOLD = 2000;
-const HARD_TRADING_FULL_INTENSITY_NET_WORTH = 2800;
+const EXTRA_HARD_TRADING_NET_WORTH_THRESHOLD = 50000;
+const TRADE_FEE_MAX_NET_WORTH = 1_000_000;
+const BASE_BUY_FEE = 0.01;
+const MAX_BUY_FEE = 0.25;
+const BASE_SELL_FEE = 0.01;
+const MAX_SELL_FEE = 0.15;
 const HARD_MODE_PRICE_FLOOR = 80;
 const HARD_MODE_PRICE_CAP = 130;
 const EARLY_SLIPPAGE_BONUS = 0.0032;
-const EARLY_TRADE_FEE_BONUS = 0.0048;
+const EXTRA_SLIPPAGE_BONUS = 0.0044;
 
 function getEarlyTradingDifficultyScale(marketPrice = price) {
   const rawPrice = Number(marketPrice);
@@ -2668,19 +2697,55 @@ function getEarlyTradingDifficultyScale(marketPrice = price) {
   if (currentNetWorth <= HARD_TRADING_NET_WORTH_THRESHOLD) return 0;
   return clampMarket(
     (currentNetWorth - HARD_TRADING_NET_WORTH_THRESHOLD) /
-      Math.max(1, HARD_TRADING_FULL_INTENSITY_NET_WORTH - HARD_TRADING_NET_WORTH_THRESHOLD),
+      Math.max(1, EXTRA_HARD_TRADING_NET_WORTH_THRESHOLD - HARD_TRADING_NET_WORTH_THRESHOLD),
     0,
     1
   );
+}
+
+function getExtraHardTradingDifficultyScale(marketPrice = price) {
+  const rawPrice = Number(marketPrice);
+  const safePrice = Number.isFinite(rawPrice) ? rawPrice : price;
+  const currentNetWorth = roundCurrency(cash + savingsBalance + shares * safePrice);
+  if (currentNetWorth <= EXTRA_HARD_TRADING_NET_WORTH_THRESHOLD) return 0;
+  return clampMarket(
+    (currentNetWorth - EXTRA_HARD_TRADING_NET_WORTH_THRESHOLD) /
+      Math.max(1, TRADE_FEE_MAX_NET_WORTH - EXTRA_HARD_TRADING_NET_WORTH_THRESHOLD),
+    0,
+    1
+  );
+}
+
+function getDynamicTradeFees(marketPrice = price) {
+  const rawPrice = Number(marketPrice);
+  const safePrice = Number.isFinite(rawPrice) ? rawPrice : price;
+  const currentNetWorth = roundCurrency(cash + savingsBalance + shares * safePrice);
+  if (currentNetWorth <= HARD_TRADING_NET_WORTH_THRESHOLD) {
+    return { buyFee: BASE_BUY_FEE, sellFee: BASE_SELL_FEE };
+  }
+  const progress = clampMarket(
+    (currentNetWorth - HARD_TRADING_NET_WORTH_THRESHOLD) /
+      Math.max(1, TRADE_FEE_MAX_NET_WORTH - HARD_TRADING_NET_WORTH_THRESHOLD),
+    0,
+    1
+  );
+  const curvedProgress = Math.pow(progress, 1.35);
+  return {
+    buyFee: BASE_BUY_FEE + (MAX_BUY_FEE - BASE_BUY_FEE) * curvedProgress,
+    sellFee: BASE_SELL_FEE + (MAX_SELL_FEE - BASE_SELL_FEE) * curvedProgress
+  };
 }
 
 function getTradeExecutionCosts(currentShares = shares, marketPrice = price) {
   const normalizedShares = Math.max(0, Math.floor(Number(currentShares) || 0));
   const baselineSlippage = BASE_SLIPPAGE * (1 + normalizedShares / 50);
   const earlyScale = getEarlyTradingDifficultyScale(marketPrice);
+  const extraHardScale = getExtraHardTradingDifficultyScale(marketPrice);
+  const dynamicFees = getDynamicTradeFees(marketPrice);
   return {
-    slippage: baselineSlippage + EARLY_SLIPPAGE_BONUS * earlyScale,
-    fee: TRADE_FEE + EARLY_TRADE_FEE_BONUS * earlyScale
+    slippage: baselineSlippage + EARLY_SLIPPAGE_BONUS * earlyScale + EXTRA_SLIPPAGE_BONUS * extraHardScale,
+    buyFee: dynamicFees.buyFee,
+    sellFee: dynamicFees.sellFee
   };
 }
 
@@ -6428,8 +6493,8 @@ function triggerNews(preferredDirection = 0) {
 function buy(amount) {
   let sharesBought = 0;
   for (let i = 0; i < amount; i++) {
-    const { slippage, fee } = getTradeExecutionCosts(shares, price);
-    const cost = price * (1 + slippage + fee);
+    const { slippage, buyFee } = getTradeExecutionCosts(shares, price);
+    const cost = price * (1 + slippage + buyFee);
     if (cash < cost) break;
     avgCost = (avgCost * shares + cost) / (shares + 1);
     cash -= cost;
@@ -6449,8 +6514,8 @@ function sell(amount) {
   let realizedProfit = 0;
   amount = Math.min(amount, shares);
   for (let i = 0; i < amount; i++) {
-    const { slippage, fee } = getTradeExecutionCosts(shares, price);
-    const revenue = price * (1 - slippage - fee);
+    const { slippage, sellFee } = getTradeExecutionCosts(shares, price);
+    const revenue = price * (1 - slippage - sellFee);
     realizedProfit += revenue - avgCost;
     cash += revenue;
     shares--;
@@ -6469,8 +6534,8 @@ function sell(amount) {
 function buyAllShares() {
   let sharesBought = 0;
   while (true) {
-    const { slippage, fee } = getTradeExecutionCosts(shares, price);
-    const cost = price * (1 + slippage + fee);
+    const { slippage, buyFee } = getTradeExecutionCosts(shares, price);
+    const cost = price * (1 + slippage + buyFee);
     if (cash < cost) break;
     avgCost = (avgCost * shares + cost) / (shares + 1);
     cash -= cost;
@@ -7682,7 +7747,8 @@ function renderHiddenAdminUsers() {
   }
   const rows = users
     .map((user) => {
-      const username = escapeHtml(user.username || "Unknown");
+      const usernameText = user.isGuest ? `${user.username || "Unknown"} (guest)` : (user.username || "Unknown");
+      const username = escapeHtml(usernameText);
       const email = escapeHtml(user.email || "—");
       const passwordState = user.hasPassword ? "Set" : "Not set";
       const claims = Number(user.totalClaims) || 0;
