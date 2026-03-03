@@ -7010,10 +7010,10 @@ const HIDDEN_ADMIN_OWNER_DEVICE_CHECK_MS = 30000;
 const USER_PROFILE_SYNC_INTERVAL_MS = 1200;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
-  small: { funds: 1000, usd: 3, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=3&note=S%241000" },
-  medium: { funds: 5000, usd: 10, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=10&note=S%245000" },
-  xlarge: { funds: 10000, usd: 20, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=20&note=S%2410000" },
-  large: { funds: 25000, usd: 40, venmoLink: "https://venmo.com/SSage000?txn=pay&amount=40&note=S%2425000" }
+  small: { funds: 1000, usd: 3, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=3&note=S%241000" },
+  medium: { funds: 5000, usd: 10, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=10&note=S%245000" },
+  xlarge: { funds: 10000, usd: 20, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=20&note=S%2410000" },
+  large: { funds: 25000, usd: 40, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=40&note=S%2425000" }
 });
 const venmoClaimState = {
   claims: [],
@@ -7810,13 +7810,9 @@ function renderHiddenAdminUsers() {
                 : `<button type="button" data-user-action="ban" data-player-id="${playerId}">Ban</button>`
             }
             ${
-              lastIpRaw
-                ? (
-                    isIpBanned
-                      ? `<button type="button" data-user-action="unban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}">Unban IP</button>`
-                      : `<button type="button" data-user-action="ban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}">Ban IP</button>`
-                  )
-                : ""
+              isIpBanned
+                ? `<button type="button" data-user-action="unban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}">IP Unban</button>`
+                : `<button type="button" data-user-action="ban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}"${lastIpRaw ? "" : " disabled title=\"No IP recorded yet\""}>IP Ban</button>`
             }
             <button type="button" data-user-action="remove" data-player-id="${playerId}">Remove</button>
           </td>
