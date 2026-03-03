@@ -7755,24 +7755,28 @@ function renderHiddenAdminUsers() {
       const pendingClaims = Number(user.pendingClaims) || 0;
       const wins = Number(user.totalWins) || 0;
       const lastSeen = formatDateTime(user.lastSeenAt);
-      const lastIp = escapeHtml(String(user.lastIp || "").trim() || "—");
+      const lastIpRaw = String(user.lastIp || "").trim();
+      const lastIp = escapeHtml(lastIpRaw || "—");
       const bannedAt = Number(user.bannedAt) || 0;
       const mutedUntil = Number(user.mutedUntil) || 0;
       const isBanned = bannedAt > 0;
       const isMuted = mutedUntil > Date.now();
+      const isIpBanned = user.ipBanned === true;
       const syncGuardBypassUntil = Number(user.syncGuardBypassUntil) || 0;
       const isMarkedSafe = syncGuardBypassUntil > Date.now();
       const bannedReason = escapeHtml(user.bannedReason || "");
       const mutedReason = escapeHtml(user.mutedReason || "");
+      const ipBanReason = escapeHtml(String(user.ipBanReason || "").trim());
       const playerId = escapeHtml(String(user.playerId || ""));
       const baseStatusLabel = isBanned
         ? `Banned ${formatDateTime(bannedAt)}${bannedReason ? ` (${bannedReason})` : ""}`
         : isMuted
           ? `Muted until ${formatDateTime(mutedUntil)}${mutedReason ? ` (${mutedReason})` : ""}`
           : "Active";
-      const statusLabel = isMarkedSafe
-        ? `${baseStatusLabel} • Marked Safe until ${formatDateTime(syncGuardBypassUntil)}`
-        : baseStatusLabel;
+      const statusParts = [baseStatusLabel];
+      if (isMarkedSafe) statusParts.push(`Marked Safe until ${formatDateTime(syncGuardBypassUntil)}`);
+      if (isIpBanned) statusParts.push(`IP blocked${ipBanReason ? ` (${ipBanReason})` : ""}`);
+      const statusLabel = statusParts.join(" • ");
       return `
         <tr>
           <td>${username}</td>
@@ -7804,6 +7808,15 @@ function renderHiddenAdminUsers() {
               isBanned
                 ? `<button type="button" data-user-action="unban" data-player-id="${playerId}">Unban</button>`
                 : `<button type="button" data-user-action="ban" data-player-id="${playerId}">Ban</button>`
+            }
+            ${
+              lastIpRaw
+                ? (
+                    isIpBanned
+                      ? `<button type="button" data-user-action="unban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}">Unban IP</button>`
+                      : `<button type="button" data-user-action="ban-ip" data-player-id="${playerId}" data-user-ip="${escapeHtml(lastIpRaw)}">Ban IP</button>`
+                  )
+                : ""
             }
             <button type="button" data-user-action="remove" data-player-id="${playerId}">Remove</button>
           </td>
@@ -8843,6 +8856,61 @@ async function unbanAdminUser(playerId) {
   }
 }
 
+async function banAdminUserIp(ipAddress, playerId = "") {
+  if (!venmoAdminUnlocked) return false;
+  const normalizedIp = String(ipAddress || "").trim();
+  if (!normalizedIp) {
+    setHiddenAdminStatus("No IP address found for this user.", true);
+    return false;
+  }
+  try {
+    await venmoApiRequest(
+      "/api/admin/ip-bans/ban",
+      getAdminRequestOptions({
+        method: "POST",
+        body: {
+          ipAddress: normalizedIp,
+          playerId: String(playerId || "").trim()
+        }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus(`IP banned: ${normalizedIp}`);
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not ban IP: ${error.message}`, true);
+    return false;
+  }
+}
+
+async function unbanAdminUserIp(ipAddress) {
+  if (!venmoAdminUnlocked) return false;
+  const normalizedIp = String(ipAddress || "").trim();
+  if (!normalizedIp) {
+    setHiddenAdminStatus("No IP address found.", true);
+    return false;
+  }
+  try {
+    await venmoApiRequest(
+      "/api/admin/ip-bans/unban",
+      getAdminRequestOptions({
+        method: "POST",
+        body: { ipAddress: normalizedIp }
+      })
+    );
+    await refreshHiddenAdminUsersFromServer({ silent: true });
+    await refreshHiddenAdminStatsFromServer({ silent: true });
+    await refreshHiddenAdminActivityFromServer({ silent: true });
+    setHiddenAdminStatus(`IP unbanned: ${normalizedIp}`);
+    return true;
+  } catch (error) {
+    setHiddenAdminStatus(`Could not unban IP: ${error.message}`, true);
+    return false;
+  }
+}
+
 async function removeAdminUser(playerId) {
   if (!venmoAdminUnlocked || !playerId) return false;
   try {
@@ -9850,6 +9918,7 @@ function initHiddenAdminTrigger() {
       if (!target) return;
       const action = String(target.getAttribute("data-user-action") || "");
       const playerId = String(target.getAttribute("data-player-id") || "");
+      const userIp = String(target.getAttribute("data-user-ip") || "").trim();
       if (!action || !playerId) return;
       if (action === "set-balance") {
         const currentBalance = String(target.getAttribute("data-current-balance") || "");
@@ -9864,6 +9933,8 @@ function initHiddenAdminTrigger() {
       if (action === "unmute") unmuteAdminUser(playerId);
       if (action === "ban") banAdminUser(playerId);
       if (action === "unban") unbanAdminUser(playerId);
+      if (action === "ban-ip") banAdminUserIp(userIp, playerId);
+      if (action === "unban-ip") unbanAdminUserIp(userIp);
       if (action === "remove") removeAdminUser(playerId);
     });
   }

@@ -80,8 +80,11 @@ const MAX_ADMIN_POPUP_MESSAGES = 3000;
 const MAX_ADMIN_POPUP_MESSAGE_READS = 300000;
 const MAX_SITE_VISIT_EVENTS = 500000;
 const SITE_VISIT_SERVER_COOLDOWN_MS = 30 * 60 * 1000;
+const IP_BAN_CACHE_TTL_MS = 30 * 1000;
 const leaderboardStreamClients = new Set();
 let leaderboardBroadcastTimer = null;
+let activeIpBansCache = new Set();
+let activeIpBansCacheExpiresAt = 0;
 
 function normalizeTxn(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
@@ -108,6 +111,15 @@ function sanitizeVisitorId(value) {
   if (!visitorId) return "";
   if (!/^[a-zA-Z0-9_-]{8,120}$/.test(visitorId)) return "";
   return visitorId;
+}
+
+function normalizeIpAddress(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let ip = raw.split(",")[0]?.trim().toLowerCase() || "";
+  if (!ip) return "";
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  return ip.slice(0, 128);
 }
 
 function sanitizeVisitPath(value) {
@@ -687,6 +699,9 @@ function mapAdminUserRow(row) {
   return {
     ...base,
     lastIp: String(row.last_ip || "").slice(0, 128),
+    ipBanned: row.ip_banned === true,
+    ipBanReason: String(row.ip_ban_reason || ""),
+    ipBanUpdatedAt: Number(row.ip_ban_updated_at) || 0,
     isAdmin: row.is_admin === true,
     hasPassword: row.has_password === true,
     bannedAt: Number(row.banned_at) || 0,
@@ -699,6 +714,19 @@ function mapAdminUserRow(row) {
     approvedClaims: Number(row.approved_claims) || 0,
     totalWins: Number(row.total_wins) || 0,
     lastWinAt: Number(row.last_win_at) || 0
+  };
+}
+
+function mapIpBanRow(row) {
+  const ipAddress = normalizeIpAddress(row?.ip_address);
+  return {
+    id: String(row?.id || ""),
+    ipAddress,
+    reason: String(row?.reason || ""),
+    active: row?.active === true,
+    createdBy: sanitizePlayerId(row?.created_by || ""),
+    createdAt: Number(row?.created_at) || 0,
+    updatedAt: Number(row?.updated_at) || 0
   };
 }
 
@@ -786,9 +814,9 @@ function getAdminDeviceToken(req) {
 function getRequestIp(req) {
   const forwardedRaw = req.headers["x-forwarded-for"];
   const forwarded = Array.isArray(forwardedRaw) ? forwardedRaw[0] : String(forwardedRaw || "");
-  const firstForwardedIp = forwarded.split(",")[0]?.trim();
-  const fallbackIp = String(req.ip || req.socket?.remoteAddress || "").trim();
-  return String(firstForwardedIp || fallbackIp || "").slice(0, 128);
+  const firstForwardedIp = normalizeIpAddress(forwarded);
+  const fallbackIp = normalizeIpAddress(req.ip || req.socket?.remoteAddress || "");
+  return normalizeIpAddress(firstForwardedIp || fallbackIp || "");
 }
 
 function getRequestUserAgent(req) {
@@ -1087,7 +1115,7 @@ const RATE_LIMIT_RULES = Object.freeze([
   {
     id: "admin-read",
     methods: new Set(["GET"]),
-    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback|messages|activity|health|fraud-flags|backups)$/i,
+    pattern: /^\/api\/admin\/(claims|users|stats|devices|feedback|messages|activity|health|fraud-flags|backups|ip-bans)$/i,
     scope: "sessionOrIp",
     max: 360,
     windowMs: 60 * 1000,
@@ -1216,6 +1244,67 @@ if (typeof rateLimitCleanupTimer.unref === "function") {
   rateLimitCleanupTimer.unref();
 }
 
+async function refreshActiveIpBanCache({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now < activeIpBansCacheExpiresAt) {
+    return activeIpBansCache;
+  }
+  const result = await db.query(
+    `
+      SELECT ip_address
+      FROM ip_bans
+      WHERE active = true
+    `
+  );
+  const nextCache = new Set();
+  for (const row of result.rows || []) {
+    const normalizedIp = normalizeIpAddress(row?.ip_address);
+    if (normalizedIp) nextCache.add(normalizedIp);
+  }
+  activeIpBansCache = nextCache;
+  activeIpBansCacheExpiresAt = now + IP_BAN_CACHE_TTL_MS;
+  return activeIpBansCache;
+}
+
+function invalidateActiveIpBanCache() {
+  activeIpBansCacheExpiresAt = 0;
+}
+
+function ipBanGuardMiddleware(req, res, next) {
+  const requestIp = getRequestIp(req);
+  if (!requestIp) {
+    next();
+    return;
+  }
+  refreshActiveIpBanCache()
+    .then((cache) => {
+      if (!cache.has(requestIp)) {
+        next();
+        return;
+      }
+      const requestPath = String(req.originalUrl || req.url || "").split("?")[0] || "/";
+      recordSystemRuntimeEvent({
+        kind: "ip_ban_block",
+        path: requestPath,
+        statusCode: 404,
+        playerId: getSessionPlayerId(req),
+        message: "blocked"
+      });
+      if (req.session?.destroy) {
+        req.session.destroy(() => {});
+      }
+      if (requestPath.startsWith("/api/")) {
+        res.status(404).json({ ok: false, error: "Not found." });
+        return;
+      }
+      res.status(404).type("text/plain").send("Not Found");
+    })
+    .catch((error) => {
+      console.error("Failed IP ban guard check", error);
+      next();
+    });
+}
+
 function apiRateLimitMiddleware(req, res, next) {
   if (!RATE_LIMIT_ENABLED) {
     next();
@@ -1334,6 +1423,7 @@ app.use((req, res, next) => {
   });
   next();
 });
+app.use(ipBanGuardMiddleware);
 app.use(express.static(__dirname));
 app.use("/api", apiRateLimitMiddleware);
 
@@ -2582,6 +2672,9 @@ app.get("/api/admin/users", async (req, res) => {
           u.muted_reason,
           u.sync_guard_bypass_until,
           (u.password_hash IS NOT NULL AND u.password_hash <> '') AS has_password,
+          COALESCE(ipb.active, false) AS ip_banned,
+          COALESCE(ipb.reason, '') AS ip_ban_reason,
+          COALESCE(ipb.updated_at, 0) AS ip_ban_updated_at,
           COALESCE(claims.total_claims, 0) AS total_claims,
           COALESCE(claims.pending_claims, 0) AS pending_claims,
           COALESCE(claims.approved_claims, 0) AS approved_claims,
@@ -2607,6 +2700,9 @@ app.get("/api/admin/users", async (req, res) => {
           ORDER BY sve.visited_at DESC, sve.id DESC
           LIMIT 1
         ) visits ON TRUE
+        LEFT JOIN ip_bans ipb
+          ON ipb.ip_address = COALESCE(visits.last_ip, '')
+         AND ipb.active = true
         LEFT JOIN (
           SELECT
             player_id,
@@ -2623,6 +2719,152 @@ app.get("/api/admin/users", async (req, res) => {
   } catch (error) {
     console.error("Failed to load admin users", error);
     res.status(500).json({ ok: false, error: "Could not load users." });
+  }
+});
+
+app.get("/api/admin/ip-bans", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.floor(rawLimit))) : 200;
+    const activeOnly = String(req.query?.activeOnly || "").trim() === "1";
+    const result = await db.query(
+      `
+        SELECT id, ip_address, reason, active, created_by, created_at, updated_at
+        FROM ip_bans
+        WHERE ($1::boolean = false OR active = true)
+        ORDER BY updated_at DESC, id DESC
+        LIMIT $2
+      `,
+      [activeOnly, limit]
+    );
+    res.json({
+      ok: true,
+      ipBans: result.rows.map(mapIpBanRow),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to load IP bans", error);
+    res.status(500).json({ ok: false, error: "Could not load IP bans." });
+  }
+});
+
+app.post("/api/admin/ip-bans/ban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const playerId = sanitizePlayerId(req.body?.playerId);
+    let ipAddress = normalizeIpAddress(req.body?.ipAddress);
+    if (!ipAddress && playerId) {
+      const visitLookup = await db.query(
+        `
+          SELECT ip
+          FROM site_visit_events
+          WHERE player_id = $1
+            AND COALESCE(ip, '') <> ''
+          ORDER BY visited_at DESC, id DESC
+          LIMIT 1
+        `,
+        [playerId]
+      );
+      if (visitLookup.rowCount) {
+        ipAddress = normalizeIpAddress(visitLookup.rows[0]?.ip);
+      }
+    }
+    if (!ipAddress) {
+      res.status(400).json({ ok: false, error: "Valid IP address is required." });
+      return;
+    }
+    const reason = sanitizeBanReason(req.body?.reason || "Blocked");
+    const now = Date.now();
+    const upserted = await db.query(
+      `
+        INSERT INTO ip_bans (ip_address, reason, active, created_by, created_at, updated_at)
+        VALUES ($1, $2, true, $3, $4, $4)
+        ON CONFLICT (ip_address) DO UPDATE
+        SET reason = EXCLUDED.reason,
+            active = true,
+            updated_at = EXCLUDED.updated_at
+        RETURNING id, ip_address, reason, active, created_by, created_at, updated_at
+      `,
+      [ipAddress, reason, adminAccess.playerId, now]
+    );
+    invalidateActiveIpBanCache();
+    void refreshActiveIpBanCache({ force: true });
+    recordAdminActivity({
+      eventType: "ip_ban_added",
+      actorPlayerId: adminAccess.playerId,
+      details: {
+        ipAddress,
+        reason,
+        playerId
+      }
+    });
+    res.json({
+      ok: true,
+      ipBan: mapIpBanRow(upserted.rows[0]),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to ban IP", error);
+    res.status(500).json({ ok: false, error: "Could not ban IP." });
+  }
+});
+
+app.post("/api/admin/ip-bans/unban", async (req, res) => {
+  try {
+    const adminAccess = await requireAdminAccess(req, res, { allowBootstrap: false });
+    if (!adminAccess) return;
+    const ipAddress = normalizeIpAddress(req.body?.ipAddress);
+    if (!ipAddress) {
+      res.status(400).json({ ok: false, error: "Valid IP address is required." });
+      return;
+    }
+    const now = Date.now();
+    const updated = await db.query(
+      `
+        UPDATE ip_bans
+        SET active = false,
+            updated_at = $2
+        WHERE ip_address = $1
+          AND active = true
+        RETURNING id, ip_address, reason, active, created_by, created_at, updated_at
+      `,
+      [ipAddress, now]
+    );
+    if (!updated.rowCount) {
+      const existing = await db.query(
+        `
+          SELECT ip_address, active
+          FROM ip_bans
+          WHERE ip_address = $1
+          LIMIT 1
+        `,
+        [ipAddress]
+      );
+      if (!existing.rowCount) {
+        res.status(404).json({ ok: false, error: "IP ban not found." });
+        return;
+      }
+      res.status(409).json({ ok: false, error: "IP is not currently banned." });
+      return;
+    }
+    invalidateActiveIpBanCache();
+    void refreshActiveIpBanCache({ force: true });
+    recordAdminActivity({
+      eventType: "ip_ban_removed",
+      actorPlayerId: adminAccess.playerId,
+      details: { ipAddress }
+    });
+    res.json({
+      ok: true,
+      ipBan: mapIpBanRow(updated.rows[0]),
+      trustedDevice: adminAccess.device || null
+    });
+  } catch (error) {
+    console.error("Failed to unban IP", error);
+    res.status(500).json({ ok: false, error: "Could not unban IP." });
   }
 });
 
@@ -5293,6 +5535,112 @@ async function ensureSchema() {
     INSERT INTO admin_fraud_flags_state (id, cleared_at, cleared_by, updated_at)
     VALUES (1, 0, '', 0)
     ON CONFLICT (id) DO NOTHING
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS ip_bans (
+      id BIGSERIAL PRIMARY KEY,
+      ip_address TEXT NOT NULL UNIQUE,
+      reason TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL DEFAULT 0,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS ip_address TEXT
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS reason TEXT
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS active BOOLEAN
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS created_by TEXT
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS created_at BIGINT
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ADD COLUMN IF NOT EXISTS updated_at BIGINT
+  `);
+  await db.query(`
+    UPDATE ip_bans
+    SET ip_address = lower(COALESCE(ip_address, '')),
+        reason = COALESCE(reason, ''),
+        active = COALESCE(active, true),
+        created_by = COALESCE(created_by, ''),
+        created_at = COALESCE(created_at, 0),
+        updated_at = COALESCE(updated_at, 0)
+  `);
+  await db.query(`
+    DELETE FROM ip_bans a
+    USING ip_bans b
+    WHERE lower(COALESCE(a.ip_address, '')) = lower(COALESCE(b.ip_address, ''))
+      AND a.id < b.id
+  `);
+  await db.query(`
+    DELETE FROM ip_bans
+    WHERE COALESCE(ip_address, '') = ''
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN ip_address SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN reason SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN reason SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN active SET DEFAULT true
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN active SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN created_by SET DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN created_by SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN created_at SET DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN created_at SET NOT NULL
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN updated_at SET DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE ip_bans
+    ALTER COLUMN updated_at SET NOT NULL
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ip_bans_ip_address_unique_idx
+    ON ip_bans (ip_address)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS ip_bans_active_updated_idx
+    ON ip_bans (active, updated_at DESC, id DESC)
   `);
   await db.query(`
     CREATE TABLE IF NOT EXISTS site_visit_events (
