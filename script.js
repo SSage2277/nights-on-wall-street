@@ -354,18 +354,210 @@ document.addEventListener(
 );
 
 function getHighBetRigChance(betAmount, intensity = 1) {
-  const bet = Number(betAmount);
-  if (!Number.isFinite(bet) || bet <= HIGH_BET_RIG_THRESHOLD) return 0;
-
-  const over = bet - HIGH_BET_RIG_THRESHOLD;
-  const scaled = HIGH_BET_RIG_BASE_CHANCE + over / 12000;
-  const raw = Math.min(HIGH_BET_RIG_MAX_CHANCE, scaled);
-  return Math.max(0, Math.min(HIGH_BET_RIG_MAX_CHANCE, raw * Math.max(0, intensity)));
+  void betAmount;
+  void intensity;
+  return 0;
 }
 
 function shouldRigHighBet(betAmount, intensity = 1) {
-  return Math.random() < getHighBetRigChance(betAmount, intensity);
+  void betAmount;
+  void intensity;
+  return false;
 }
+
+function getRandomFloat() {
+  try {
+    if (window?.crypto?.getRandomValues) {
+      const values = new Uint32Array(1);
+      window.crypto.getRandomValues(values);
+      return values[0] / 0x100000000;
+    }
+  } catch {}
+  return Math.random();
+}
+
+function getRandomInt(min, max) {
+  const low = Math.ceil(Number(min));
+  const high = Math.floor(Number(max));
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high < low) return low;
+  return Math.floor(getRandomFloat() * (high - low + 1)) + low;
+}
+
+const FAIRNESS_DEV_MODE_STORAGE_KEY = "nows_fairness_dev_mode_v1";
+
+function runBetInvarianceSimulation({
+  game = "unknown",
+  iterations = 10000,
+  lowBet = 10,
+  highBet = 10000,
+  simulate
+} = {}) {
+  const rounds = Math.max(100, Math.floor(Number(iterations) || 10000));
+  const runSample = (bet) => {
+    const buckets = {};
+    let wins = 0;
+    let multiplierSum = 0;
+    for (let index = 0; index < rounds; index += 1) {
+      const sample = simulate(bet);
+      const bucket = String(sample?.bucket || "unknown");
+      buckets[bucket] = (buckets[bucket] || 0) + 1;
+      if (sample?.win === true) wins += 1;
+      if (Number.isFinite(sample?.multiplier)) multiplierSum += Number(sample.multiplier);
+    }
+    const distribution = Object.fromEntries(
+      Object.entries(buckets).map(([bucket, count]) => [bucket, Number(((count / rounds) * 100).toFixed(2))])
+    );
+    return {
+      rounds,
+      bet,
+      wins,
+      winRatePct: Number(((wins / rounds) * 100).toFixed(2)),
+      avgMultiplier: Number((multiplierSum / rounds).toFixed(4)),
+      distribution
+    };
+  };
+
+  const low = runSample(lowBet);
+  const high = runSample(highBet);
+  const summary = {
+    game,
+    rounds,
+    lowBet,
+    highBet,
+    lowWinRatePct: low.winRatePct,
+    highWinRatePct: high.winRatePct,
+    winRateDeltaPct: Number((high.winRatePct - low.winRatePct).toFixed(2)),
+    lowAvgMultiplier: low.avgMultiplier,
+    highAvgMultiplier: high.avgMultiplier,
+    avgMultiplierDelta: Number((high.avgMultiplier - low.avgMultiplier).toFixed(4)),
+    lowDistributionPct: low.distribution,
+    highDistributionPct: high.distribution
+  };
+
+  try {
+    console.groupCollapsed(`[Fairness] ${game} (${rounds} rounds, ${lowBet} vs ${highBet})`);
+    console.table({
+      low: { bet: lowBet, winRatePct: low.winRatePct, avgMultiplier: low.avgMultiplier },
+      high: { bet: highBet, winRatePct: high.winRatePct, avgMultiplier: high.avgMultiplier }
+    });
+    console.log("Low distribution %:", low.distribution);
+    console.log("High distribution %:", high.distribution);
+    console.log("Summary:", summary);
+    console.groupEnd();
+  } catch {}
+
+  return summary;
+}
+
+function installFairnessDevApi() {
+  const runHiLo = ({ iterations = 10000, lowBet = 10, highBet = 10000 } = {}) =>
+    runBetInvarianceSimulation({
+      game: "hilo",
+      iterations,
+      lowBet,
+      highBet,
+      simulate: () => {
+        const prev = getRandomInt(1, 13);
+        const next = getRandomInt(1, 13);
+        const guess = ["higher", "lower", "same"][getRandomInt(0, 2)];
+        const bucket = next > prev ? "higher" : next < prev ? "lower" : "same";
+        return { bucket, win: bucket === guess, multiplier: bucket === guess ? 1 : 0 };
+      }
+    });
+
+  const runDice = ({ iterations = 10000, lowBet = 10, highBet = 10000 } = {}) =>
+    runBetInvarianceSimulation({
+      game: "dice",
+      iterations,
+      lowBet,
+      highBet,
+      simulate: () => {
+        const target = 50;
+        const mode = "over";
+        const roll = getRandomFloat() * 100;
+        const win = mode === "over" ? roll > target : roll < target;
+        return { bucket: win ? "win" : "loss", win, multiplier: win ? 2 : 0 };
+      }
+    });
+
+  const runMines = ({ iterations = 10000, lowBet = 10, highBet = 10000 } = {}) =>
+    runBetInvarianceSimulation({
+      game: "mines-1pick-1mine",
+      iterations,
+      lowBet,
+      highBet,
+      simulate: () => {
+        const totalTiles = 25;
+        const mines = new Set();
+        while (mines.size < 1) mines.add(getRandomInt(0, totalTiles - 1));
+        const pick = getRandomInt(0, totalTiles - 1);
+        const win = !mines.has(pick);
+        return { bucket: win ? "safe" : "mine", win, multiplier: win ? 1.2 : 0 };
+      }
+    });
+
+  const runRoulette = ({ iterations = 10000, lowBet = 10, highBet = 10000 } = {}) =>
+    runBetInvarianceSimulation({
+      game: "roulette-straight-up",
+      iterations,
+      lowBet,
+      highBet,
+      simulate: () => {
+        const winningNumber = getRandomInt(0, 36);
+        const pick = 17;
+        const win = winningNumber === pick;
+        return { bucket: win ? "hit" : "miss", win, multiplier: win ? 36 : 0 };
+      }
+    });
+
+  const api = {
+    run(game = "hilo", options = {}) {
+      const key = String(game || "hilo").toLowerCase();
+      if (key === "hilo") return runHiLo(options);
+      if (key === "dice") return runDice(options);
+      if (key === "mines") return runMines(options);
+      if (key === "roulette") return runRoulette(options);
+      throw new Error(`Unknown fairness test game "${game}". Use: hilo, dice, mines, roulette.`);
+    },
+    runAll(options = {}) {
+      return {
+        hilo: runHiLo(options),
+        dice: runDice(options),
+        mines: runMines(options),
+        roulette: runRoulette(options)
+      };
+    },
+    enable() {
+      try {
+        localStorage.setItem(FAIRNESS_DEV_MODE_STORAGE_KEY, "1");
+      } catch {}
+      return "Fairness dev mode enabled. Reload to keep it persistent.";
+    },
+    disable() {
+      try {
+        localStorage.removeItem(FAIRNESS_DEV_MODE_STORAGE_KEY);
+      } catch {}
+      return "Fairness dev mode disabled. Reload to clear.";
+    }
+  };
+
+  try {
+    window.__nowsFairness = api;
+  } catch {}
+}
+
+function maybeInitFairnessDevApi() {
+  const host = String(window.location.hostname || "").toLowerCase();
+  const localHost = host === "localhost" || host === "127.0.0.1";
+  let flagEnabled = false;
+  try {
+    flagEnabled = localStorage.getItem(FAIRNESS_DEV_MODE_STORAGE_KEY) === "1";
+  } catch {}
+  if (!localHost && !flagEnabled) return;
+  installFairnessDevApi();
+}
+
+maybeInitFairnessDevApi();
 
 function roundCurrency(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -7062,6 +7254,9 @@ let hiddenAdminOwnerDeviceCheckInFlight = false;
 let hiddenAdminOwnerDeviceLastCheckedAt = 0;
 let hiddenAdminSecretTapCount = 0;
 let hiddenAdminSecretLastTapAt = 0;
+let hiddenAdminRefreshInFlight = false;
+let hiddenAdminRefreshQueued = false;
+let venmoClaimPollInFlight = false;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -7598,6 +7793,7 @@ async function refreshVenmoClaimsFromServer({ silent = false } = {}) {
 
 async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLocked = false } = {}) {
   if (!venmoAdminUnlocked && !allowWhenLocked) return false;
+  const wasUnlocked = venmoAdminUnlocked;
   try {
     const payload = await venmoApiRequest(
       buildAdminApiUrl("/api/admin/claims?status=pending"),
@@ -7609,30 +7805,23 @@ async function refreshVenmoAdminClaimsFromServer({ silent = false, allowWhenLock
     setHiddenAdminStatus("Admin unlocked. Device verified.");
     return true;
   } catch (error) {
-    venmoClaimState.adminClaims = [];
-    venmoClaimState.adminUsers = [];
-    venmoClaimState.adminStats = null;
-    venmoClaimState.adminHealth = null;
-    venmoClaimState.adminDevices = [];
-    venmoClaimState.adminOwnerLockEnabled = false;
-    venmoClaimState.adminFeedback = [];
-    venmoClaimState.adminActivity = [];
-    venmoClaimState.adminFraudFlags = [];
-    venmoClaimState.adminBackups = [];
-    venmoClaimState.adminMessages = [];
-    venmoAdminUnlocked = false;
-    renderVenmoAdminClaims();
-    renderHiddenAdminUsers();
-    renderHiddenAdminStats();
-    renderHiddenAdminHealth();
-    renderHiddenAdminDevices();
-    renderHiddenAdminFeedback();
-    renderHiddenAdminActivity();
-    renderHiddenAdminFraudFlags();
-    renderHiddenAdminBackups();
-    renderHiddenAdminMessages();
     const handledLoginRequired = handleAdminLoginRequired(error);
-    if (!silent && !handledLoginRequired) setHiddenAdminStatus(String(error?.message || "Unlock failed."), true);
+    if (handledLoginRequired) {
+      venmoAdminUnlocked = false;
+      clearHiddenAdminDataAndRenderLockedState();
+      return false;
+    }
+    venmoAdminUnlocked = wasUnlocked;
+    const transient = isAdminTransientError(error);
+    if (!silent) {
+      const errorMessage = String(error?.message || "Admin data sync failed.");
+      setHiddenAdminStatus(
+        transient
+          ? `Admin sync issue (retrying): ${errorMessage}`
+          : errorMessage,
+        true
+      );
+    }
     if (!silent) setBankMessage(`Admin claim fetch failed: ${error.message}`);
     return false;
   }
@@ -7661,6 +7850,73 @@ function setHiddenAdminStatus(message, isError = false) {
   if (!hiddenAdminStatusEl) return;
   hiddenAdminStatusEl.textContent = String(message || "");
   hiddenAdminStatusEl.style.color = isError ? "#ff8ea0" : "#a8c4db";
+}
+
+function clearHiddenAdminDataAndRenderLockedState() {
+  venmoClaimState.adminClaims = [];
+  venmoClaimState.adminUsers = [];
+  venmoClaimState.adminStats = null;
+  venmoClaimState.adminHealth = null;
+  venmoClaimState.adminDevices = [];
+  venmoClaimState.adminOwnerLockEnabled = false;
+  venmoClaimState.adminFeedback = [];
+  venmoClaimState.adminActivity = [];
+  venmoClaimState.adminFraudFlags = [];
+  venmoClaimState.adminBackups = [];
+  venmoClaimState.adminMessages = [];
+  renderVenmoAdminClaims();
+  renderHiddenAdminUsers();
+  renderHiddenAdminStats();
+  renderHiddenAdminHealth();
+  renderHiddenAdminDevices();
+  renderHiddenAdminFeedback();
+  renderHiddenAdminActivity();
+  renderHiddenAdminFraudFlags();
+  renderHiddenAdminBackups();
+  renderHiddenAdminMessages();
+}
+
+function isAdminTransientError(error) {
+  const status = Number(error?.status);
+  if (status === 429 || status === 502 || status === 503 || status === 504) return true;
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("request failed (429)") ||
+    message.includes("request failed (502)") ||
+    message.includes("request failed (503)") ||
+    message.includes("request failed (504)") ||
+    message.includes("networkerror") ||
+    message.includes("failed to fetch") ||
+    message.includes("load failed") ||
+    message.includes("network request failed")
+  );
+}
+
+async function runHiddenAdminAction(action, {
+  button = null,
+  fallbackError = "Admin action failed."
+} = {}) {
+  const actionButton = button instanceof HTMLButtonElement ? button : null;
+  if (actionButton && actionButton.dataset.busy === "1") return false;
+  if (actionButton) {
+    actionButton.dataset.busy = "1";
+    actionButton.disabled = true;
+  }
+  try {
+    const result = await Promise.resolve().then(() => action());
+    return result !== false;
+  } catch (error) {
+    setHiddenAdminStatus(String(error?.message || fallbackError), true);
+    return false;
+  } finally {
+    if (actionButton && actionButton.isConnected) {
+      actionButton.dataset.busy = "0";
+      actionButton.disabled = !venmoAdminUnlocked;
+    }
+    syncHiddenAdminCoreSectionControls();
+    syncHiddenAdminActivityControls();
+    syncHiddenAdminFraudControls();
+  }
 }
 
 function getVenmoPackFunds(packId) {
@@ -8675,6 +8931,64 @@ async function refreshHiddenAdminBackupsFromServer({ silent = false, allowWhenLo
   }
 }
 
+async function refreshAllHiddenAdminData({
+  silent = true,
+  allowWhenLocked = false,
+  includeBackups = true,
+  waitForCurrent = false
+} = {}) {
+  if (!venmoAdminUnlocked && !allowWhenLocked) return false;
+  if (hiddenAdminRefreshInFlight) {
+    hiddenAdminRefreshQueued = true;
+    if (!waitForCurrent) return false;
+    for (let guard = 0; guard < 120 && hiddenAdminRefreshInFlight; guard += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (hiddenAdminRefreshInFlight) return false;
+    if (!venmoAdminUnlocked && !allowWhenLocked) return false;
+  }
+  hiddenAdminRefreshInFlight = true;
+  let anySuccess = false;
+  try {
+    const tasks = [
+      () => refreshVenmoAdminClaimsFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminStatsFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminHealthFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminUsersFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminDevicesFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminFeedbackFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminMessagesFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminActivityFromServer({ silent, allowWhenLocked }),
+      () => refreshHiddenAdminFraudFlagsFromServer({ silent, allowWhenLocked })
+    ];
+    if (includeBackups) {
+      tasks.push(() => refreshHiddenAdminBackupsFromServer({ silent, allowWhenLocked }));
+    }
+    for (const task of tasks) {
+      let ok = false;
+      try {
+        ok = await task();
+      } catch (error) {
+        if (!silent) {
+          setHiddenAdminStatus(String(error?.message || "Admin sync failed."), true);
+        }
+        ok = false;
+      }
+      anySuccess = anySuccess || ok === true;
+    }
+  } finally {
+    hiddenAdminRefreshInFlight = false;
+    const shouldRunQueued = hiddenAdminRefreshQueued && hiddenAdminPanelOpen && venmoAdminUnlocked;
+    hiddenAdminRefreshQueued = false;
+    if (shouldRunQueued) {
+      queueMicrotask(() => {
+        void refreshAllHiddenAdminData({ silent: true, includeBackups: false });
+      });
+    }
+  }
+  return anySuccess;
+}
+
 async function tryAutoUnlockAdminFromTrustedDevice() {
   if (venmoAdminUnlocked) return true;
   try {
@@ -8684,15 +8998,12 @@ async function tryAutoUnlockAdminFromTrustedDevice() {
   }
   const claimsOk = await refreshVenmoAdminClaimsFromServer({ silent: true, allowWhenLocked: true });
   if (!claimsOk) return false;
-  await refreshHiddenAdminStatsFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminHealthFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminUsersFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminDevicesFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminFeedbackFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminMessagesFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminActivityFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminFraudFlagsFromServer({ silent: true, allowWhenLocked: true });
-  await refreshHiddenAdminBackupsFromServer({ silent: true, allowWhenLocked: true });
+  await refreshAllHiddenAdminData({
+    silent: true,
+    allowWhenLocked: true,
+    includeBackups: true,
+    waitForCurrent: true
+  });
   setHiddenAdminStatus("Trusted device recognized. Admin unlocked.");
   return true;
 }
@@ -9583,17 +9894,10 @@ function startHiddenAdminLivePolling() {
     }
     if (!venmoAdminUnlocked) return;
     hiddenAdminLivePollTick += 1;
-    refreshHiddenAdminUsersFromServer({ silent: true });
-    refreshHiddenAdminStatsFromServer({ silent: true });
-    refreshHiddenAdminHealthFromServer({ silent: true });
-    refreshHiddenAdminDevicesFromServer({ silent: true });
-    refreshHiddenAdminFeedbackFromServer({ silent: true });
-    refreshHiddenAdminMessagesFromServer({ silent: true });
-    refreshHiddenAdminActivityFromServer({ silent: true });
-    refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-    if (hiddenAdminLivePollTick % 15 === 0) {
-      refreshHiddenAdminBackupsFromServer({ silent: true });
-    }
+    void refreshAllHiddenAdminData({
+      silent: true,
+      includeBackups: hiddenAdminLivePollTick % 15 === 0
+    });
   }, HIDDEN_ADMIN_LIVE_POLL_MS);
 }
 
@@ -9680,7 +9984,9 @@ function handleHiddenAdminSecretTap() {
   hiddenAdminSecretTapCount += 1;
   if (hiddenAdminSecretTapCount >= 5) {
     hiddenAdminSecretTapCount = 0;
-    void openHiddenAdminPanel();
+    void openHiddenAdminPanel().catch((error) => {
+      setHiddenAdminStatus(String(error?.message || "Could not open admin panel."), true);
+    });
   }
 }
 
@@ -9722,16 +10028,7 @@ async function openHiddenAdminPanel() {
   renderHiddenAdminFraudFlags();
   renderHiddenAdminBackups();
   if (venmoAdminUnlocked) {
-    await refreshVenmoAdminClaimsFromServer({ silent: true });
-    await refreshHiddenAdminStatsFromServer({ silent: true });
-    await refreshHiddenAdminHealthFromServer({ silent: true });
-    await refreshHiddenAdminUsersFromServer({ silent: true });
-    await refreshHiddenAdminDevicesFromServer({ silent: true });
-    await refreshHiddenAdminFeedbackFromServer({ silent: true });
-    await refreshHiddenAdminMessagesFromServer({ silent: true });
-    await refreshHiddenAdminActivityFromServer({ silent: true });
-    await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-    await refreshHiddenAdminBackupsFromServer({ silent: true });
+    await refreshAllHiddenAdminData({ silent: true, includeBackups: true, waitForCurrent: true });
     setHiddenAdminStatus(ownerAdminEligible ? "Admin unlocked via owner account." : "Admin unlocked. Device verified.");
   }
   startHiddenAdminLivePolling();
@@ -9744,7 +10041,9 @@ function initHiddenAdminTrigger() {
   hiddenAdminTriggerEl.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openHiddenAdminPanel();
+    void openHiddenAdminPanel().catch((error) => {
+      setHiddenAdminStatus(String(error?.message || "Could not open admin panel."), true);
+    });
   });
   const versionTag = document.getElementById("appVersionTag");
   if (versionTag) {
@@ -9762,15 +10061,25 @@ function initHiddenAdminTrigger() {
   }
   if (venmoAdminTrustDeviceBtn) {
     venmoAdminTrustDeviceBtn.addEventListener("click", async () => {
+      if (venmoAdminTrustDeviceBtn.dataset.busy === "1") return;
+      venmoAdminTrustDeviceBtn.dataset.busy = "1";
+      venmoAdminTrustDeviceBtn.disabled = true;
       const typedCode = String(venmoAdminCodeInputEl?.value || "").trim();
       if (!typedCode) {
         setHiddenAdminStatus("Enter admin code first.", true);
+        venmoAdminTrustDeviceBtn.dataset.busy = "0";
+        venmoAdminTrustDeviceBtn.disabled = !venmoAdminUnlocked;
         return;
       }
-      const ok = await trustCurrentAdminDevice({ code: typedCode });
-      if (!ok) return;
-      await refreshHiddenAdminDevicesFromServer({ silent: true });
-      setHiddenAdminStatus("This device is trusted for admin access.");
+      try {
+        const ok = await trustCurrentAdminDevice({ code: typedCode });
+        if (!ok) return;
+        await refreshHiddenAdminDevicesFromServer({ silent: true });
+        setHiddenAdminStatus("This device is trusted for admin access.");
+      } finally {
+        venmoAdminTrustDeviceBtn.dataset.busy = "0";
+        venmoAdminTrustDeviceBtn.disabled = !venmoAdminUnlocked;
+      }
     });
   }
   if (adminProfilePublicBtn) {
@@ -9785,7 +10094,10 @@ function initHiddenAdminTrigger() {
   }
   if (hiddenAdminFullResetBtn) {
     hiddenAdminFullResetBtn.addEventListener("click", () => {
-      runFullAdminReset();
+      void runHiddenAdminAction(() => runFullAdminReset(), {
+        button: hiddenAdminFullResetBtn,
+        fallbackError: "Could not run full reset."
+      });
     });
   }
   if (hiddenAdminMessagesCollapseBtn) {
@@ -9801,14 +10113,20 @@ function initHiddenAdminTrigger() {
   }
   if (hiddenAdminSendMessageBtn) {
     hiddenAdminSendMessageBtn.addEventListener("click", () => {
-      sendHiddenAdminPopupMessage();
+      void runHiddenAdminAction(() => sendHiddenAdminPopupMessage(), {
+        button: hiddenAdminSendMessageBtn,
+        fallbackError: "Could not send message."
+      });
     });
   }
   if (hiddenAdminMessageInputEl) {
     hiddenAdminMessageInputEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        sendHiddenAdminPopupMessage();
+        void runHiddenAdminAction(() => sendHiddenAdminPopupMessage(), {
+          button: hiddenAdminSendMessageBtn,
+          fallbackError: "Could not send message."
+        });
       }
     });
   }
@@ -9918,20 +10236,45 @@ function initHiddenAdminTrigger() {
       if (!action || !playerId) return;
       if (action === "set-balance") {
         const currentBalance = String(target.getAttribute("data-current-balance") || "");
-        setAdminUserBalance(playerId, currentBalance);
+        void runHiddenAdminAction(() => setAdminUserBalance(playerId, currentBalance), {
+          button: target,
+          fallbackError: "Could not update balance."
+        });
       }
       if (action === "message") prefillHiddenAdminMessageTarget(playerId);
-      if (action === "mark-safe") markAdminUserSafe(playerId, 30);
-      if (action === "clear-safe") clearAdminUserSafe(playerId);
-      if (action === "reset-progress") resetAdminUserProgress(playerId);
-      if (action === "force-logout") forceLogoutAdminUser(playerId);
-      if (action === "mute") muteAdminUser(playerId);
-      if (action === "unmute") unmuteAdminUser(playerId);
-      if (action === "ban") banAdminUser(playerId);
-      if (action === "unban") unbanAdminUser(playerId);
-      if (action === "ban-ip") banAdminUserIp(userIp, playerId);
-      if (action === "unban-ip") unbanAdminUserIp(userIp);
-      if (action === "remove") removeAdminUser(playerId);
+      if (action === "mark-safe") {
+        void runHiddenAdminAction(() => markAdminUserSafe(playerId, 30), { button: target });
+      }
+      if (action === "clear-safe") {
+        void runHiddenAdminAction(() => clearAdminUserSafe(playerId), { button: target });
+      }
+      if (action === "reset-progress") {
+        void runHiddenAdminAction(() => resetAdminUserProgress(playerId), { button: target });
+      }
+      if (action === "force-logout") {
+        void runHiddenAdminAction(() => forceLogoutAdminUser(playerId), { button: target });
+      }
+      if (action === "mute") {
+        void runHiddenAdminAction(() => muteAdminUser(playerId), { button: target });
+      }
+      if (action === "unmute") {
+        void runHiddenAdminAction(() => unmuteAdminUser(playerId), { button: target });
+      }
+      if (action === "ban") {
+        void runHiddenAdminAction(() => banAdminUser(playerId), { button: target });
+      }
+      if (action === "unban") {
+        void runHiddenAdminAction(() => unbanAdminUser(playerId), { button: target });
+      }
+      if (action === "ban-ip") {
+        void runHiddenAdminAction(() => banAdminUserIp(userIp, playerId), { button: target });
+      }
+      if (action === "unban-ip") {
+        void runHiddenAdminAction(() => unbanAdminUserIp(userIp), { button: target });
+      }
+      if (action === "remove") {
+        void runHiddenAdminAction(() => removeAdminUser(playerId), { button: target });
+      }
     });
   }
   if (hiddenAdminFeedbackEl) {
@@ -9943,12 +10286,17 @@ function initHiddenAdminTrigger() {
       const action = String(target.getAttribute("data-feedback-action") || "");
       const feedbackId = String(target.getAttribute("data-feedback-id") || "");
       if (!action || !feedbackId) return;
-      if (action === "remove") removeAdminFeedback(feedbackId);
+      if (action === "remove") {
+        void runHiddenAdminAction(() => removeAdminFeedback(feedbackId), { button: target });
+      }
     });
   }
   if (hiddenAdminCreateBackupBtn) {
     hiddenAdminCreateBackupBtn.addEventListener("click", () => {
-      createAdminBackup();
+      void runHiddenAdminAction(() => createAdminBackup(), {
+        button: hiddenAdminCreateBackupBtn,
+        fallbackError: "Could not create backup."
+      });
     });
   }
   if (hiddenAdminBackupsEl) {
@@ -9960,7 +10308,9 @@ function initHiddenAdminTrigger() {
       const action = String(target.getAttribute("data-backup-action") || "");
       const backupId = String(target.getAttribute("data-backup-id") || "");
       if (!action || !backupId) return;
-      if (action === "restore") restoreAdminBackup(backupId);
+      if (action === "restore") {
+        void runHiddenAdminAction(() => restoreAdminBackup(backupId), { button: target });
+      }
     });
   }
   if (hiddenAdminDevicesEl) {
@@ -9972,11 +10322,21 @@ function initHiddenAdminTrigger() {
       const action = String(target.getAttribute("data-device-action") || "");
       const deviceId = String(target.getAttribute("data-device-id") || "");
       if (!action || !deviceId) return;
-      if (action === "ban") banAdminDevice(deviceId);
-      if (action === "unban") unbanAdminDevice(deviceId);
-      if (action === "remove") removeAdminDevice(deviceId);
-      if (action === "set-owner-lock") setOwnerAdminDeviceLock(deviceId);
-      if (action === "clear-owner-lock") clearOwnerAdminDeviceLock();
+      if (action === "ban") {
+        void runHiddenAdminAction(() => banAdminDevice(deviceId), { button: target });
+      }
+      if (action === "unban") {
+        void runHiddenAdminAction(() => unbanAdminDevice(deviceId), { button: target });
+      }
+      if (action === "remove") {
+        void runHiddenAdminAction(() => removeAdminDevice(deviceId), { button: target });
+      }
+      if (action === "set-owner-lock") {
+        void runHiddenAdminAction(() => setOwnerAdminDeviceLock(deviceId), { button: target });
+      }
+      if (action === "clear-owner-lock") {
+        void runHiddenAdminAction(() => clearOwnerAdminDeviceLock(), { button: target });
+      }
     });
   }
   if (hiddenAdminMessagesEl) {
@@ -9989,7 +10349,7 @@ function initHiddenAdminTrigger() {
       if (action === "clear") {
         const messageId = String(target.getAttribute("data-message-id") || "");
         if (!messageId) return;
-        clearHiddenAdminPopupMessage(messageId);
+        void runHiddenAdminAction(() => clearHiddenAdminPopupMessage(messageId), { button: target });
       }
       if (action === "prefill-target") {
         const targetId = String(target.getAttribute("data-message-target-id") || "");
@@ -10008,7 +10368,7 @@ function initHiddenAdminTrigger() {
       const playerId = String(target.getAttribute("data-player-id") || "");
       if (!action || !playerId) return;
       if (action === "mark-safe") {
-        markAdminUserSafe(playerId, 30);
+        void runHiddenAdminAction(() => markAdminUserSafe(playerId, 30), { button: target });
       }
     });
   }
@@ -10178,20 +10538,19 @@ function initVenmoClaimWorkflow() {
     clearInterval(venmoClaimPollTimer);
     venmoClaimPollTimer = null;
   }
-  venmoClaimPollTimer = setInterval(() => {
-    refreshVenmoClaimsFromServer({ silent: true });
-    claimApprovedVenmoCredits({ silent: true });
-    if (venmoAdminUnlocked) {
-      refreshVenmoAdminClaimsFromServer({ silent: true });
-      refreshHiddenAdminStatsFromServer({ silent: true });
-      refreshHiddenAdminHealthFromServer({ silent: true });
-      refreshHiddenAdminUsersFromServer({ silent: true });
-      refreshHiddenAdminDevicesFromServer({ silent: true });
-      refreshHiddenAdminFeedbackFromServer({ silent: true });
-      refreshHiddenAdminMessagesFromServer({ silent: true });
-      refreshHiddenAdminActivityFromServer({ silent: true });
-      refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-      refreshHiddenAdminBackupsFromServer({ silent: true });
+  venmoClaimPollTimer = setInterval(async () => {
+    if (venmoClaimPollInFlight) return;
+    venmoClaimPollInFlight = true;
+    try {
+      await refreshVenmoClaimsFromServer({ silent: true });
+      await claimApprovedVenmoCredits({ silent: true });
+      if (venmoAdminUnlocked) {
+        await refreshAllHiddenAdminData({ silent: true, includeBackups: true });
+      }
+    } catch (error) {
+      console.error("Venmo claim workflow poll failed:", error);
+    } finally {
+      venmoClaimPollInFlight = false;
     }
   }, VENMO_CLAIM_POLL_MS);
 }
@@ -10213,7 +10572,7 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
     return false;
   }
   venmoAdminUnlocked = true;
-  const ok = await refreshVenmoAdminClaimsFromServer({ silent: true });
+  const ok = await refreshAllHiddenAdminData({ silent: true, includeBackups: true, waitForCurrent: true });
   if (!ok) {
     venmoAdminUnlocked = false;
     if (hiddenAdminLivePollTimer) {
@@ -10233,15 +10592,6 @@ async function promptVenmoAdminUnlock(forcePrompt = false) {
     renderHiddenAdminBackups();
     return false;
   }
-  await refreshHiddenAdminStatsFromServer({ silent: true });
-  await refreshHiddenAdminHealthFromServer({ silent: true });
-  await refreshHiddenAdminUsersFromServer({ silent: true });
-  await refreshHiddenAdminDevicesFromServer({ silent: true });
-  await refreshHiddenAdminFeedbackFromServer({ silent: true });
-  await refreshHiddenAdminMessagesFromServer({ silent: true });
-  await refreshHiddenAdminActivityFromServer({ silent: true });
-  await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-  await refreshHiddenAdminBackupsFromServer({ silent: true });
   if (venmoAdminCodeInputEl) venmoAdminCodeInputEl.value = "";
   setHiddenAdminStatus("Admin unlocked. Device verified.");
   if (hiddenAdminPanelOpen) startHiddenAdminLivePolling();
@@ -13460,10 +13810,13 @@ async function startGame() {
   }
   if (!(await dealBlackjackCard("dealer"))) return abortBlackjackInitialDeal();
 
-  if (isBlackjack(dealerHand)) {
+  const dealerHasNaturalBlackjack = isBlackjack(dealerHand);
+  const playerNaturalHands = hands.filter((hand) => isBlackjack(hand)).length;
+
+  if (dealerHasNaturalBlackjack) {
     blackjackDealInProgress = false;
     endGame();
-    const pushHands = hands.filter((hand) => isBlackjack(hand)).length;
+    const pushHands = playerNaturalHands;
     if (pushHands <= 0) {
       setBlackjackMessage("Dealer has Blackjack. Automatic loss.", "loss");
     } else {
@@ -13471,33 +13824,30 @@ async function startGame() {
       if (lossHands > 0) {
         setBlackjackMessage(`Dealer has Blackjack. ${pushHands} push, ${lossHands} loss.`, "neutral");
       } else {
-        setBlackjackMessage("Dealer has Blackjack. Push.", "push");
+        setBlackjackMessage("Push — both blackjack.", "push");
       }
     }
     updateBlackjackControls();
     return;
   }
 
-  const rigNaturalBlackjack = shouldRigHighBet(totalWager, 0.95);
-  if (hands.length === 1 && isBlackjack(hands[0]) && !rigNaturalBlackjack) {
-    const payout = bet * 2.5;
-    const profit = payout - bet;
+  if (playerNaturalHands > 0 && playerNaturalHands === hands.length) {
+    const payout = roundCurrency(handBets.reduce((sum, wager) => sum + wager * 2.5, 0));
+    const profit = roundCurrency(payout - bet);
     cash += payout;
-    showCasinoWinPopup({ amount: profit, multiplier: payout / bet });
+    showCasinoWinPopup({ amount: profit, multiplier: bet > 0 ? payout / bet : null });
     gameOver = true;
     blackjackDealInProgress = false;
     updateUI();
     updateBlackjackCash();
     renderBlackjack({ revealDealerHole: true });
     runBlackjackTableFx("win");
-    setBlackjackMessage(`Blackjack! Auto-win paid $${payout.toFixed(2)} (3:2 bonus).`, "win");
+    setBlackjackMessage(`BLACKJACK! +$${profit.toFixed(2)} (Total Return: $${payout.toFixed(2)})`, "win");
     updateBlackjackControls();
     return;
   }
 
-  if (hands.length === 1 && isBlackjack(hands[0]) && rigNaturalBlackjack) {
-    setBlackjackMessage("Blackjack dealt. Playing out the hand...", "neutral");
-  } else if (hands.length > 1) {
+  if (hands.length > 1) {
     setBlackjackMessage(`Playing Hand 1 of ${hands.length}.`, "neutral", false);
   } else {
     setBlackjackMessage("Hit, stand, split, or double.", "neutral", false);
@@ -13957,19 +14307,45 @@ const hiloState = {
   currentCardValue: 2,
   gameActive: false,
   guessLocked: false,
+  roundResolving: false,
+  roundToken: 0,
+  lockedGuess: "",
   skipRemaining: 3,
+  confirmBigBets: false,
+  lastOutcomes: [],
   suits: ["♦", "♣", "♥", "♠"]
 };
 const HILO_SKIP_MAX = 3;
 const HILO_SKIP_PENALTY = 0.04;
+const HILO_BIG_BET_CONFIRM_THRESHOLD = 1000;
+const HILO_BIG_BET_CONFIRM_STORAGE_KEY = "hilo_confirm_big_bets_v1";
 
 function loadHiLo() {
   const c = document.getElementById("casino-container");
+  function loadHiLoBoolSetting(key, fallback = false) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return fallback;
+      return raw === "1" || raw === "true";
+    } catch {
+      return fallback;
+    }
+  }
+  function saveHiLoBoolSetting(key, value) {
+    try {
+      localStorage.setItem(key, value ? "1" : "0");
+    } catch {}
+  }
   hiloState.currentCardValue = Math.floor(Math.random() * 13) + 1;
   hiloState.currentProfit = 0;
   hiloState.gameActive = false;
   hiloState.guessLocked = false;
+  hiloState.roundResolving = false;
+  hiloState.roundToken = 0;
+  hiloState.lockedGuess = "";
   hiloState.skipRemaining = HILO_SKIP_MAX;
+  hiloState.lastOutcomes = [];
+  hiloState.confirmBigBets = loadHiLoBoolSetting(HILO_BIG_BET_CONFIRM_STORAGE_KEY, false);
 
   c.innerHTML = `
     <div class="hilo-root">
@@ -13994,6 +14370,10 @@ function loadHiLo() {
               <button id="hiloMax" type="button">Max</button>
             </div>
           </div>
+          <label class="hilo-big-bet-confirm">
+            <input id="hiloConfirmBigBets" type="checkbox" ${hiloState.confirmBigBets ? "checked" : ""}/>
+            Confirm big bets (≥ $${HILO_BIG_BET_CONFIRM_THRESHOLD.toLocaleString()})
+          </label>
 
           <div class="probabilities">
             <div class="prob-row up"><span>Higher</span><strong id="hiloPercentHigher">0%</strong></div>
@@ -14036,6 +14416,10 @@ function loadHiLo() {
             <div id="hiloTotalProfit">Total Profit ($0.00)</div>
           </div>
           <div class="sage-hilo-note" aria-hidden="true">SAGE</div>
+          <div class="hilo-outcome-log-wrap">
+            <div class="hilo-outcome-log-title">Last 5 Outcomes</div>
+            <div class="hilo-outcome-log" id="hiloOutcomeLog"></div>
+          </div>
 
           <div class="history" id="hiloHistory"></div>
         </main>
@@ -14056,6 +14440,8 @@ function loadHiLo() {
   const potentialProfitSameEl = document.getElementById("hiloPotentialProfitSame");
   const currentCardEl = document.getElementById("hiloCurrentCard");
   const historyEl = document.getElementById("hiloHistory");
+  const outcomeLogEl = document.getElementById("hiloOutcomeLog");
+  const confirmBigBetsEl = document.getElementById("hiloConfirmBigBets");
 
   const betButton = document.getElementById("hiloBetButton");
   const cashoutButton = document.getElementById("hiloCashoutButton");
@@ -14072,6 +14458,72 @@ function loadHiLo() {
 
   const multipliers = { higher: 0, lower: 0, same: 0 };
 
+  function setGuessButtonsDisabled(disabled) {
+    guessButtons.forEach((btn) => {
+      if (!btn) return;
+      btn.disabled = disabled;
+    });
+    if (skipButton) {
+      skipButton.disabled = disabled || hiloState.skipRemaining <= 0;
+    }
+  }
+
+  function highlightLockedGuess(guess = "") {
+    guessButtons.forEach((btn) => {
+      if (!btn) return;
+      const key = String(btn.getAttribute("data-guess") || "");
+      btn.classList.toggle("is-selected", Boolean(guess) && key === guess);
+    });
+  }
+
+  function getHiLoRoundOutcome(previousValue, nextValue) {
+    if (nextValue > previousValue) return "higher";
+    if (nextValue < previousValue) return "lower";
+    return "same";
+  }
+
+  function cardValueToRank(value) {
+    const rankMap = { 1: "A", 11: "J", 12: "Q", 13: "K" };
+    return String(rankMap[value] || value);
+  }
+
+  function renderHiLoOutcomeLog() {
+    if (!outcomeLogEl) return;
+    if (hiloState.lastOutcomes.length <= 0) {
+      outcomeLogEl.innerHTML = `<div class="hilo-outcome-empty">No rounds yet.</div>`;
+      return;
+    }
+    outcomeLogEl.innerHTML = hiloState.lastOutcomes
+      .map((entry) => {
+        const resultLabel = entry.outcome.charAt(0).toUpperCase() + entry.outcome.slice(1);
+        const guessLabel = entry.guess.charAt(0).toUpperCase() + entry.guess.slice(1);
+        return `
+          <div class="hilo-outcome-row ${entry.won ? "win" : "loss"}">
+            <span class="cards">${cardValueToRank(entry.previousValue)} → ${cardValueToRank(entry.nextValue)}</span>
+            <span class="meta">Result: ${resultLabel}</span>
+            <span class="meta">Pick: ${guessLabel}</span>
+            <span class="status">${entry.won ? "Win" : "Loss"}</span>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function appendHiLoOutcomeLog(previousValue, nextValue, outcome, guess, won) {
+    hiloState.lastOutcomes.unshift({
+      previousValue,
+      nextValue,
+      outcome,
+      guess,
+      won,
+      at: Date.now()
+    });
+    if (hiloState.lastOutcomes.length > 5) {
+      hiloState.lastOutcomes.length = 5;
+    }
+    renderHiLoOutcomeLog();
+  }
+
   function setRoundState(isActive) {
     hiloState.gameActive = isActive;
 
@@ -14083,11 +14535,15 @@ function loadHiLo() {
     doubleBtn.disabled = isActive;
     maxBtn.disabled = isActive;
 
-    cashoutButton.disabled = !isActive;
-    guessButtons.forEach((btn) => (btn.disabled = !isActive));
-    if (skipButton) skipButton.disabled = !isActive || hiloState.skipRemaining <= 0;
+    cashoutButton.disabled = !isActive || hiloState.roundResolving;
+    setGuessButtonsDisabled(!isActive || hiloState.roundResolving);
 
-    if (!isActive) hiloState.guessLocked = false;
+    if (!isActive) {
+      hiloState.guessLocked = false;
+      hiloState.lockedGuess = "";
+      hiloState.roundResolving = false;
+      highlightLockedGuess("");
+    }
   }
 
   function hiloUpdateUI() {
@@ -14159,15 +14615,12 @@ function loadHiLo() {
     return Math.floor(Math.random() * 13) + 1;
   }
 
-  function getRiggedHiLoCard(previousValue, guess) {
-    if (guess === "higher") return Math.floor(Math.random() * previousValue) + 1;
-    if (guess === "lower") return Math.floor(Math.random() * (13 - previousValue + 1)) + previousValue;
-    const nonSame = Math.random() < 0.5 ? previousValue - 1 : previousValue + 1;
-    return Math.max(1, Math.min(13, nonSame));
+  function waitHiLoReveal(ms = 220) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function placeBet() {
-    if (hiloState.gameActive) return;
+    if (hiloState.gameActive || hiloState.roundResolving) return;
     if (!ensureCasinoBettingAllowedNow()) return;
 
     const betAmount = parseFloat(betInputEl.value);
@@ -14179,12 +14632,19 @@ function loadHiLo() {
       alert("Not enough cash!");
       return;
     }
+    if (hiloState.confirmBigBets && betAmount >= HILO_BIG_BET_CONFIRM_THRESHOLD) {
+      const confirmed = window.confirm(`Confirm Hi-Lo bet of $${betAmount.toFixed(2)}?`);
+      if (!confirmed) return;
+    }
 
     hiloState.betAmount = betAmount;
     cash -= betAmount;
     hiloState.currentProfit = betAmount;
     hiloState.currentCardValue = getRandomCard();
     hiloState.guessLocked = false;
+    hiloState.roundResolving = false;
+    hiloState.roundToken += 1;
+    hiloState.lockedGuess = "";
     hiloState.skipRemaining = HILO_SKIP_MAX;
 
     setRoundState(true);
@@ -14192,109 +14652,178 @@ function loadHiLo() {
     hiloUpdateUI();
     displayCard(hiloState.currentCardValue);
     animateCurrentCard();
+    hiloState.lastOutcomes = [];
+    renderHiLoOutcomeLog();
   }
 
-  function makeGuess(guess) {
-    if (!hiloState.gameActive || hiloState.guessLocked) {
+  async function makeGuess(guess) {
+    if (!hiloState.gameActive || hiloState.guessLocked || hiloState.roundResolving) {
       if (!hiloState.gameActive) alert("Place a bet first!");
       return;
     }
 
+    const lockedGuess = String(guess || "");
+    if (!["higher", "lower", "same"].includes(lockedGuess)) return;
+
+    const roundToken = hiloState.roundToken + 1;
+    hiloState.roundToken = roundToken;
     hiloState.guessLocked = true;
+    hiloState.roundResolving = true;
+    hiloState.lockedGuess = lockedGuess;
+    setGuessButtonsDisabled(true);
+    cashoutButton.disabled = true;
+    highlightLockedGuess(lockedGuess);
 
-    const prev = hiloState.currentCardValue;
-    const nextCard = shouldRigHighBet(hiloState.betAmount, 0.95)
-      ? getRiggedHiLoCard(prev, guess)
-      : getRandomCard();
-    let won = false;
+    const previousValue = hiloState.currentCardValue;
+    try {
+      const nextCard = getRandomCard();
+      await waitHiLoReveal(220);
+      if (!hiloState.gameActive || roundToken !== hiloState.roundToken) {
+        if (roundToken === hiloState.roundToken) {
+          hiloState.roundResolving = false;
+          hiloState.guessLocked = false;
+          hiloState.lockedGuess = "";
+          highlightLockedGuess("");
+          setGuessButtonsDisabled(!hiloState.gameActive);
+          cashoutButton.disabled = !hiloState.gameActive;
+        }
+        return;
+      }
 
-    if (guess === "higher" && nextCard > prev) won = true;
-    if (guess === "lower" && nextCard < prev) won = true;
-    if (guess === "same" && nextCard === prev) won = true;
-    if (won) {
-      hiloState.currentProfit *= multipliers[guess];
-      hiloState.skipRemaining = HILO_SKIP_MAX;
-    } else {
+      const outcome = getHiLoRoundOutcome(previousValue, nextCard);
+      const won = outcome === lockedGuess;
+
+      if (won) {
+        hiloState.currentProfit = roundCurrency(hiloState.currentProfit * (multipliers[lockedGuess] || 0));
+        hiloState.skipRemaining = HILO_SKIP_MAX;
+      } else {
+        hiloState.currentProfit = 0;
+        playGameSound("loss");
+      }
+
+      hiloState.currentCardValue = nextCard;
+      displayCard(hiloState.currentCardValue);
+      animateCurrentCard();
+
+      const rankMap = { 1: "A", 11: "J", 12: "Q", 13: "K" };
+      const rank = rankMap[nextCard] || nextCard;
+      const suit = hiloState.suits[Math.floor(Math.random() * hiloState.suits.length)];
+      const color = suit === "♦" || suit === "♥" ? "#e53935" : "#000";
+
+      const historyItem = document.createElement("div");
+      historyItem.className = "history-item";
+      historyItem.innerHTML = `
+        <div class="history-card" style="color:${color}">
+          <span class="rank">${rank}</span>
+          <span class="suit">${suit}</span>
+          <span class="rank bottom">${rank}</span>
+        </div>
+        <div class="pill ${won ? "green" : "red"}">${lockedGuess} → ${outcome}</div>
+      `;
+      historyEl.appendChild(historyItem);
+      while (historyEl.children.length > 30) {
+        historyEl.removeChild(historyEl.firstElementChild);
+      }
+      historyEl.scrollLeft = historyEl.scrollWidth;
+      appendHiLoOutcomeLog(previousValue, nextCard, outcome, lockedGuess, won);
+
+      hiloUpdateUI();
+      if (won) {
+        hiloState.roundResolving = false;
+        hiloState.guessLocked = false;
+        hiloState.lockedGuess = "";
+        highlightLockedGuess("");
+        setGuessButtonsDisabled(false);
+        cashoutButton.disabled = false;
+      } else {
+        setRoundState(false);
+        triggerCasinoKickoutCheckAfterRound();
+      }
+    } catch (error) {
+      console.error("Hi-Lo guess resolution failed:", error);
       hiloState.currentProfit = 0;
       setRoundState(false);
-      playGameSound("loss");
-    }
-
-    hiloState.currentCardValue = nextCard;
-    displayCard(hiloState.currentCardValue);
-    animateCurrentCard();
-
-    const rankMap = { 1: "A", 11: "J", 12: "Q", 13: "K" };
-    const rank = rankMap[nextCard] || nextCard;
-    const suit = hiloState.suits[Math.floor(Math.random() * hiloState.suits.length)];
-    const color = suit === "♦" || suit === "♥" ? "#e53935" : "#000";
-
-    const historyItem = document.createElement("div");
-    historyItem.className = "history-item";
-    historyItem.innerHTML = `
-      <div class="history-card" style="color:${color}">
-        <span class="rank">${rank}</span>
-        <span class="suit">${suit}</span>
-        <span class="rank bottom">${rank}</span>
-      </div>
-      <div class="pill ${won ? "green" : "red"}">${guess}</div>
-    `;
-    historyEl.appendChild(historyItem);
-    while (historyEl.children.length > 30) {
-      historyEl.removeChild(historyEl.firstElementChild);
-    }
-    historyEl.scrollLeft = historyEl.scrollWidth;
-
-    hiloUpdateUI();
-    hiloState.guessLocked = false;
-    if (!won) {
-      triggerCasinoKickoutCheckAfterRound();
+      hiloUpdateUI();
     }
   }
 
-  function skipCard() {
-    if (!hiloState.gameActive || hiloState.guessLocked) {
+  async function skipCard() {
+    if (!hiloState.gameActive || hiloState.guessLocked || hiloState.roundResolving) {
       if (!hiloState.gameActive) alert("Place a bet first!");
       return;
     }
     if (hiloState.skipRemaining <= 0) return;
 
+    const roundToken = hiloState.roundToken + 1;
+    hiloState.roundToken = roundToken;
     hiloState.guessLocked = true;
+    hiloState.roundResolving = true;
+    hiloState.lockedGuess = "skip";
+    highlightLockedGuess("");
+    setGuessButtonsDisabled(true);
+    cashoutButton.disabled = true;
+    const previousValue = hiloState.currentCardValue;
     hiloState.skipRemaining -= 1;
     hiloState.currentProfit = roundCurrency(Math.max(0, hiloState.currentProfit * (1 - HILO_SKIP_PENALTY)));
 
-    const nextCard = getRandomCard();
-    hiloState.currentCardValue = nextCard;
-    displayCard(hiloState.currentCardValue);
-    animateCurrentCard();
+    try {
+      const nextCard = getRandomCard();
+      await waitHiLoReveal(180);
+      if (!hiloState.gameActive || roundToken !== hiloState.roundToken) {
+        if (roundToken === hiloState.roundToken) {
+          hiloState.roundResolving = false;
+          hiloState.guessLocked = false;
+          hiloState.lockedGuess = "";
+          highlightLockedGuess("");
+          setGuessButtonsDisabled(!hiloState.gameActive);
+          cashoutButton.disabled = !hiloState.gameActive;
+        }
+        return;
+      }
+      const outcome = getHiLoRoundOutcome(previousValue, nextCard);
+      hiloState.currentCardValue = nextCard;
+      displayCard(hiloState.currentCardValue);
+      animateCurrentCard();
 
-    const rankMap = { 1: "A", 11: "J", 12: "Q", 13: "K" };
-    const rank = rankMap[nextCard] || nextCard;
-    const suit = hiloState.suits[Math.floor(Math.random() * hiloState.suits.length)];
-    const color = suit === "♦" || suit === "♥" ? "#e53935" : "#000";
+      const rankMap = { 1: "A", 11: "J", 12: "Q", 13: "K" };
+      const rank = rankMap[nextCard] || nextCard;
+      const suit = hiloState.suits[Math.floor(Math.random() * hiloState.suits.length)];
+      const color = suit === "♦" || suit === "♥" ? "#e53935" : "#000";
 
-    const historyItem = document.createElement("div");
-    historyItem.className = "history-item";
-    historyItem.innerHTML = `
-      <div class="history-card" style="color:${color}">
-        <span class="rank">${rank}</span>
-        <span class="suit">${suit}</span>
-        <span class="rank bottom">${rank}</span>
-      </div>
-      <div class="pill red">skip -${Math.round(HILO_SKIP_PENALTY * 100)}%</div>
-    `;
-    historyEl.appendChild(historyItem);
-    while (historyEl.children.length > 30) {
-      historyEl.removeChild(historyEl.firstElementChild);
+      const historyItem = document.createElement("div");
+      historyItem.className = "history-item";
+      historyItem.innerHTML = `
+        <div class="history-card" style="color:${color}">
+          <span class="rank">${rank}</span>
+          <span class="suit">${suit}</span>
+          <span class="rank bottom">${rank}</span>
+        </div>
+        <div class="pill red">skip (${outcome}) -${Math.round(HILO_SKIP_PENALTY * 100)}%</div>
+      `;
+      historyEl.appendChild(historyItem);
+      while (historyEl.children.length > 30) {
+        historyEl.removeChild(historyEl.firstElementChild);
+      }
+      historyEl.scrollLeft = historyEl.scrollWidth;
+      appendHiLoOutcomeLog(previousValue, nextCard, outcome, "skip", false);
+
+      hiloUpdateUI();
+    } catch (error) {
+      console.error("Hi-Lo skip resolution failed:", error);
+    } finally {
+      if (roundToken === hiloState.roundToken) {
+        hiloState.roundResolving = false;
+        hiloState.guessLocked = false;
+        hiloState.lockedGuess = "";
+        highlightLockedGuess("");
+        setGuessButtonsDisabled(false);
+        cashoutButton.disabled = false;
+      }
     }
-    historyEl.scrollLeft = historyEl.scrollWidth;
-
-    hiloUpdateUI();
-    hiloState.guessLocked = false;
   }
 
   function cashout() {
-    if (!hiloState.gameActive) return;
+    if (!hiloState.gameActive || hiloState.roundResolving) return;
     playGameSound("cashout", { restart: true, allowOverlap: false });
     const payout = hiloState.currentProfit;
     const netProfit = payout - hiloState.betAmount;
@@ -14323,6 +14852,12 @@ function loadHiLo() {
   maxBtn.addEventListener("click", () => {
     betInputEl.value = cash.toFixed(2);
   });
+  if (confirmBigBetsEl) {
+    confirmBigBetsEl.addEventListener("change", () => {
+      hiloState.confirmBigBets = confirmBigBetsEl.checked === true;
+      saveHiLoBoolSetting(HILO_BIG_BET_CONFIRM_STORAGE_KEY, hiloState.confirmBigBets);
+    });
+  }
 
   betButton.addEventListener("click", placeBet);
   cashoutButton.addEventListener("click", cashout);
@@ -14334,6 +14869,7 @@ function loadHiLo() {
 
   hiloUpdateUI();
   displayCard(hiloState.currentCardValue);
+  renderHiLoOutcomeLog();
   setRoundState(hiloState.gameActive);
 }
 
@@ -25648,10 +26184,6 @@ function loadCrossyRoad() {
     else if (multiplier < 1.5) chance = table[1];
     else if (multiplier < 2.0) chance = table[2];
     else if (multiplier < 3.0) chance = table[3];
-
-    if (state.bet > HIGH_BET_RIG_THRESHOLD) {
-      chance += getHighBetRigChance(state.bet, 0.45);
-    }
 
     return Math.min(0.995, chance);
   }

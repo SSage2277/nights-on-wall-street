@@ -6834,6 +6834,19 @@ body.phone-embedded-mini-mode #plinko-mini-screen {
   border-radius: 8px;
 }
 
+.hilo-root .hilo-big-bet-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #a8c4d6;
+  user-select: none;
+}
+
+.hilo-root .hilo-big-bet-confirm input {
+  accent-color: #00e701;
+}
+
 .hilo-root .bet-input input {
   background: none;
   border: none;
@@ -6931,6 +6944,11 @@ body.phone-embedded-mini-mode #plinko-mini-screen {
 
 .hilo-root .guess-buttons button:hover {
   background: #2a3f4d;
+}
+
+.hilo-root .guess-buttons button.is-selected {
+  border-color: #88e8ff;
+  box-shadow: 0 0 0 1px rgba(136, 232, 255, 0.35), inset 0 0 16px rgba(89, 196, 230, 0.18);
 }
 
 .hilo-root .guess-buttons .skip-button {
@@ -7038,6 +7056,64 @@ body.phone-embedded-mini-mode #plinko-mini-screen {
   overflow-y: hidden;
   white-space: nowrap;
   padding-bottom: 8px;
+}
+
+.hilo-root .hilo-outcome-log-wrap {
+  margin-top: 4px;
+  background: #1a2d3a;
+  border: 1px solid #2f4553;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.hilo-root .hilo-outcome-log-title {
+  font-size: 12px;
+  color: #9dc2d8;
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+
+.hilo-root .hilo-outcome-log {
+  display: grid;
+  gap: 6px;
+}
+
+.hilo-root .hilo-outcome-row {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(14, 29, 39, 0.75);
+}
+
+.hilo-root .hilo-outcome-row .cards {
+  color: #f1fbff;
+  font-weight: 700;
+}
+
+.hilo-root .hilo-outcome-row .meta {
+  color: #a7c2d2;
+}
+
+.hilo-root .hilo-outcome-row .status {
+  font-weight: 700;
+}
+
+.hilo-root .hilo-outcome-row.win .status {
+  color: #7dff93;
+}
+
+.hilo-root .hilo-outcome-row.loss .status {
+  color: #ff9191;
+}
+
+.hilo-root .hilo-outcome-empty {
+  font-size: 12px;
+  color: #8fb0c4;
+  padding: 4px 2px;
 }
 
 .hilo-root .history::-webkit-scrollbar {
