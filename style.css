@@ -13195,6 +13195,37 @@ body.game-fullscreen #casino-container.plinko-neon-fullbleed > .plinko-casino-ne
   cursor: not-allowed;
 }
 
+.dice-root .dice-auto-group {
+  margin-top: 6px;
+}
+
+.dice-root .dice-auto-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.dice-root .auto-roll-btn {
+  margin-top: 8px;
+  padding: 14px;
+  font-size: 0.95rem;
+  background-color: #2f4553;
+  color: #e8eff8;
+}
+
+.dice-root .auto-roll-btn.running {
+  background-color: #ff4d4d;
+  color: #ffffff;
+}
+
+.dice-root .dice-auto-status {
+  margin-top: 8px;
+  color: var(--text-grey);
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-height: 1.1em;
+}
+
 .dice-root .game-panel {
   flex: 1;
   background-color: var(--bg-dark);

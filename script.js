@@ -20938,6 +20938,22 @@ function loadDice() {
           </div>
 
           <button id="rollBtn" class="action-btn" type="button">Bet</button>
+
+          <div class="control-group dice-auto-group">
+            <label>Auto Mode</label>
+            <div class="dice-auto-grid">
+              <div class="input-complex">
+                <div class="input-icon">#</div>
+                <input type="number" id="autoRoundsInput" value="0" min="0" step="1">
+              </div>
+              <div class="input-complex">
+                <div class="input-icon">ms</div>
+                <input type="number" id="autoDelayInput" value="700" min="100" max="5000" step="50">
+              </div>
+            </div>
+            <button id="autoRollBtn" class="action-btn auto-roll-btn" type="button">Start Auto</button>
+            <div id="autoRollStatus" class="dice-auto-status">Auto is off.</div>
+          </div>
         </div>
 
         <div class="game-panel">
@@ -20990,6 +21006,10 @@ function loadDice() {
   let destroyed = false;
   let pendingRollTimeout = null;
   let pendingResetTimeout = null;
+  let autoDelayTimeout = null;
+  let autoRunning = false;
+  let autoRoundsRemaining = 0;
+  let rollInFlight = false;
 
   const slider = container.querySelector("#targetSlider");
   const betInput = container.querySelector("#betInput");
@@ -21006,6 +21026,10 @@ function loadDice() {
   const btnDouble = container.querySelector("#btnDouble");
   const btnModeOver = container.querySelector("#btnModeOver");
   const btnModeUnder = container.querySelector("#btnModeUnder");
+  const autoRoundsInput = container.querySelector("#autoRoundsInput");
+  const autoDelayInput = container.querySelector("#autoDelayInput");
+  const autoRollBtn = container.querySelector("#autoRollBtn");
+  const autoRollStatus = container.querySelector("#autoRollStatus");
 
   const gameState = {
     balance: cash,
@@ -21074,84 +21098,217 @@ function loadDice() {
     }
   }
 
-  function rollDice() {
-    if (destroyed) return;
+  function clearAutoDelayTimer() {
+    if (autoDelayTimeout) {
+      window.clearTimeout(autoDelayTimeout);
+      autoDelayTimeout = null;
+    }
+  }
+
+  function setAutoStatus(text) {
+    if (autoRollStatus) {
+      autoRollStatus.textContent = text;
+    }
+  }
+
+  function getAutoRoundsCount() {
+    const raw = Number.parseInt(autoRoundsInput?.value ?? "0", 10);
+    const rounds = Number.isFinite(raw) && raw > 0 ? raw : 0;
+    if (autoRoundsInput) {
+      autoRoundsInput.value = String(rounds);
+    }
+    return rounds;
+  }
+
+  function getAutoDelayMs() {
+    const raw = Number.parseInt(autoDelayInput?.value ?? "700", 10);
+    const delay = Number.isFinite(raw) ? Math.min(5000, Math.max(100, raw)) : 700;
+    if (autoDelayInput) {
+      autoDelayInput.value = String(delay);
+    }
+    return delay;
+  }
+
+  function syncAutoUi() {
+    if (!autoRollBtn || !rollBtn) return;
+    autoRollBtn.textContent = autoRunning ? "Stop Auto" : "Start Auto";
+    autoRollBtn.classList.toggle("running", autoRunning);
+    if (autoRoundsInput) autoRoundsInput.disabled = autoRunning;
+    if (autoDelayInput) autoDelayInput.disabled = autoRunning;
+    rollBtn.disabled = autoRunning || rollInFlight;
+    rollBtn.textContent = rollInFlight ? "Rolling..." : "Bet";
+  }
+
+  function stopAuto(message = "Auto is off.") {
+    autoRunning = false;
+    autoRoundsRemaining = 0;
+    clearAutoDelayTimer();
+    setAutoStatus(message);
+    syncAutoUi();
+  }
+
+  function waitAutoDelay(ms) {
+    return new Promise((resolve) => {
+      clearAutoDelayTimer();
+      autoDelayTimeout = window.setTimeout(() => {
+        autoDelayTimeout = null;
+        resolve(autoRunning && !destroyed);
+      }, ms);
+    });
+  }
+
+  async function runAutoLoop() {
+    while (autoRunning && !destroyed) {
+      if (autoRoundsRemaining > 0) {
+        setAutoStatus(`Auto rolling... ${autoRoundsRemaining} left`);
+      } else {
+        setAutoStatus("Auto rolling... ∞");
+      }
+
+      const result = await rollDice({ fromAuto: true });
+      if (!result.started || destroyed || !autoRunning) {
+        if (autoRunning && !destroyed) {
+          stopAuto("Auto stopped.");
+        }
+        return;
+      }
+
+      if (autoRoundsRemaining > 0) {
+        autoRoundsRemaining -= 1;
+        if (autoRoundsRemaining <= 0) {
+          stopAuto("Auto complete.");
+          return;
+        }
+      }
+
+      const shouldContinue = await waitAutoDelay(getAutoDelayMs());
+      if (!shouldContinue) {
+        return;
+      }
+    }
+  }
+
+  function startAuto() {
+    if (destroyed || autoRunning || rollInFlight) return;
     if (!ensureCasinoBettingAllowedNow()) return;
 
-    if (gameState.currentBet > gameState.balance) {
-      alert("Insufficient Balance");
-      return;
-    }
-    if (gameState.currentBet <= 0) {
-      alert("Enter a valid bet");
-      return;
-    }
+    const configuredRounds = getAutoRoundsCount();
+    autoRoundsRemaining = configuredRounds;
+    autoRunning = true;
+    syncAutoUi();
+    runAutoLoop();
+  }
 
-    if (!rollBtn || !resultPopup || !resultMarker || !resultValueSpan) return;
+  function rollDice({ fromAuto = false } = {}) {
+    return new Promise((resolve) => {
+      if (destroyed || rollInFlight) {
+        resolve({ started: false, reason: "busy" });
+        return;
+      }
+      if (!ensureCasinoBettingAllowedNow()) {
+        if (fromAuto) {
+          stopAuto("Auto stopped: betting unavailable.");
+        }
+        resolve({ started: false, reason: "blocked" });
+        return;
+      }
 
-    rollBtn.disabled = true;
-    rollBtn.textContent = "Rolling...";
+      if (gameState.currentBet > gameState.balance) {
+        if (!fromAuto) {
+          alert("Insufficient Balance");
+        } else {
+          stopAuto("Auto stopped: insufficient balance.");
+        }
+        resolve({ started: false, reason: "insufficient" });
+        return;
+      }
+      if (gameState.currentBet <= 0) {
+        if (!fromAuto) {
+          alert("Enter a valid bet");
+        } else {
+          stopAuto("Auto stopped: invalid bet.");
+        }
+        resolve({ started: false, reason: "invalid_bet" });
+        return;
+      }
 
-    resultPopup.classList.remove("show", "win", "lose");
-    resultMarker.classList.remove("show", "win", "lose");
+      if (!rollBtn || !resultPopup || !resultMarker || !resultValueSpan) {
+        resolve({ started: false, reason: "missing_ui" });
+        return;
+      }
 
-    const raw = Math.random() * 100;
-    let result = parseFloat(raw.toFixed(2));
+      rollInFlight = true;
+      syncAutoUi();
 
-    let isWin = false;
-    if (gameState.isRollOver) {
-      isWin = result > gameState.target;
-    } else {
-      isWin = result < gameState.target;
-    }
+      resultPopup.classList.remove("show", "win", "lose");
+      resultMarker.classList.remove("show", "win", "lose");
 
-    if (isWin && shouldRigHighBet(gameState.currentBet, 1.05)) {
-      isWin = false;
+      const raw = Math.random() * 100;
+      let result = Number.parseFloat(raw.toFixed(2));
+
+      let isWin = false;
       if (gameState.isRollOver) {
-        result = Number((Math.max(0, gameState.target - Math.random() * 8)).toFixed(2));
+        isWin = result > gameState.target;
       } else {
-        result = Number((Math.min(99.99, gameState.target + Math.random() * 8)).toFixed(2));
-      }
-    }
-
-    resetPendingTimers();
-
-    pendingRollTimeout = window.setTimeout(() => {
-      if (destroyed) return;
-
-      resultMarker.style.left = result + "%";
-      resultMarker.classList.add("show");
-      resultMarker.classList.add(isWin ? "win" : "lose");
-
-      resultPopup.classList.add("show");
-      resultValueSpan.textContent = result.toFixed(2);
-
-      if (isWin) {
-        const profit = gameState.currentBet * gameState.multiplier - gameState.currentBet;
-        const payout = gameState.currentBet * gameState.multiplier;
-        gameState.balance += profit;
-        showCasinoWinPopup({ amount: profit, multiplier: gameState.multiplier });
-        resultPopup.classList.add("win");
-        rollBtn.style.backgroundColor = "#00e701";
-      } else {
-        gameState.balance -= gameState.currentBet;
-        resultPopup.classList.add("lose");
-        rollBtn.style.backgroundColor = "#ff4d4d";
-        playGameSound("loss");
+        isWin = result < gameState.target;
       }
 
-      syncGlobalCash();
-      updateVisuals();
-      triggerCasinoKickoutCheckAfterRound();
+      if (isWin && shouldRigHighBet(gameState.currentBet, 1.05)) {
+        isWin = false;
+        if (gameState.isRollOver) {
+          result = Number((Math.max(0, gameState.target - Math.random() * 8)).toFixed(2));
+        } else {
+          result = Number((Math.min(99.99, gameState.target + Math.random() * 8)).toFixed(2));
+        }
+      }
 
-      pendingResetTimeout = window.setTimeout(() => {
-        if (destroyed) return;
-        rollBtn.disabled = false;
-        rollBtn.textContent = "Bet";
-        rollBtn.style.backgroundColor = "";
-        resultPopup.classList.remove("show");
-      }, 1500);
-    }, 100);
+      resetPendingTimers();
+
+      pendingRollTimeout = window.setTimeout(() => {
+        if (destroyed) {
+          rollInFlight = false;
+          resolve({ started: false, reason: "destroyed" });
+          return;
+        }
+
+        resultMarker.style.left = result + "%";
+        resultMarker.classList.add("show");
+        resultMarker.classList.add(isWin ? "win" : "lose");
+
+        resultPopup.classList.add("show");
+        resultValueSpan.textContent = result.toFixed(2);
+
+        if (isWin) {
+          const profit = gameState.currentBet * gameState.multiplier - gameState.currentBet;
+          gameState.balance += profit;
+          showCasinoWinPopup({ amount: profit, multiplier: gameState.multiplier });
+          resultPopup.classList.add("win");
+          rollBtn.style.backgroundColor = "#00e701";
+        } else {
+          gameState.balance -= gameState.currentBet;
+          resultPopup.classList.add("lose");
+          rollBtn.style.backgroundColor = "#ff4d4d";
+          playGameSound("loss");
+        }
+
+        syncGlobalCash();
+        updateVisuals();
+        triggerCasinoKickoutCheckAfterRound();
+
+        pendingResetTimeout = window.setTimeout(() => {
+          if (destroyed) {
+            rollInFlight = false;
+            resolve({ started: false, reason: "destroyed" });
+            return;
+          }
+          rollBtn.style.backgroundColor = "";
+          resultPopup.classList.remove("show");
+          rollInFlight = false;
+          syncAutoUi();
+          resolve({ started: true, isWin, result });
+        }, 1500);
+      }, 100);
+    });
   }
 
   if (slider) {
@@ -21208,15 +21365,31 @@ function loadDice() {
   }
 
   if (rollBtn) {
-    rollBtn.addEventListener("click", rollDice);
+    rollBtn.addEventListener("click", () => {
+      rollDice();
+    });
+  }
+
+  if (autoRollBtn) {
+    autoRollBtn.addEventListener("click", () => {
+      if (autoRunning) {
+        stopAuto("Auto stopped.");
+        return;
+      }
+      startAuto();
+    });
   }
 
   updateMath();
   updateVisuals();
+  setAutoStatus("Auto is off.");
+  syncAutoUi();
 
   activeCasinoCleanup = () => {
     destroyed = true;
+    stopAuto("Auto is off.");
     resetPendingTimers();
+    clearAutoDelayTimer();
     container.classList.remove("casino-fullbleed", "dice-fullbleed");
   };
 }
