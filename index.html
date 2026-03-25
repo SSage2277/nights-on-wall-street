@@ -16,6 +16,7 @@
 
 <!-- NAV -->
 <div id="nav">
+  <button id="officeBtn">Office</button>
   <button id="tradingBtn">Trading Floor</button>
   <button id="casinoBtn">Casino</button>
   <button id="bankToggleBtn">🏦 Bank</button>
@@ -48,24 +49,11 @@
     <button id="withdrawAllSavingsBtn">Withdraw Savings</button>
 
     <div class="bank-divider"></div>
-    <span>Buy Funds (Venmo)</span>
-    <div class="bank-buy-row">
-      <button id="buyFundsSmallBtn">Buy S$1,000 · USD 3</button>
-      <button id="buyFundsMediumBtn">Buy S$5,000 · USD 10</button>
-      <button id="buyFundsXLBtn">Buy S$10,000 · USD 20</button>
-      <button id="buyFundsLargeBtn">Buy S$25,000 · USD 40</button>
+    <span>Hourly Reward</span>
+    <div class="bank-hourly-row">
+      <button id="hourlyFundsBtn" type="button">Claim S$1,000</button>
     </div>
-    <div class="bank-claim-row">
-      <select id="venmoClaimPack">
-        <option value="small">Claim S$1,000</option>
-        <option value="medium">Claim S$5,000</option>
-        <option value="xlarge">Claim S$10,000</option>
-        <option value="large">Claim S$25,000</option>
-      </select>
-      <input id="venmoClaimTxnInput" type="text" placeholder="Venmo transaction ID">
-      <button id="venmoClaimSubmitBtn">Submit Claim</button>
-    </div>
-    <div id="venmoClaimStatus" class="bank-claim-status">No claims yet</div>
+    <div id="hourlyFundsStatus" class="bank-claim-status">Claim S$1,000 once every hour.</div>
     <div class="bank-divider"></div>
     <span>VIP</span>
     <div class="bank-vip-row">
@@ -143,6 +131,60 @@
     <h3>Achievements</h3>
     <ul id="achievements-list"></ul>
   </section>
+</div>
+
+<div id="office-section" style="display:none;">
+  <div class="office-builder-header">
+    <div class="office-builder-copy">
+      <h2>Office Builder</h2>
+      <p>Start with a run-down room and upgrade it into a proper trading office.</p>
+    </div>
+    <div class="office-builder-summary">
+      <article class="office-summary-card">
+        <span>Cash</span>
+        <strong id="officeBuilderCash">S$0</strong>
+      </article>
+      <article class="office-summary-card">
+        <span>Office Value</span>
+        <strong id="officeBuilderValue">S$0</strong>
+      </article>
+      <article class="office-summary-card">
+        <span>Current Style</span>
+        <strong id="officeBuilderStyle">Starter</strong>
+      </article>
+    </div>
+  </div>
+
+  <div class="office-builder-layout">
+    <section class="office-room-card">
+      <div id="officeBuilderStatus" class="office-builder-status">Buy upgrades with your cash and equip them instantly.</div>
+      <div class="office-room-stage">
+        <div id="officeRoomScene" class="office-room-scene">
+          <div class="office-room-wall office-room-wall-back"></div>
+          <div class="office-room-wall office-room-wall-left"></div>
+          <div class="office-room-wall office-room-wall-right"></div>
+          <div class="office-room-floor"></div>
+          <div class="office-room-lighting-rig"></div>
+          <div class="office-room-light-glow"></div>
+          <div class="office-room-window"></div>
+          <div class="office-room-rug"></div>
+          <div class="office-room-desk"></div>
+          <div class="office-room-computer"></div>
+          <div class="office-room-chair"></div>
+          <div class="office-room-decor"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="office-shop-card">
+      <div id="officeCategoryTabs" class="office-category-tabs"></div>
+      <div class="office-shop-head">
+        <h3 id="officeCategoryTitle">Walls</h3>
+        <p id="officeCategoryDescription">Swap out the damaged walls first.</p>
+      </div>
+      <div id="officeItemGrid" class="office-item-grid"></div>
+    </aside>
+  </div>
 </div>
 
 <!-- CASINO -->

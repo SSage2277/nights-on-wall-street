@@ -162,7 +162,7 @@ const FIRST_PLAY_TUTORIAL_STEPS = Object.freeze([
   },
   {
     title: "Bank & Savings",
-    body: "Use Bank to move money to savings, set auto-save %, and manage purchases/claims.",
+    body: "Use Bank to move money to savings, set auto-save %, claim your hourly reward, and manage VIP.",
     selector: "#bankToggleBtn"
   },
   {
@@ -570,6 +570,309 @@ function clampPercent(value) {
 
 function formatCurrency(value) {
   return `${CURRENCY_SYMBOL}${roundCurrency(value).toFixed(2)}`;
+}
+
+const OFFICE_CATEGORY_META = Object.freeze({
+  walls: { label: "Walls", description: "Clean up the room first. Better walls change the whole look." },
+  floor: { label: "Floors", description: "Replace the cracked floor with something that looks expensive." },
+  desk: { label: "Desks", description: "A better desk makes the room feel like a real trading office." },
+  computer: { label: "Computers", description: "Upgrade from nothing to a proper multi-monitor setup." },
+  chair: { label: "Chairs", description: "Your setup needs a seat that matches the room." },
+  lighting: { label: "Lighting", description: "Lighting changes the entire mood of the office." },
+  decor: { label: "Decor", description: "Finish the room with extra pieces and flex items." }
+});
+
+const OFFICE_BUILDER_CATALOG = Object.freeze({
+  walls: Object.freeze([
+    { id: "rundown", name: "Run-Down Plaster", price: 0, icon: "🧱", palette: "linear-gradient(180deg,#6b686d,#373438)", description: "Cracked walls and old paint. This is where you start." },
+    { id: "graphite", name: "Graphite Panels", price: 300, icon: "🪨", palette: "linear-gradient(180deg,#455867,#1f2b34)", description: "Dark modern wall panels with a clean trading-desk look." },
+    { id: "walnut", name: "Walnut Walls", price: 850, icon: "🪵", palette: "linear-gradient(180deg,#886546,#4b3525)", description: "Warm walnut walls that make the office feel expensive." },
+    { id: "skyline", name: "Skyline Glass", price: 1800, icon: "🌃", palette: "linear-gradient(180deg,#31577d,#172536)", description: "Premium city-view wall treatment for a serious headquarters feel." }
+  ]),
+  floor: Object.freeze([
+    { id: "concrete", name: "Cracked Concrete", price: 0, icon: "⬜", palette: "linear-gradient(180deg,#5b5756,#2f2b2a)", description: "Bare concrete floor with no polish." },
+    { id: "hardwood", name: "Hardwood", price: 450, icon: "🪵", palette: "linear-gradient(180deg,#8d6542,#47301d)", description: "Classic hardwood planks for a cleaner office." },
+    { id: "marble", name: "White Marble", price: 1400, icon: "◻️", palette: "linear-gradient(180deg,#eef2f6,#98a4b1)", description: "Bright polished marble that looks expensive immediately." },
+    { id: "carbon", name: "Carbon Tile", price: 2400, icon: "⬛", palette: "linear-gradient(180deg,#344552,#131c24)", description: "Dark carbon tile with a premium trading-floor finish." }
+  ]),
+  desk: Object.freeze([
+    { id: "none", name: "No Desk", price: 0, icon: "⬚", palette: "linear-gradient(180deg,#27333d,#172028)", description: "Empty room. No desk yet." },
+    { id: "trader", name: "Trader Desk", price: 650, icon: "🪑", palette: "linear-gradient(180deg,#875b39,#4d331d)", description: "Solid desk with enough room for a real setup." },
+    { id: "executive", name: "Executive Desk", price: 1650, icon: "🏢", palette: "linear-gradient(180deg,#445362,#1b2430)", description: "Heavy executive desk with a proper head-office look." },
+    { id: "glass", name: "Glass Desk", price: 2900, icon: "💎", palette: "linear-gradient(180deg,#c0e7ff,#335c72)", description: "High-end glass desk for a polished, modern room." }
+  ]),
+  computer: Object.freeze([
+    { id: "none", name: "No Computer", price: 0, icon: "⬚", palette: "linear-gradient(180deg,#27333d,#172028)", description: "Nothing on the desk yet." },
+    { id: "retro", name: "Retro Monitor", price: 400, icon: "🖥️", palette: "linear-gradient(180deg,#7fd4ae,#245c47)", description: "One cheap old monitor to get started." },
+    { id: "dual", name: "Dual Monitors", price: 1200, icon: "🖥️", palette: "linear-gradient(180deg,#8ff2ff,#246ea8)", description: "Two screens for a proper trading setup." },
+    { id: "triple", name: "Triple Monitor Wall", price: 2600, icon: "📈", palette: "linear-gradient(180deg,#9af0ff,#3d7dff)", description: "Three monitors across the desk. Serious trader energy." }
+  ]),
+  chair: Object.freeze([
+    { id: "none", name: "No Chair", price: 0, icon: "⬚", palette: "linear-gradient(180deg,#27333d,#172028)", description: "Standing room only." },
+    { id: "crate", name: "Cheap Stool", price: 150, icon: "🪑", palette: "linear-gradient(180deg,#626d76,#39414a)", description: "Basic seat so the room stops looking abandoned." },
+    { id: "ergonomic", name: "Ergonomic Chair", price: 800, icon: "💺", palette: "linear-gradient(180deg,#233445,#141d27)", description: "A real office chair for longer sessions." },
+    { id: "executive", name: "Executive Leather", price: 1750, icon: "🛋️", palette: "linear-gradient(180deg,#896445,#3b2a1c)", description: "Premium leather chair for the big office look." },
+    { id: "neon", name: "Neon Racing Chair", price: 2500, icon: "⚡", palette: "linear-gradient(180deg,#1a3f56,#0a131d)", description: "High-end chair with a sharper modern style." }
+  ]),
+  lighting: Object.freeze([
+    { id: "dim", name: "Dim Bulb", price: 0, icon: "💡", palette: "linear-gradient(180deg,#7f6c55,#43362c)", description: "Weak overhead lighting from the starter room." },
+    { id: "studio", name: "Studio Panels", price: 500, icon: "🔆", palette: "linear-gradient(180deg,#eef8ff,#8ea4b7)", description: "Brighter neutral light for a cleaner office." },
+    { id: "warm", name: "Warm Lighting", price: 1100, icon: "✨", palette: "linear-gradient(180deg,#ffd9a2,#9e6b2c)", description: "Warm premium lighting that softens the room." },
+    { id: "neon", name: "Blue Neon Trim", price: 2100, icon: "💎", palette: "linear-gradient(180deg,#9ae8ff,#3772ff)", description: "Blue neon accents around the office." }
+  ]),
+  decor: Object.freeze([
+    { id: "none", name: "No Decor", price: 0, icon: "⬚", palette: "linear-gradient(180deg,#27333d,#172028)", description: "Nothing extra in the room." },
+    { id: "plant", name: "Office Plant", price: 200, icon: "🪴", palette: "linear-gradient(180deg,#75d46a,#27592b)", description: "Cheap plant to make the office feel alive." },
+    { id: "bull", name: "Bull Statue", price: 1350, icon: "🐂", palette: "linear-gradient(180deg,#d0aa63,#6c4c1e)", description: "A flex piece for the desk corner." },
+    { id: "art", name: "Market Art", price: 1900, icon: "🖼️", palette: "linear-gradient(180deg,#58b8ff,#234d71)", description: "Statement wall art for the room." },
+    { id: "server", name: "Server Rack", price: 3200, icon: "🗄️", palette: "linear-gradient(180deg,#8191a1,#32404d)", description: "Full server rack for the heavy-duty office look." }
+  ])
+});
+
+const OFFICE_CATEGORY_ORDER = Object.freeze(Object.keys(OFFICE_BUILDER_CATALOG));
+const OFFICE_DEFAULT_ITEM_IDS = Object.freeze(
+  Object.fromEntries(OFFICE_CATEGORY_ORDER.map((category) => [category, OFFICE_BUILDER_CATALOG[category][0].id]))
+);
+const OFFICE_BUILDER_LOOKUP = new Map();
+OFFICE_CATEGORY_ORDER.forEach((category) => {
+  OFFICE_BUILDER_CATALOG[category].forEach((item) => {
+    OFFICE_BUILDER_LOOKUP.set(`${category}:${item.id}`, item);
+  });
+});
+
+let officeBuilderStatusTimer = null;
+
+function getDefaultOfficeBuilderState() {
+  const owned = {};
+  const equipped = {};
+  OFFICE_CATEGORY_ORDER.forEach((category) => {
+    owned[category] = [OFFICE_DEFAULT_ITEM_IDS[category]];
+    equipped[category] = OFFICE_DEFAULT_ITEM_IDS[category];
+  });
+  return {
+    selectedCategory: OFFICE_CATEGORY_ORDER[0],
+    equipped,
+    owned
+  };
+}
+
+function getOfficeBuilderItem(category, itemId) {
+  return OFFICE_BUILDER_LOOKUP.get(`${category}:${itemId}`) || null;
+}
+
+function normalizeOfficeBuilderState(rawState) {
+  const defaults = getDefaultOfficeBuilderState();
+  const state = rawState && typeof rawState === "object" ? rawState : {};
+  const selectedCategory = OFFICE_CATEGORY_ORDER.includes(state.selectedCategory)
+    ? state.selectedCategory
+    : defaults.selectedCategory;
+  const normalized = {
+    selectedCategory,
+    equipped: {},
+    owned: {}
+  };
+
+  OFFICE_CATEGORY_ORDER.forEach((category) => {
+    const validIds = new Set(OFFICE_BUILDER_CATALOG[category].map((item) => item.id));
+    const rawOwned = Array.isArray(state?.owned?.[category]) ? state.owned[category] : [];
+    const owned = Array.from(
+      new Set(
+        rawOwned
+          .map((value) => String(value || ""))
+          .filter((value) => validIds.has(value))
+      )
+    );
+    if (!owned.includes(OFFICE_DEFAULT_ITEM_IDS[category])) {
+      owned.unshift(OFFICE_DEFAULT_ITEM_IDS[category]);
+    }
+    const equippedCandidate = String(state?.equipped?.[category] || "");
+    normalized.owned[category] = owned;
+    normalized.equipped[category] = owned.includes(equippedCandidate)
+      ? equippedCandidate
+      : OFFICE_DEFAULT_ITEM_IDS[category];
+  });
+
+  return normalized;
+}
+
+function getOfficeBuilderState() {
+  phoneState.officeBuilder = normalizeOfficeBuilderState(phoneState.officeBuilder);
+  return phoneState.officeBuilder;
+}
+
+function applyOfficeBuilderState(nextState, { save = false } = {}) {
+  phoneState.officeBuilder = normalizeOfficeBuilderState(nextState);
+  if (save) savePhoneState();
+  return phoneState.officeBuilder;
+}
+
+function getOfficeBuilderSyncPayload() {
+  return normalizeOfficeBuilderState(getOfficeBuilderState());
+}
+
+function getOfficeBuilderValue(state = getOfficeBuilderState()) {
+  let total = 0;
+  OFFICE_CATEGORY_ORDER.forEach((category) => {
+    (state.owned[category] || []).forEach((itemId) => {
+      const item = getOfficeBuilderItem(category, itemId);
+      if (item) total += Number(item.price) || 0;
+    });
+  });
+  return roundCurrency(total);
+}
+
+function getOfficeBuilderStyleLabel(value = getOfficeBuilderValue()) {
+  if (value >= 9000) return "Wall Street HQ";
+  if (value >= 5500) return "Executive Floor";
+  if (value >= 2500) return "Trading Office";
+  if (value >= 900) return "Junior Setup";
+  return "Starter Room";
+}
+
+function setOfficeBuilderStatus(message, tone = "info") {
+  const statusEl = document.getElementById("officeBuilderStatus");
+  if (!statusEl) return;
+  statusEl.textContent = String(message || "");
+  statusEl.classList.remove("success", "error");
+  if (tone === "success" || tone === "error") {
+    statusEl.classList.add(tone);
+  }
+  if (officeBuilderStatusTimer) clearTimeout(officeBuilderStatusTimer);
+  officeBuilderStatusTimer = window.setTimeout(() => {
+    statusEl.classList.remove("success", "error");
+    statusEl.textContent = "Buy upgrades with your cash and equip them instantly.";
+  }, 2600);
+}
+
+function getOfficeBuilderDependencyError(category, itemId, state = getOfficeBuilderState()) {
+  if ((category === "computer" || category === "chair") && itemId !== "none" && state.equipped.desk === "none") {
+    return "Buy a desk first.";
+  }
+  return "";
+}
+
+function setOfficeBuilderCategory(category) {
+  if (!OFFICE_CATEGORY_ORDER.includes(category)) return;
+  const state = getOfficeBuilderState();
+  if (state.selectedCategory === category) return;
+  state.selectedCategory = category;
+  savePhoneState();
+  renderOfficeBuilder();
+}
+
+function buyOrEquipOfficeItem(category, itemId) {
+  const item = getOfficeBuilderItem(category, itemId);
+  if (!item) return;
+  const state = getOfficeBuilderState();
+  const owned = state.owned[category] || [];
+  const alreadyOwned = owned.includes(itemId);
+  const dependencyError = getOfficeBuilderDependencyError(category, itemId, state);
+  if (dependencyError) {
+    setOfficeBuilderStatus(dependencyError, "error");
+    return;
+  }
+
+  if (!alreadyOwned) {
+    if (cash < item.price) {
+      setOfficeBuilderStatus(`Need ${formatCurrency(item.price)} cash for ${item.name}.`, "error");
+      return;
+    }
+    cash = roundCurrency(cash - item.price);
+    owned.push(itemId);
+    state.owned[category] = Array.from(new Set(owned));
+    state.equipped[category] = itemId;
+    savePhoneState();
+    updateUI();
+    persistCashStateNow();
+    scheduleUserProfileSync();
+    setOfficeBuilderStatus(`Bought ${item.name} for ${formatCurrency(item.price)}.`, "success");
+    return;
+  }
+
+  if (state.equipped[category] === itemId) {
+    setOfficeBuilderStatus(`${item.name} is already equipped.`);
+    return;
+  }
+
+  state.equipped[category] = itemId;
+  savePhoneState();
+  renderOfficeBuilder();
+  scheduleUserProfileSync();
+  setOfficeBuilderStatus(`Equipped ${item.name}.`, "success");
+}
+
+function renderOfficeBuilder() {
+  const section = document.getElementById("office-section");
+  if (!section) return;
+  const state = getOfficeBuilderState();
+  const cashEl = document.getElementById("officeBuilderCash");
+  const valueEl = document.getElementById("officeBuilderValue");
+  const styleEl = document.getElementById("officeBuilderStyle");
+  const categoryTabsEl = document.getElementById("officeCategoryTabs");
+  const categoryTitleEl = document.getElementById("officeCategoryTitle");
+  const categoryDescriptionEl = document.getElementById("officeCategoryDescription");
+  const itemGridEl = document.getElementById("officeItemGrid");
+  const sceneEl = document.getElementById("officeRoomScene");
+  if (!categoryTabsEl || !categoryTitleEl || !categoryDescriptionEl || !itemGridEl || !sceneEl) return;
+
+  const officeValue = getOfficeBuilderValue(state);
+  if (cashEl) cashEl.textContent = formatCurrency(cash);
+  if (valueEl) valueEl.textContent = formatCurrency(officeValue);
+  if (styleEl) styleEl.textContent = getOfficeBuilderStyleLabel(officeValue);
+
+  OFFICE_CATEGORY_ORDER.forEach((category) => {
+    sceneEl.dataset[category] = state.equipped[category];
+  });
+
+  const computerEl = sceneEl.querySelector(".office-room-computer");
+  const chairEl = sceneEl.querySelector(".office-room-chair");
+  const deskEl = sceneEl.querySelector(".office-room-desk");
+  const decorEl = sceneEl.querySelector(".office-room-decor");
+  if (deskEl) deskEl.dataset.desk = state.equipped.desk;
+  if (computerEl) {
+    computerEl.dataset.computer = state.equipped.desk === "none" ? "none" : state.equipped.computer;
+    computerEl.innerHTML = state.equipped.computer === "triple" && state.equipped.desk !== "none" ? "<span></span>" : "";
+  }
+  if (chairEl) chairEl.dataset.chair = state.equipped.desk === "none" ? "none" : state.equipped.chair;
+  if (decorEl) decorEl.dataset.decor = state.equipped.decor;
+
+  categoryTabsEl.innerHTML = OFFICE_CATEGORY_ORDER.map((category) => `
+    <button
+      class="office-category-tab ${state.selectedCategory === category ? "active" : ""}"
+      type="button"
+      data-office-category="${category}"
+    >${escapeHtml(OFFICE_CATEGORY_META[category].label)}</button>
+  `).join("");
+
+  const categoryMeta = OFFICE_CATEGORY_META[state.selectedCategory];
+  categoryTitleEl.textContent = categoryMeta.label;
+  categoryDescriptionEl.textContent = categoryMeta.description;
+
+  itemGridEl.innerHTML = OFFICE_BUILDER_CATALOG[state.selectedCategory].map((item) => {
+    const isOwned = state.owned[state.selectedCategory].includes(item.id);
+    const isEquipped = state.equipped[state.selectedCategory] === item.id;
+    const buttonLabel = isEquipped ? "Equipped" : isOwned ? "Equip" : `Buy ${formatCurrency(item.price)}`;
+    const buttonClass = isOwned ? "equip" : "purchase";
+    const disabled = isEquipped ? "disabled" : "";
+    return `
+      <article class="office-item-card ${isOwned ? "owned" : ""} ${isEquipped ? "equipped" : ""}">
+        <div class="office-item-swatch" data-icon="${escapeHtml(item.icon)}" style="background:${escapeHtml(item.palette)};"></div>
+        <h4>${escapeHtml(item.name)}</h4>
+        <p>${escapeHtml(item.description)}</p>
+        <div class="office-item-meta">
+          <span>${item.price > 0 ? formatCurrency(item.price) : "Free"}</span>
+          <span>${isOwned ? "Owned" : "Shop"}</span>
+        </div>
+        <button
+          class="${buttonClass}"
+          type="button"
+          data-office-category="${state.selectedCategory}"
+          data-office-item="${escapeHtml(item.id)}"
+          ${disabled}
+        >${escapeHtml(buttonLabel)}</button>
+      </article>
+    `;
+  }).join("");
 }
 
 function normalizeUsername(value) {
@@ -1266,6 +1569,11 @@ function applyServerPortfolioSnapshot(user, { useServerBalance = true, allowLoca
   phoneState.savingsBalance = roundCurrency(savingsBalance);
   phoneState.autoSavingsPercent = roundCurrency(clampPercent(autoSavingsPercent));
   phoneState.balanceUpdatedAt = Math.max(0, Math.floor(Number(lastServerBalanceUpdatedAt) || 0));
+  if (user && Object.prototype.hasOwnProperty.call(user, "officeState")) {
+    applyOfficeBuilderState(user.officeState || null);
+  } else {
+    applyOfficeBuilderState(phoneState.officeBuilder);
+  }
 }
 
 function applyAuthenticatedProfile(
@@ -1285,6 +1593,7 @@ function applyAuthenticatedProfile(
   if (previousPlayerId && previousPlayerId !== playerId) {
     lastServerBalanceUpdatedAt = 0;
     phoneState.balanceUpdatedAt = 0;
+    phoneState.officeBuilder = getDefaultOfficeBuilderState();
   }
   const isGuestAccount = guestModeOverride === true || (guestModeOverride !== false && user?.isGuest === true);
   setGuestModeEnabled(isGuestAccount);
@@ -1814,6 +2123,9 @@ async function clearLocalAccountOnDevice() {
     playerUsername = "";
     setGuestModeEnabled(false);
     venmoClaimPlayerId = "";
+    hourlyRewardReadyAt = 0;
+    hourlyRewardLastClaimedAt = 0;
+    clearHourlyRewardCountdown();
     venmoLocallyCreditedClaimIds.clear();
     venmoClaimState.claims = [];
     venmoClaimState.adminClaims = [];
@@ -1835,6 +2147,7 @@ async function clearLocalAccountOnDevice() {
     clearAccountMessageQueue();
     hideBannedOverlay();
     hideFirstPlayTutorialOverlay({ markSeen: false });
+    renderHourlyRewardStatus();
     setFirstLaunchAuthMode("register");
     const registerUsernameInput = document.getElementById("firstLaunchUsernameInput");
     const registerPasswordInput = document.getElementById("firstLaunchPasswordInput");
@@ -1844,7 +2157,7 @@ async function clearLocalAccountOnDevice() {
     if (registerPasswordInput) registerPasswordInput.value = "";
     if (loginEmailInput) loginEmailInput.value = "";
     if (loginPasswordInput) loginPasswordInput.value = "";
-    renderVenmoClaimStatus();
+    renderHourlyRewardStatus();
     renderVenmoAdminClaims();
     renderHiddenAdminStats();
     renderHiddenAdminUsers();
@@ -3453,6 +3766,7 @@ const phoneState = {
     purchasedAt: 0,
     lastWeeklyBonusAt: 0
   },
+  officeBuilder: null,
   autoRoundCounters: {
     slots: 0,
     roulette: 0
@@ -4025,6 +4339,7 @@ function savePhoneState() {
     if (!phoneState.vip || typeof phoneState.vip !== "object") {
       phoneState.vip = { active: false, purchasedAt: 0, lastWeeklyBonusAt: 0 };
     }
+    phoneState.officeBuilder = normalizeOfficeBuilderState(phoneState.officeBuilder);
     localStorage.setItem(PHONE_STORAGE_KEY, JSON.stringify(phoneState));
   } catch (error) {}
 }
@@ -4073,7 +4388,8 @@ function syncCurrentUserProfileOnExit() {
     shares: Math.max(0, Math.floor(Number(shares) || 0)),
     avgCost: Math.max(0, Number(avgCost) || 0),
     savingsBalance: roundCurrency(savingsBalance),
-    autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
+    autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent)),
+    officeState: getOfficeBuilderSyncPayload()
   });
   let sentWithBeacon = false;
   try {
@@ -4125,6 +4441,9 @@ function loadPhoneState({ force = false } = {}) {
     }
     if (Array.isArray(parsed.bankHistory)) {
       phoneState.bankHistory = parsed.bankHistory.slice(0, 40);
+    }
+    if (parsed.officeBuilder && typeof parsed.officeBuilder === "object") {
+      phoneState.officeBuilder = normalizeOfficeBuilderState(parsed.officeBuilder);
     }
     const unread = Number(parsed.unread);
     if (Number.isFinite(unread)) {
@@ -6933,6 +7252,7 @@ function updateUI() {
   bankMissionLastCashSnapshot = cash;
   try {
     refreshPhonePanels();
+    renderOfficeBuilder();
     postPhoneMiniCashUpdate();
     persistCashStateSoon();
     scheduleUserProfileSync();
@@ -7079,11 +7399,39 @@ document.querySelectorAll(".speed-btn").forEach((btn) => {
 // =====================================================
 // ================= NAVIGATION ========================
 // =====================================================
+const officeSection = document.getElementById("office-section");
 const tradingSection = document.getElementById("trading-section");
 const casinoSection = document.getElementById("casino-section");
 const adminPanelBtn = document.getElementById("adminPanelBtn");
+const officeBtn = document.getElementById("officeBtn");
+const tradingBtn = document.getElementById("tradingBtn");
+const casinoBtn = document.getElementById("casinoBtn");
 
-document.getElementById("casinoBtn").onclick = () => {
+function setMainSection(sectionKey) {
+  const showOffice = sectionKey === "office";
+  const showTrading = sectionKey === "trading";
+  const showCasino = sectionKey === "casino";
+  if (officeSection) officeSection.style.display = showOffice ? "block" : "none";
+  if (tradingSection) tradingSection.style.display = showTrading ? "block" : "none";
+  if (casinoSection) casinoSection.style.display = showCasino ? "block" : "none";
+  if (officeBtn) officeBtn.classList.toggle("active", showOffice);
+  if (tradingBtn) tradingBtn.classList.toggle("active", showTrading);
+  if (casinoBtn) casinoBtn.classList.toggle("active", showCasino);
+  if (showOffice) renderOfficeBuilder();
+  syncHiddenAdminTriggerVisibility();
+  updateTradingUsernameBadge();
+}
+
+if (officeBtn) {
+  officeBtn.onclick = () => {
+    hideCasinoKickoutOverlay();
+    exitCasinoGameView();
+    closeBankPanel();
+    setMainSection("office");
+  };
+}
+
+casinoBtn.onclick = () => {
   hideCasinoKickoutOverlay();
   closeBankPanel();
   const gate = getCasinoGateState();
@@ -7091,21 +7439,15 @@ document.getElementById("casinoBtn").onclick = () => {
     alert(gate.message);
     return;
   }
-  tradingSection.style.display = "none";
-  casinoSection.style.display = "block";
-  syncHiddenAdminTriggerVisibility();
-  updateTradingUsernameBadge();
+  setMainSection("casino");
 };
 
-document.getElementById("tradingBtn").onclick =
+tradingBtn.onclick =
   document.getElementById("backToTrading").onclick = () => {
     hideCasinoKickoutOverlay();
     exitCasinoGameView();
     closeBankPanel();
-    casinoSection.style.display = "none";
-    tradingSection.style.display = "block";
-    syncHiddenAdminTriggerVisibility();
-    updateTradingUsernameBadge();
+    setMainSection("trading");
   };
 
 if (adminPanelBtn) {
@@ -7115,6 +7457,23 @@ if (adminPanelBtn) {
     void openHiddenAdminPanel();
   };
 }
+
+document.getElementById("officeCategoryTabs")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-office-category]");
+  if (!button) return;
+  setOfficeBuilderCategory(String(button.dataset.officeCategory || ""));
+});
+
+document.getElementById("officeItemGrid")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-office-category][data-office-item]");
+  if (!button) return;
+  buyOrEquipOfficeItem(
+    String(button.dataset.officeCategory || ""),
+    String(button.dataset.officeItem || "")
+  );
+});
+
+setMainSection("trading");
 
 // ------------------ LOAN SYSTEM ------------------
 let loanPrincipal = 0;
@@ -7142,14 +7501,12 @@ const withdrawSavingsBtn = document.getElementById("withdrawSavingsBtn");
 const autoSavingsInputEl = document.getElementById("autoSavingsInput");
 const setAutoSavingsBtn = document.getElementById("setAutoSavingsBtn");
 const clearAutoSavingsBtn = document.getElementById("clearAutoSavingsBtn");
-const buyFundsSmallBtn = document.getElementById("buyFundsSmallBtn");
-const buyFundsMediumBtn = document.getElementById("buyFundsMediumBtn");
-const buyFundsXLBtn = document.getElementById("buyFundsXLBtn");
-const buyFundsLargeBtn = document.getElementById("buyFundsLargeBtn");
-const venmoClaimPackEl = document.getElementById("venmoClaimPack");
-const venmoClaimTxnInputEl = document.getElementById("venmoClaimTxnInput");
-const venmoClaimSubmitBtn = document.getElementById("venmoClaimSubmitBtn");
-const venmoClaimStatusEl = document.getElementById("venmoClaimStatus");
+const hourlyFundsBtn = document.getElementById("hourlyFundsBtn");
+const hourlyFundsStatusEl = document.getElementById("hourlyFundsStatus");
+const venmoClaimPackEl = null;
+const venmoClaimTxnInputEl = null;
+const venmoClaimSubmitBtn = null;
+const venmoClaimStatusEl = null;
 const hiddenAdminTriggerEl = document.getElementById("hiddenAdminTrigger");
 const hiddenAdminOverlayEl = document.getElementById("hiddenAdminOverlay");
 const hiddenAdminCloseBtnEl = document.getElementById("hiddenAdminCloseBtn");
@@ -7202,11 +7559,13 @@ const HIDDEN_ADMIN_OWNER_DEVICE_CHECK_MS = 30000;
 const USER_PROFILE_SYNC_INTERVAL_MS = 1200;
 const VENMO_API_FALLBACK_BASE = "https://nows-api.onrender.com";
 const REAL_MONEY_FUND_PACKS = Object.freeze({
-  small: { funds: 1000, usd: 3, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=3&note=S%241000" },
-  medium: { funds: 5000, usd: 10, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=10&note=S%245000" },
-  xlarge: { funds: 10000, usd: 20, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=20&note=S%2410000" },
-  large: { funds: 25000, usd: 40, venmoLink: "https://venmo.com/sagetrading?txn=pay&amount=40&note=S%2425000" }
+  small: { funds: 1000, usd: 3 },
+  medium: { funds: 5000, usd: 10 },
+  xlarge: { funds: 10000, usd: 20 },
+  large: { funds: 25000, usd: 40 }
 });
+const HOURLY_REWARD_AMOUNT = 1000;
+const HOURLY_REWARD_COOLDOWN_MS = 60 * 60 * 1000;
 const venmoClaimState = {
   claims: [],
   adminClaims: [],
@@ -7257,6 +7616,9 @@ let hiddenAdminSecretLastTapAt = 0;
 let hiddenAdminRefreshInFlight = false;
 let hiddenAdminRefreshQueued = false;
 let venmoClaimPollInFlight = false;
+let hourlyRewardReadyAt = 0;
+let hourlyRewardLastClaimedAt = 0;
+let hourlyRewardCountdownTimer = null;
 
 function updateLoanUI() {
   applyVipWeeklyBonusIfDue();
@@ -7413,21 +7775,115 @@ function processSavingsWithdraw(rawAmount) {
   return withdrawn;
 }
 
-function creditPurchasedFunds(amount) {
-  const funds = roundCurrency(Number(amount));
-  if (!Number.isFinite(funds) || funds <= 0) return 0;
-  savingsBalance = roundCurrency(savingsBalance + funds);
-  pushPhoneBankHistory("Funds purchased", funds, "positive");
-  setBankMessage(`Purchased ${formatCurrency(funds)} into savings.`);
-  updateUI();
-  return funds;
+function clearHourlyRewardCountdown() {
+  if (hourlyRewardCountdownTimer) {
+    clearInterval(hourlyRewardCountdownTimer);
+    hourlyRewardCountdownTimer = null;
+  }
 }
 
-function beginRealMoneyFundsCheckout(packageId) {
-  const pack = REAL_MONEY_FUND_PACKS[packageId];
-  if (!pack?.venmoLink) return;
-  setBankMessage(`Opening Venmo for ${formatCurrency(pack.funds)} (USD ${Number(pack.usd).toFixed(2)}).`);
-  window.open(pack.venmoLink, "_blank", "noopener,noreferrer");
+function formatHourlyRewardCountdown(ms) {
+  const remainingMs = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function renderHourlyRewardStatus() {
+  const now = Date.now();
+  const ready = hourlyRewardReadyAt <= 0 || hourlyRewardReadyAt <= now;
+  if (hourlyFundsBtn) {
+    hourlyFundsBtn.disabled = !ready;
+    hourlyFundsBtn.textContent = ready ? `Claim ${formatCurrency(HOURLY_REWARD_AMOUNT)}` : "Hourly Reward Cooling Down";
+  }
+  if (hourlyFundsStatusEl) {
+    if (ready) {
+      hourlyFundsStatusEl.textContent = `Ready now. Claim ${formatCurrency(HOURLY_REWARD_AMOUNT)} once every hour.`;
+      hourlyFundsStatusEl.style.color = "#b9d1df";
+    } else {
+      hourlyFundsStatusEl.textContent = `Next claim in ${formatHourlyRewardCountdown(hourlyRewardReadyAt - now)}.`;
+      hourlyFundsStatusEl.style.color = "#9fc2de";
+    }
+  }
+}
+
+function startHourlyRewardCountdown() {
+  clearHourlyRewardCountdown();
+  renderHourlyRewardStatus();
+  if (hourlyRewardReadyAt > Date.now()) {
+    hourlyRewardCountdownTimer = setInterval(() => {
+      if (hourlyRewardReadyAt <= Date.now()) {
+        clearHourlyRewardCountdown();
+      }
+      renderHourlyRewardStatus();
+    }, 1000);
+  }
+}
+
+function applyHourlyRewardPayload(payload) {
+  hourlyRewardLastClaimedAt = Number(payload?.lastClaimedAt) || 0;
+  hourlyRewardReadyAt = Number(payload?.nextClaimAt) || 0;
+  startHourlyRewardCountdown();
+}
+
+async function refreshHourlyRewardStatus({ silent = false } = {}) {
+  try {
+    const payload = await venmoApiRequest("/api/hourly-reward");
+    applyHourlyRewardPayload(payload);
+    return true;
+  } catch (error) {
+    clearHourlyRewardCountdown();
+    hourlyRewardLastClaimedAt = 0;
+    hourlyRewardReadyAt = 0;
+    if (hourlyFundsBtn) {
+      hourlyFundsBtn.disabled = false;
+      hourlyFundsBtn.textContent = `Claim ${formatCurrency(HOURLY_REWARD_AMOUNT)}`;
+    }
+    if (hourlyFundsStatusEl) {
+      const requiresLogin = String(error?.message || "").toLowerCase().includes("login required");
+      hourlyFundsStatusEl.textContent = requiresLogin
+        ? "Login or guest mode required to claim the hourly reward."
+        : "Could not load hourly reward status.";
+      hourlyFundsStatusEl.style.color = requiresLogin ? "#b9d1df" : "#ff8ea0";
+    }
+    if (!silent) {
+      setBankMessage(String(error?.message || "Could not load hourly reward status."));
+    }
+    return false;
+  }
+}
+
+async function claimHourlyReward() {
+  if (hourlyFundsBtn?.disabled) return false;
+  try {
+    if (hourlyFundsBtn) {
+      hourlyFundsBtn.disabled = true;
+      hourlyFundsBtn.textContent = "Claiming...";
+    }
+    const payload = await venmoApiRequest("/api/hourly-reward/claim", { method: "POST" });
+    if (payload?.user) {
+      applyServerPortfolioSnapshot(payload.user, { useServerBalance: true });
+    }
+    applyHourlyRewardPayload(payload);
+    pushPhoneBankHistory("Hourly reward", HOURLY_REWARD_AMOUNT, "positive");
+    setBankMessage(`Claimed ${formatCurrency(HOURLY_REWARD_AMOUNT)}. Next claim in 1 hour.`);
+    return true;
+  } catch (error) {
+    if (String(error?.message || "").toLowerCase().includes("cooldown")) {
+      await refreshHourlyRewardStatus({ silent: true });
+    } else {
+      renderHourlyRewardStatus();
+    }
+    setBankMessage(String(error?.message || "Could not claim hourly reward."));
+    return false;
+  } finally {
+    renderHourlyRewardStatus();
+  }
 }
 
 function normalizeVenmoTxnId(value) {
@@ -7532,7 +7988,8 @@ async function syncCurrentUserProfileToServer({ force = false } = {}) {
         shares: Math.max(0, Math.floor(Number(shares) || 0)),
         avgCost: Math.max(0, Number(avgCost) || 0),
         savingsBalance: roundCurrency(savingsBalance),
-        autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent))
+        autoSavingsPercent: roundCurrency(clampPercent(autoSavingsPercent)),
+        officeState: getOfficeBuilderSyncPayload()
       }
     });
     const responseBalanceUpdatedAt = Number(payload?.user?.balanceUpdatedAt);
@@ -10462,7 +10919,6 @@ async function resolveVenmoClaim(claimId, decision) {
     await refreshHiddenAdminUsersFromServer({ silent: true });
     await refreshHiddenAdminActivityFromServer({ silent: true });
     await refreshHiddenAdminFraudFlagsFromServer({ silent: true });
-    await refreshVenmoClaimsFromServer({ silent: true });
     setBankMessage(decision === "approve" ? "Claim approved." : "Claim rejected.");
   } catch (error) {
     setBankMessage(`Claim update failed: ${error.message}`);
@@ -10520,7 +10976,7 @@ function initVenmoClaimWorkflow() {
   trackSiteVisit();
   loadVenmoLocalCreditedClaimIds();
   syncCurrentUserProfileToServer({ force: true });
-  renderVenmoClaimStatus();
+  renderHourlyRewardStatus();
   renderVenmoAdminClaims();
   renderHiddenAdminStats();
   renderHiddenAdminHealth();
@@ -10532,8 +10988,7 @@ function initVenmoClaimWorkflow() {
   renderHiddenAdminFraudFlags();
   renderHiddenAdminBackups();
   setHiddenAdminStatus("");
-  refreshVenmoClaimsFromServer({ silent: true });
-  claimApprovedVenmoCredits({ silent: true });
+  refreshHourlyRewardStatus({ silent: true });
   if (venmoClaimPollTimer) {
     clearInterval(venmoClaimPollTimer);
     venmoClaimPollTimer = null;
@@ -10542,13 +10997,12 @@ function initVenmoClaimWorkflow() {
     if (venmoClaimPollInFlight) return;
     venmoClaimPollInFlight = true;
     try {
-      await refreshVenmoClaimsFromServer({ silent: true });
-      await claimApprovedVenmoCredits({ silent: true });
+      await refreshHourlyRewardStatus({ silent: true });
       if (venmoAdminUnlocked) {
         await refreshAllHiddenAdminData({ silent: true, includeBackups: true });
       }
     } catch (error) {
-      console.error("Venmo claim workflow poll failed:", error);
+      console.error("Hourly reward workflow poll failed:", error);
     } finally {
       venmoClaimPollInFlight = false;
     }
@@ -10727,37 +11181,10 @@ if (withdrawSavingsInputEl) {
   });
 }
 
-if (buyFundsSmallBtn) {
-  buyFundsSmallBtn.onclick = () => {
-    beginRealMoneyFundsCheckout("small");
+if (hourlyFundsBtn) {
+  hourlyFundsBtn.onclick = () => {
+    claimHourlyReward();
   };
-}
-if (buyFundsMediumBtn) {
-  buyFundsMediumBtn.onclick = () => {
-    beginRealMoneyFundsCheckout("medium");
-  };
-}
-if (buyFundsXLBtn) {
-  buyFundsXLBtn.onclick = () => {
-    beginRealMoneyFundsCheckout("xlarge");
-  };
-}
-if (buyFundsLargeBtn) {
-  buyFundsLargeBtn.onclick = () => {
-    beginRealMoneyFundsCheckout("large");
-  };
-}
-if (venmoClaimSubmitBtn) {
-  venmoClaimSubmitBtn.onclick = () => {
-    submitVenmoClaim();
-  };
-}
-if (venmoClaimTxnInputEl) {
-  venmoClaimTxnInputEl.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    submitVenmoClaim();
-  });
 }
 if (venmoAdminUnlockBtn) {
   venmoAdminUnlockBtn.onclick = () => {

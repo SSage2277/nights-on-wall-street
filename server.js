@@ -60,6 +60,8 @@ const STORE_PACKAGES = Object.freeze({
   xlarge: { usd: 20, funds: 10000, label: "Pro Funds Pack" },
   large: { usd: 40, funds: 25000, label: "Whale Funds Pack" }
 });
+const HOURLY_REWARD_AMOUNT = 1000;
+const HOURLY_REWARD_COOLDOWN_MS = 60 * 60 * 1000;
 const PgSessionStore = connectPgSimple(session);
 const PACKAGE_ALIASES = Object.freeze({
   xl: "xlarge",
@@ -79,6 +81,7 @@ const MAX_ADMIN_BACKUPS = 15;
 const MAX_ADMIN_POPUP_MESSAGES = 3000;
 const MAX_ADMIN_POPUP_MESSAGE_READS = 300000;
 const MAX_SITE_VISIT_EVENTS = 500000;
+const MAX_OFFICE_STATE_LENGTH = 12000;
 const SITE_VISIT_SERVER_COOLDOWN_MS = 30 * 60 * 1000;
 const IP_BAN_CACHE_TTL_MS = 30 * 1000;
 const leaderboardStreamClients = new Set();
@@ -242,6 +245,28 @@ function sanitizeFeedbackMessage(value) {
   return normalized.slice(0, 500);
 }
 
+function sanitizeOfficeState(value) {
+  if (value === null || value === undefined || value === "") return "";
+  try {
+    const serialized = typeof value === "string" ? JSON.stringify(JSON.parse(value)) : JSON.stringify(value);
+    if (!serialized || serialized === "{}") return "";
+    if (serialized.length > MAX_OFFICE_STATE_LENGTH) return null;
+    return serialized;
+  } catch {
+    return null;
+  }
+}
+
+function parseOfficeState(value) {
+  if (!value) return null;
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeAdminPopupMessage(value) {
   const normalized = String(value || "")
     .replace(/\r/g, "")
@@ -367,6 +392,8 @@ function mapUserRow(row) {
     avgCost: Math.round(toNumber(row.avg_cost) * 10000) / 10000,
     savingsBalance: Math.round(toNumber(row.savings_balance) * 100) / 100,
     autoSavingsPercent: Math.round(toNumber(row.auto_savings_percent) * 1000) / 1000,
+    hourlyRewardClaimedAt: Number(row.hourly_reward_claimed_at) || 0,
+    officeState: parseOfficeState(row.office_state),
     balanceUpdatedAt: Number(row.balance_updated_at) || 0,
     lastSeenAt: Number(row.last_seen_at) || 0,
     isAdmin: row.is_admin === true,
@@ -744,6 +771,8 @@ function normalizeUserForClient(row) {
     avgCost: mapped.avgCost,
     savingsBalance: mapped.savingsBalance,
     autoSavingsPercent: mapped.autoSavingsPercent,
+    hourlyRewardClaimedAt: mapped.hourlyRewardClaimedAt,
+    officeState: mapped.officeState,
     balanceUpdatedAt: mapped.balanceUpdatedAt,
     lastSeenAt: mapped.lastSeenAt,
     isAdmin: mapped.isAdmin === true,
@@ -1084,6 +1113,24 @@ const RATE_LIMIT_RULES = Object.freeze([
     max: 240,
     windowMs: 60 * 1000,
     blockMs: 60 * 1000
+  },
+  {
+    id: "hourly-reward-read",
+    methods: new Set(["GET"]),
+    pattern: /^\/api\/hourly-reward$/i,
+    scope: "sessionOrIp",
+    max: 180,
+    windowMs: 60 * 1000,
+    blockMs: 60 * 1000
+  },
+  {
+    id: "hourly-reward-claim",
+    methods: new Set(["POST"]),
+    pattern: /^\/api\/hourly-reward\/claim$/i,
+    scope: "sessionOrIp",
+    max: 30,
+    windowMs: 60 * 60 * 1000,
+    blockMs: 10 * 60 * 1000
   },
   {
     id: "live-wins-write",
@@ -1491,7 +1538,7 @@ app.get("/api/auth/session", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1518,7 +1565,7 @@ app.get("/api/auth/session", async (req, res) => {
           SET is_admin = true,
               last_seen_at = $2
           WHERE player_id = $1
-          RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+          RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         `,
         [playerId, Date.now()]
       );
@@ -1554,7 +1601,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
     const existingByUsername = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1581,7 +1628,7 @@ app.post("/api/auth/register", async (req, res) => {
                 last_seen_at = $4,
                 is_admin = CASE WHEN $6 THEN true ELSE COALESCE(is_admin, false) END
             WHERE player_id = $5
-            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+            RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
           `,
           [username, usernameKey, replacementHash, Date.now(), existing.player_id, usernameKey === ADMIN_OWNER_USERNAME_KEY]
         );
@@ -1610,11 +1657,11 @@ app.post("/api/auth/register", async (req, res) => {
     const playerId = `u_${crypto.randomUUID().replace(/-/g, "")}`;
     const upsert = await db.query(
       `
-        INSERT INTO users (player_id, username, username_key, email, password_hash, is_admin, balance, shares, avg_cost, savings_balance, auto_savings_percent, last_seen_at, balance_updated_at)
-        VALUES ($1, $2, $3, NULL, $4, $5, $6, 0, 0, 0, 0, $7, $7)
-        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+        INSERT INTO users (player_id, username, username_key, email, password_hash, is_admin, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, last_seen_at, balance_updated_at)
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, 0, 0, 0, 0, $7, $8, $8)
+        RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
       `,
-      [playerId, username, usernameKey, passwordHash, usernameKey === ADMIN_OWNER_USERNAME_KEY, INITIAL_ACCOUNT_BALANCE, Date.now()]
+      [playerId, username, usernameKey, passwordHash, usernameKey === ADMIN_OWNER_USERNAME_KEY, INITIAL_ACCOUNT_BALANCE, "{}", Date.now()]
     );
     req.session.playerId = sanitizePlayerId(upsert.rows[0]?.player_id || playerId);
     queueLeaderboardUpdate("register");
@@ -1654,7 +1701,7 @@ app.post("/api/auth/guest", async (req, res) => {
     let row = null;
     const existing = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -1680,7 +1727,7 @@ app.post("/api/auth/guest", async (req, res) => {
                 balance = GREATEST(COALESCE(balance, 0), $5),
                 balance_updated_at = GREATEST(COALESCE(balance_updated_at, 0), $4)
             WHERE player_id = $1
-            RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+            RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
           `,
           [playerId, username, guestKey, now, initialBalance]
         );
@@ -1696,12 +1743,12 @@ app.post("/api/auth/guest", async (req, res) => {
         `
           INSERT INTO users (
             player_id, username, username_key, email, password_hash, is_admin, is_guest, balance, shares, avg_cost, savings_balance,
-            auto_savings_percent, last_seen_at, balance_updated_at
+            auto_savings_percent, office_state, last_seen_at, balance_updated_at
           )
-          VALUES ($1, $2, $3, NULL, NULL, false, true, $4, 0, 0, 0, 0, $5, $5)
-          RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+          VALUES ($1, $2, $3, NULL, NULL, false, true, $4, 0, 0, 0, 0, $5, $6, $6)
+          RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         `,
-        [playerId, username, guestUsernameKey, initialBalance, now]
+        [playerId, username, guestUsernameKey, initialBalance, "{}", now]
       );
       row = inserted.rows[0];
     }
@@ -1738,7 +1785,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const lookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+        SELECT player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         FROM users
         WHERE username_key = $1
         LIMIT 1
@@ -1772,7 +1819,7 @@ app.post("/api/auth/login", async (req, res) => {
           SET is_admin = true,
               last_seen_at = $2
           WHERE player_id = $1
-          RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
+          RETURNING player_id, username, username_key, email, password_hash, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, banned_at, banned_reason, is_admin, is_public_profile, is_guest
         `,
         [user.player_id, Date.now()]
       );
@@ -2244,6 +2291,147 @@ app.get("/api/claims/credits", async (req, res) => {
   }
 });
 
+app.get("/api/hourly-reward", async (req, res) => {
+  try {
+    const sessionPlayerId = getSessionPlayerId(req);
+    if (!sessionPlayerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+
+    const lookup = await db.query(
+      `
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent,
+               hourly_reward_claimed_at, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+      `,
+      [sessionPlayerId]
+    );
+    if (!lookup.rowCount) {
+      res.status(404).json({ ok: false, error: "Session account not found." });
+      return;
+    }
+
+    const row = lookup.rows[0];
+    const lastClaimedAt = Number(row.hourly_reward_claimed_at) || 0;
+    const nextClaimAt = lastClaimedAt > 0 ? lastClaimedAt + HOURLY_REWARD_COOLDOWN_MS : 0;
+    res.json({
+      ok: true,
+      amount: HOURLY_REWARD_AMOUNT,
+      lastClaimedAt,
+      nextClaimAt,
+      ready: nextClaimAt <= 0 || nextClaimAt <= Date.now(),
+      user: normalizeUserForClient(row)
+    });
+  } catch (error) {
+    console.error("Failed to load hourly reward status", error);
+    res.status(500).json({ ok: false, error: "Could not load hourly reward status." });
+  }
+});
+
+app.post("/api/hourly-reward/claim", async (req, res) => {
+  const client = await db.connect();
+  try {
+    const sessionPlayerId = getSessionPlayerId(req);
+    if (!sessionPlayerId) {
+      res.status(401).json({ ok: false, error: "Login required." });
+      return;
+    }
+    if (!(await assertUserNotBannedByPlayerId(sessionPlayerId, res))) return;
+    if (!(await assertUserNotMutedByPlayerId(sessionPlayerId, res))) return;
+
+    await client.query("BEGIN");
+    const lookup = await client.query(
+      `
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent,
+               hourly_reward_claimed_at, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+        FROM users
+        WHERE player_id = $1
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [sessionPlayerId]
+    );
+    if (!lookup.rowCount) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ ok: false, error: "Session account not found." });
+      return;
+    }
+
+    const current = lookup.rows[0];
+    const now = Date.now();
+    const lastClaimedAt = Number(current.hourly_reward_claimed_at) || 0;
+    const nextClaimAt = lastClaimedAt > 0 ? lastClaimedAt + HOURLY_REWARD_COOLDOWN_MS : 0;
+    if (nextClaimAt > now) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        ok: false,
+        error: "Hourly reward is still on cooldown.",
+        amount: HOURLY_REWARD_AMOUNT,
+        lastClaimedAt,
+        nextClaimAt,
+        ready: false,
+        user: normalizeUserForClient(current)
+      });
+      return;
+    }
+
+    const nextBalance = Math.min(
+      MAX_ACCOUNT_BALANCE,
+      Math.round((toNumber(current.balance) + HOURLY_REWARD_AMOUNT) * 100) / 100
+    );
+    const updated = await client.query(
+      `
+        UPDATE users
+        SET balance = $2,
+            hourly_reward_claimed_at = $3,
+            balance_updated_at = $3,
+            last_seen_at = $3
+        WHERE player_id = $1
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent,
+                  hourly_reward_claimed_at, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+      `,
+      [sessionPlayerId, nextBalance, now]
+    );
+    await client.query("COMMIT");
+
+    const user = normalizeUserForClient(updated.rows[0]);
+    recordBalanceAuditEvent({
+      playerId: sessionPlayerId,
+      username: user.username,
+      source: "hourly-reward",
+      beforeBalance: toNumber(current.balance),
+      afterBalance: nextBalance
+    });
+    recordAdminActivity({
+      eventType: "hourly_reward_claimed",
+      playerId: sessionPlayerId,
+      username: user.username,
+      details: { amount: HOURLY_REWARD_AMOUNT }
+    });
+    queueLeaderboardUpdate("hourly-reward");
+
+    res.json({
+      ok: true,
+      amount: HOURLY_REWARD_AMOUNT,
+      lastClaimedAt: now,
+      nextClaimAt: now + HOURLY_REWARD_COOLDOWN_MS,
+      ready: false,
+      user
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("Failed to claim hourly reward", error);
+    res.status(500).json({ ok: false, error: "Could not claim hourly reward." });
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/claims/credits/:id/ack", async (req, res) => {
   const client = await db.connect();
   try {
@@ -2390,7 +2578,7 @@ app.post("/api/users/sync", async (req, res) => {
     }
     const currentLookup = await db.query(
       `
-        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest, sync_guard_bypass_until
+        SELECT player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest, sync_guard_bypass_until
         FROM users
         WHERE player_id = $1
         LIMIT 1
@@ -2434,6 +2622,7 @@ app.post("/api/users/sync", async (req, res) => {
     const hasAvgCost = hasOwnField(req.body, "avgCost");
     const hasSavingsBalance = hasOwnField(req.body, "savingsBalance");
     const hasAutoSavingsPercent = hasOwnField(req.body, "autoSavingsPercent");
+    const hasOfficeState = hasOwnField(req.body, "officeState");
     const hasPortfolioPayload = hasBalance || hasShares || hasAvgCost || hasSavingsBalance || hasAutoSavingsPercent;
 
     const nextBalance = hasBalance
@@ -2451,8 +2640,18 @@ app.post("/api/users/sync", async (req, res) => {
     const nextAutoSavingsPercent = hasAutoSavingsPercent
       ? sanitizeSyncNumber(req.body?.autoSavingsPercent, { max: 100, decimals: 3 })
       : Math.round(toNumber(current.auto_savings_percent) * 1000) / 1000;
+    const nextOfficeState = hasOfficeState
+      ? sanitizeOfficeState(req.body?.officeState)
+      : String(current.office_state || "");
 
-    if (nextBalance === null || nextShares === null || nextAvgCost === null || nextSavingsBalance === null || nextAutoSavingsPercent === null) {
+    if (
+      nextBalance === null ||
+      nextShares === null ||
+      nextAvgCost === null ||
+      nextSavingsBalance === null ||
+      nextAutoSavingsPercent === null ||
+      nextOfficeState === null
+    ) {
       res.status(400).json({ ok: false, error: "Invalid portfolio sync payload." });
       return;
     }
@@ -2520,12 +2719,13 @@ app.post("/api/users/sync", async (req, res) => {
             avg_cost = $6,
             savings_balance = $7,
             auto_savings_percent = $8,
-            last_seen_at = $9,
-            balance_updated_at = CASE WHEN $10 THEN $9 ELSE COALESCE(balance_updated_at, 0) END
+            office_state = $9,
+            last_seen_at = $10,
+            balance_updated_at = CASE WHEN $11 THEN $10 ELSE COALESCE(balance_updated_at, 0) END
         WHERE player_id = $1
-        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
+        RETURNING player_id, username, username_key, email, balance, shares, avg_cost, savings_balance, auto_savings_percent, office_state, balance_updated_at, last_seen_at, is_admin, is_public_profile, is_guest
       `,
-      [playerId, username, effectiveUsernameKey, nextBalance, nextShares, nextAvgCost, nextSavingsBalance, nextAutoSavingsPercent, now, hasPortfolioPayload]
+      [playerId, username, effectiveUsernameKey, nextBalance, nextShares, nextAvgCost, nextSavingsBalance, nextAutoSavingsPercent, nextOfficeState, now, hasPortfolioPayload]
     );
     if (!updated.rowCount) {
       res.status(404).json({ ok: false, error: "Session account not found." });
@@ -4984,6 +5184,8 @@ async function ensureSchema() {
       avg_cost NUMERIC(14,4) NOT NULL DEFAULT 0,
       savings_balance NUMERIC(14,2) NOT NULL DEFAULT 0,
       auto_savings_percent NUMERIC(6,3) NOT NULL DEFAULT 0,
+      office_state TEXT NOT NULL DEFAULT '',
+      hourly_reward_claimed_at BIGINT NOT NULL DEFAULT 0,
       balance_updated_at BIGINT NOT NULL DEFAULT 0,
       last_seen_at BIGINT NOT NULL DEFAULT 0,
       banned_at BIGINT NOT NULL DEFAULT 0,
@@ -5028,6 +5230,14 @@ async function ensureSchema() {
   await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS auto_savings_percent NUMERIC(6,3) NOT NULL DEFAULT 0
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS office_state TEXT NOT NULL DEFAULT ''
+  `);
+  await db.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS hourly_reward_claimed_at BIGINT NOT NULL DEFAULT 0
   `);
   await db.query(`
     ALTER TABLE users
@@ -5077,6 +5287,8 @@ async function ensureSchema() {
         avg_cost = COALESCE(avg_cost, 0),
         savings_balance = COALESCE(savings_balance, 0),
         auto_savings_percent = COALESCE(auto_savings_percent, 0),
+        office_state = COALESCE(office_state, ''),
+        hourly_reward_claimed_at = COALESCE(hourly_reward_claimed_at, 0),
         balance_updated_at = COALESCE(balance_updated_at, 0),
         banned_at = COALESCE(banned_at, 0),
         banned_reason = COALESCE(banned_reason, ''),
@@ -5092,6 +5304,8 @@ async function ensureSchema() {
        OR avg_cost IS NULL
        OR savings_balance IS NULL
        OR auto_savings_percent IS NULL
+       OR office_state IS NULL
+       OR hourly_reward_claimed_at IS NULL
        OR balance_updated_at IS NULL
        OR banned_at IS NULL
        OR banned_reason IS NULL
