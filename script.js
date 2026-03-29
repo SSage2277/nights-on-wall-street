@@ -7473,7 +7473,9 @@ document.getElementById("officeItemGrid")?.addEventListener("click", (event) => 
   );
 });
 
-setMainSection("trading");
+queueMicrotask(() => {
+  setMainSection("trading");
+});
 
 // ------------------ LOAN SYSTEM ------------------
 let loanPrincipal = 0;
